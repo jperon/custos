@@ -635,14 +635,15 @@ local normalize
 normalize = function(cfg)
   cfg.runtime = cfg.runtime or { }
   cfg.nfqueue = cfg.nfqueue or { }
-  local resp_queues = require("lib.lowmem").parse_queues(cfg.nfqueue.responses)
-  if #resp_queues > 1 then
+  local lowmem = require("lib.lowmem")
+  local resp_queues = lowmem.parse_queues(cfg.nfqueue.responses)
+  if #resp_queues > 1 and not lowmem.is_contiguous_range(cfg.nfqueue.responses) then
     local first = tostring(resp_queues[1])
     config_warn({
-      action = "nfqueue_responses_single_queue_only",
+      action = "nfqueue_responses_range_not_contiguous",
       configured = tostring(cfg.nfqueue.responses),
       selected = first,
-      reason = "pending state is per-process; a question/response pair must be handled by one worker"
+      reason = "queue num accepts only a number or a contiguous range (a-b)"
     })
     cfg.nfqueue.responses = first
   end

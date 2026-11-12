@@ -54,6 +54,21 @@ parse_queues = function(str)
   end
   return queues
 end
+local is_contiguous_range
+is_contiguous_range = function(str)
+  if not (type(str) == "string") then
+    return false
+  end
+  local s = str:gsub("%s+", "")
+  if s:match("^%d+$") then
+    return true
+  end
+  local a, b = s:match("^(%d+)%-(%d+)$")
+  if not (a and b) then
+    return false
+  end
+  return tonumber(a) <= tonumber(b)
+end
 local detect
 detect = function(runtime_cfg, mem_reader)
   if runtime_cfg == nil then
@@ -98,6 +113,7 @@ return {
   LOWMEM_THRESHOLD_DEFAULT_KB = LOWMEM_THRESHOLD_DEFAULT_KB,
   read_mem_total_kb = read_mem_total_kb,
   parse_queues = parse_queues,
+  is_contiguous_range = is_contiguous_range,
   detect = detect,
   collapse_nfqueue = collapse_nfqueue
 }

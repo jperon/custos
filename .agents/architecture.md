@@ -52,8 +52,8 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 | `worker_auth_queue` | NFQUEUE sur `QUEUE_AUTH` ; extrait MAC/IP, écrit dans `learn` (mac_learner) |
 | `worker_tls` | NFQUEUE sur `QUEUE_SNI` (optionnel) ; verdict SNI TLS/QUIC **aligné sur `filter.decide_meta`** (redirect/SafeSearch → block, second avis `validate` synchrone), insertions via pipe `nft` |
 | `worker_sip` | NFQUEUE sur `QUEUE_SIP` (optionnel) ; whiteliste IP proxy + médias SDP dans des sets nft par règle |
-| `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (1 worker par queue) |
-| `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (1 worker par queue) ; insertions via pipe `nft` |
+| `worker_questions` | NFQUEUE sur `QUEUE_QUESTIONS` (un worker par file de la plage) ; écrit chaque transaction dans **tous** les pipes `question_response<i>` |
+| `worker_responses` | NFQUEUE sur `QUEUE_RESPONSES` (un worker par file de la plage) ; lit **son** pipe `question_response<i>`, insertions via pipe `nft`, verdicts du second avis diffusés entre workers |
 | `worker_captive` | NFQUEUE sur `QUEUE_CAPTIVE` ; injection AF_PACKET |
 | `worker_reject` | NFQUEUE sur `QUEUE_REJECT` ; forge RST/ICMP |
 | `worker_nft` | Sérialise toutes les insertions nft (lit pipe `nft`, ACK par worker) — pas de NFQUEUE |
@@ -64,8 +64,9 @@ Worker DoH (opt., HTTPS/WolfSSL, port 8443) : résout via upstream DNS, applique
 
 Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou
 UCI : `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`,
-`QUEUE_AUTH`, `QUEUE_SNI`, `QUEUE_SIP`). Ils supportent les plages, p. ex.
-`"0,2,5-7"`. Valeurs par défaut : questions `0-1`, responses `4`, captive `20`,
+`QUEUE_AUTH`, `QUEUE_SNI`, `QUEUE_SIP`). Ils prennent un nombre ou une **plage
+contiguë** (`"4-5"` → un worker par file) ; `queue num` n'accepte pas de liste
+avec virgules. Valeurs par défaut : questions `0-1`, responses `4`, captive `20`,
 reject `10-11`, auth `5`, sni `6`, sip `12`. Les workers `tls`, `sip` et
 `doh` ne sont forkés que si leur clé respective est définie / activée.
 
@@ -101,23 +102,57 @@ coûteux (hachage + tri en RAM au démarrage) : préférer `.bin`.
 
 | Canal | Format | Producteur → Consommateur |
 |-------|--------|---------------------------|
-| `question_response` pipe | 43 octets (voir [workers.md](workers.md)) | `worker_questions` → `worker_responses` |
+| `question_response<i>` pipe | ligne texte `v1|…` (voir [workers.md](workers.md)) | `worker_questions` → **tous** les workers `worker_responses` (un pipe par worker) |
 | `learn` pipe | 22 octets : ip16 + mac6 | `worker_questions` + `worker_arp_sniffer` + `worker_auth_queue` → `mac_learner` |
 | `events` pipe | événements DNS sérialisés | `worker_questions` → `worker_events` |
 | `nft` pipe | commandes d'insertion nft sérialisées | `worker_responses` + `worker_tls` + `worker_sip` + `worker_doh` → `worker_nft` |
 | `ack_<i>` pipes | 1 ACK de 8 octets (uint64 : plus grand `seq` appliqué pour ce worker) | `worker_nft` → chaque worker producteur (un pipe dédié par worker) |
+| `so_verdict_<i>` pipes | ligne texte `v1|…` (verdict validateur encodé) | chaque `worker_responses` → tous les **autres** (bus du second avis) |
 | Socket Unix SOCK_STREAM | texte ligne : `"ip_str\n"` → `"mac\n"\|"unknown\n"` | requérants → `mac_learner` |
 | `AF_PACKET SOCK_RAW` sur `br` | frames Ethernet brutes | `worker_captive` → bridge |
 
-Tous les pipes unidirectionnels (`question_response`, `learn`, `events`, `nft`,
-`ack_<i>`) sont créés dans `main.moon` via `pipe2(O_NONBLOCK)` avant tout
-`fork()`. Atomicité garantie (< `PIPE_BUF`). Le pipe `nft` centralise les
-insertions dans `worker_nft` (sérialisation des transactions nftables) ; chaque
-worker producteur attend un ACK de son `ack_<i>` dédié avant de rendre
+Tous les pipes unidirectionnels (`question_response<i>`, `learn`, `events`, `nft`,
+`ack_<i>`, `so_verdict_<i>`) sont créés dans `main.moon` via `pipe2(O_NONBLOCK)`
+avant tout `fork()`. Atomicité garantie (< `PIPE_BUF`). Le pipe `nft` centralise
+les insertions dans `worker_nft` (sérialisation des transactions nftables) ;
+chaque worker producteur attend un ACK de son `ack_<i>` dédié avant de rendre
 son verdict, afin que l'élément soit présent dans le set avant le retour du paquet.
 L'ACK porte le plus grand `seq` appliqué pour ce worker : un inject dont les
 lignes sont réparties sur plusieurs flushes (`MAX_BATCH`) n'est acquitté qu'une
 fois la dernière ligne traitée.
+
+### Workers DNS multiples (questions et réponses)
+
+`nfqueue.questions` et `nfqueue.responses` acceptent une plage contiguë
+(`"0-1"`, `"4-5"`) : un worker par file. La répartition est faite par le noyau,
+**par flux** (`queue num N-M` → `nfqueue_hash`, adresses triées + protocole,
+sans les ports), donc tous les paquets d'un même flux arrivent au même worker.
+`fanout` n'est pas utilisé : ce flag répartit par CPU, ce qui casserait cette
+affinité.
+
+L'état par processus des workers DNS est rendu compatible par deux fan-outs
+(`main.moon`) :
+
+1. **Transactions question→réponse** : un pipe par worker réponses
+   (`question_response<i>`, `create_pipes` l. 139-143). Chaque worker questions
+   écrit chaque message dans tous les pipes (`ipc.write_with_retry_all`), donc
+   chaque worker réponses a la table `pending` complète : une réponse livrée à
+   n'importe quelle file trouve sa transaction. À un seul worker, un seul pipe
+   est créé : comportement identique à avant.
+2. **Verdicts du second avis** : bus `so_verdict_<i>` (un pipe par worker,
+   l. 335-344), chaque worker n'écrivant qu'aux autres. Nécessaire parce que la
+   réponse d'origine (client ↔ résolveur) et celle du validateur (client ↔
+   validateur) ont des couples d'adresses différents, donc des files
+   différentes. Le worker qui reçoit le verdict d'un autre le mémorise ou
+   débloque immédiatement la réponse parquée (`drain_verdict_bus`) ; le pipe du
+   bus est ajouté au `poll` de `nfq_loop` (`extra_rfds`) pour un réveil immédiat
+   sans attendre le budget de 80 ms.
+
+Sans `so_verdict` (un seul worker réponses), les deux mécanismes sont inertes :
+aucun fd, aucune écriture supplémentaire. Le superviseur fork, nomme
+(`custos:resp-q4`, `custos:dns-q1`, …) et redémarre chaque worker indépendamment
+(`worker_died` → refork après 1 s), et `SIGHUP` reforke tous les `dns-q*` /
+`resp-q*` pour rafraîchir les listes en COW.
 
 ### Boucle `worker_nft` (faible latence)
 

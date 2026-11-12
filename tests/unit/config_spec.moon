@@ -315,16 +315,27 @@ describe "config.nfqueue.responses", ->
     assert.is_true ok, err
     calls
 
-  it "une plage (\"4-5\") est ramenée à sa première file avec un warn", ->
+  it "une plage (\"4-5\") est conservée : un worker par file (fan-out IPC)", ->
     path = "tmp/config_spec_nfq_multi.moon"
     write_moon path, [[return { nfqueue: { responses: "4-5" } }]]
+    holder = {}
+    calls = capture_warns -> holder.cfg = reload path
+    os.remove path
+    assert.equals "4-5", holder.cfg.nfqueue.responses
+    for c in *calls
+      assert.are_not.equal "nfqueue_responses_single_queue_only", c.action
+      assert.are_not.equal "nfqueue_responses_range_not_contiguous", c.action
+
+  it "une liste non contiguë (\"4,6\") est ramenée à sa première file (nft)", ->
+    path = "tmp/config_spec_nfq_list.moon"
+    write_moon path, [[return { nfqueue: { responses: "4,6" } }]]
     holder = {}
     calls = capture_warns -> holder.cfg = reload path
     os.remove path
     assert.equals "4", holder.cfg.nfqueue.responses
     found = false
     for c in *calls
-      found = true if c.action == "nfqueue_responses_single_queue_only"
+      found = true if c.action == "nfqueue_responses_range_not_contiguous"
     assert.is_true found
 
   it "une file seule (\"4\") est inchangée", ->

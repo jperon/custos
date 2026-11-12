@@ -6,6 +6,7 @@
 { :ffi, :libc, :libnfq } = require "ffi_defs"
 config = require "config"
 { :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
+bit = require "bit"
 
 AF_BRIDGE = 7   -- Linux AF_BRIDGE : famille d'adresses pour les hooks bridge nftables
 
@@ -33,7 +34,8 @@ VERDICT_DONE = -1
 -- Bloque jusqu'à la fermeture du fd netlink.
 -- @tparam number   queue_num Numéro de queue NFQUEUE (uint16)
 -- @tparam function callback  function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP | VERDICT_DONE
--- @tparam[opt] table opts    { idle_ms, on_idle, on_batch_end } : si idle_ms > 0,
+-- @tparam[opt] table opts    { idle_ms, on_idle, on_batch_end, extra_rfds,
+--                            on_extra_ready } : si idle_ms > 0,
 --                            la lecture passe par poll() avec ce timeout ; à
 --                            chaque expiration (et avant chaque lecture)
 --                            on_idle() est appelé (balayage du budget « second
@@ -44,7 +46,11 @@ VERDICT_DONE = -1
 --                            MAX_BATCH_PKTS. C'est là que le worker réponses
 --                            pose les verdicts différés de son lot (cf.
 --                            worker_responses.flush_deferred) après un unique
---                            ACK nft.
+--                            ACK nft. extra_rfds : fds supplémentaires
+--                            surveillés par le même poll (bus de verdicts
+--                            inter-workers) ; on_extra_ready() est appelé quand
+--                            l'un d'eux est lisible, SANS lire le socket
+--                            netlink (réveil immédiat, sans attendre le timeout).
 -- @treturn nil
 run_queue = (queue_num, callback, opts=nil) ->
   log_info -> { action: "queue_open", queue: queue_num }
@@ -113,11 +119,20 @@ run_queue = (queue_num, callback, opts=nil) ->
   idle_ms = opts and opts.idle_ms
   on_idle = opts and opts.on_idle
   on_batch_end = opts and opts.on_batch_end
+  extra_rfds = (opts and opts.extra_rfds) or {}
+  on_extra_ready = opts and opts.on_extra_ready
+  n_extra = #extra_rfds
   pfd = nil
-  if idle_ms and idle_ms > 0
-    pfd = ffi.new "struct pollfd[1]"
+  if (idle_ms and idle_ms > 0) or n_extra > 0
+    -- poll() surveille le fd netlink en position 0 (et les fds supplémentaires
+    -- du bus de verdicts au-delà). Sans idle_ms, le timeout est infini : seul
+    -- un fd lisible réveille la boucle.
+    pfd = ffi.new "struct pollfd[?]", 1 + n_extra
     pfd[0].fd = fd
     pfd[0].events = 1   -- POLLIN
+    for i = 1, n_extra
+      pfd[i].fd = extra_rfds[i]
+      pfd[i].events = 1   -- POLLIN
   -- Drain du lot (verdicts différés) : un read() netlink ne rend QU'UN paquet
   -- (un skb par paquet côté noyau). Sans ce drain non bloquant, « le lot » vaudrait
   -- toujours un paquet et l'ACK nft resterait payé par réponse. On vide donc le
@@ -136,7 +151,8 @@ run_queue = (queue_num, callback, opts=nil) ->
   while true
     if pfd
       on_idle! if on_idle
-      pr = libc.poll pfd, 1, idle_ms
+      poll_timeout = if idle_ms and idle_ms > 0 then idle_ms else -1
+      pr = libc.poll pfd, 1 + n_extra, poll_timeout
       if pr == 0
         continue   -- timeout : rien à lire, on_idle a balayé les parqués
       elseif pr < 0
@@ -144,6 +160,33 @@ run_queue = (queue_num, callback, opts=nil) ->
         continue if en == EINTR
         log_warn -> { action: "queue_poll_error", queue: queue_num, errno: en }
         break
+      else
+        -- Fd supplémentaire (bus de verdicts) : ne lire le socket netlink que
+        -- s'il est réellement prêt. Sans fd supplémentaire, un seul fd est
+        -- surveillé par poll() : il est toujours celui qui a réveillé la
+        -- boucle, comportement historique inchangé (aucune lecture de
+        -- `revents`, que certains bancs de test ne renseignent pas).
+        if n_extra > 0
+          netlink_rev = pfd[0].revents
+          netlink_ready = bit.band(netlink_rev, 1) != 0   -- POLLIN
+          unless netlink_ready
+            -- POLLERR (0x8) / POLLHUP (0x10) / POLLNVAL (0x20) sans POLLIN :
+            -- socket netlink mort. Un read() rendrait 0 (EOF) et sortirait de
+            -- la boucle ; on fait de même, sinon poll() se réarmerait à vide.
+            if bit.band(netlink_rev, 0x38) != 0
+              log_warn -> { action: "queue_poll_error", queue: queue_num, revents: netlink_rev }
+              break
+            extra_ready = false
+            for i = 1, n_extra
+              rev = pfd[i].revents
+              if rev != 0 and bit.band(rev, 1) == 0
+                -- POLLHUP/POLLERR sans données (tous les écrivains partis) :
+                -- cesser de surveiller ce fd (sinon poll() boucle à vide).
+                pfd[i].fd = -1
+              elseif bit.band(rev, 1) != 0
+                extra_ready = true
+            on_extra_ready! if extra_ready and on_extra_ready
+            continue
     if level_enabled "DEBUG"
       log_debug -> { action: "queue_read_call", queue: queue_num }
     rv = libc.read fd, buf, READ_BUF_SIZE

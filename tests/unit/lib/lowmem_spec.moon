@@ -22,6 +22,22 @@ describe "lib.lowmem", ->
     it "renvoie une table vide pour nil", ->
       assert.same {}, lowmem.parse_queues nil
 
+  describe "is_contiguous_range", ->
+    it "accepte un nombre seul et une plage croissante", ->
+      assert.is_true lowmem.is_contiguous_range "4"
+      assert.is_true lowmem.is_contiguous_range "4-5"
+      assert.is_true lowmem.is_contiguous_range " 0-65535 "
+
+    it "refuse une liste avec virgules (syntaxe nft invalide)", ->
+      assert.is_false lowmem.is_contiguous_range "4,6"
+      assert.is_false lowmem.is_contiguous_range "0,2,5-7"
+
+    it "refuse une plage décroissante ou malformée", ->
+      assert.is_false lowmem.is_contiguous_range "5-4"
+      assert.is_false lowmem.is_contiguous_range "4-"
+      assert.is_false lowmem.is_contiguous_range "abc"
+      assert.is_false lowmem.is_contiguous_range nil
+
   describe "detect", ->
     it "force à true via lowmem=true", ->
       assert.is_true lowmem.detect { lowmem: true }, -> 999999999

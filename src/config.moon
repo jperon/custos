@@ -543,19 +543,23 @@ normalize_trr_confirmation = (value) ->
 normalize = (cfg) ->
   cfg.runtime = cfg.runtime or {}
   cfg.nfqueue = cfg.nfqueue or {}
-  -- nfqueue.responses doit désigner UNE SEULE file. Chaque worker_responses
-  -- possède sa propre table `pending` (ipc.moon, état privé au processus) alors
-  -- que tous lisent le même pipe question→réponse : une réponse livrée à une
-  -- autre file tombe sur `get_pending_entry` nil et est jetée (NF_DROP). On
-  -- ramène donc une plage à sa PREMIÈRE file, avec un avertissement explicite.
-  resp_queues = require("lib.lowmem").parse_queues cfg.nfqueue.responses
-  if #resp_queues > 1
+  -- nfqueue.responses accepte une plage contiguë ("4-5") : un worker réponses
+  -- par file. Chaque worker reçoit une copie de TOUTES les transactions
+  -- question→réponse (fan-out des pipes, cf. main.moon) : l'appariement
+  -- question/réponse ne dépend donc pas de l'affinité de hachage du noyau
+  -- (une réponse peut être livrée à n'importe quelle file de la plage).
+  -- `queue num` n'accepte qu'un nombre ou une plage contiguë : une liste
+  -- ("4,6") est une erreur de syntaxe nft qui ferait échouer l'application du
+  -- ruleset. On la ramène donc à sa PREMIÈRE file, avec un avertissement.
+  lowmem = require "lib.lowmem"
+  resp_queues = lowmem.parse_queues cfg.nfqueue.responses
+  if #resp_queues > 1 and not lowmem.is_contiguous_range cfg.nfqueue.responses
     first = tostring resp_queues[1]
     config_warn {
-      action: "nfqueue_responses_single_queue_only"
+      action: "nfqueue_responses_range_not_contiguous"
       configured: tostring cfg.nfqueue.responses
       selected: first
-      reason: "pending state is per-process; a question/response pair must be handled by one worker"
+      reason: "queue num accepts only a number or a contiguous range (a-b)"
     }
     cfg.nfqueue.responses = first
   cfg.doh = cfg.doh or {}

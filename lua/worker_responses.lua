@@ -232,6 +232,11 @@ end
 local mac_clients = { }
 local ip_to_mac = { }
 local pipe_rfd = nil
+local so_bus_rfd = nil
+local so_bus_wfds = nil
+local so_bus_buf = ""
+local SO_BUS_CHUNK = 1024
+local so_bus_read_buf = ffi.new("uint8_t[?]", SO_BUS_CHUNK)
 local sleep_req = ffi.new("timespec_t[1]")
 local CLOCK_MONOTONIC = 1
 local purge_counter = 0
@@ -795,6 +800,122 @@ finalize_a = function(ctx, override)
   end
   return settle(ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0 or probe_recs > 0))
 end
+local _finalize_impl = nil
+local release_parked
+release_parked = function(ctx, override)
+  if _finalize_impl then
+    _finalize_impl(ctx, override)
+  else
+    finalize_a(ctx, override)
+  end
+  return nil
+end
+local broadcast_verdict
+broadcast_verdict = function(client_ip, txid, qname, override)
+  if not (so_bus_wfds and #so_bus_wfds > 0) then
+    return 
+  end
+  local line = second_opinion.encode_verdict(client_ip, txid, qname, override)
+  if not (line) then
+    return 
+  end
+  for _index_0 = 1, #so_bus_wfds do
+    local fd = so_bus_wfds[_index_0]
+    libc.write(fd, line, #line)
+  end
+  return nil
+end
+local apply_verdict_record
+apply_verdict_record = function(line, defer)
+  if not (so_state) then
+    return false
+  end
+  local rec, err = second_opinion.decode_verdict(line)
+  if not (rec) then
+    log_warn(function()
+      return {
+        action = "so_verdict_bus_invalid",
+        reason = err or "decode_failed"
+      }
+    end)
+    return false
+  end
+  local key = so_state.corr_key(rec.client_ip, rec.txid, rec.qname)
+  local ctx = so_state.take_parked(key)
+  if ctx then
+    ctx.defer = defer
+    release_parked(ctx, rec.override)
+    return true
+  else
+    so_state.store_verdict(key, rec.override, now())
+    return false
+  end
+end
+local drain_verdict_bus
+drain_verdict_bus = function(defer)
+  if not (so_bus_rfd) then
+    return 0
+  end
+  local released = 0
+  while true do
+    local n = libc.read(so_bus_rfd, so_bus_read_buf, SO_BUS_CHUNK)
+    if n == 0 then
+      break
+    end
+    if n < 0 then
+      local errno_p = libc.__errno_location()
+      local errno
+      if errno_p then
+        errno = errno_p[0]
+      else
+        errno = 0
+      end
+      if errno == 11 then
+        break
+      end
+      log_warn(function()
+        return {
+          action = "so_verdict_bus_read_failed",
+          errno = errno
+        }
+      end)
+      break
+    end
+    so_bus_buf = so_bus_buf .. ffi.string(so_bus_read_buf, n)
+    if #so_bus_buf > 8192 and not so_bus_buf:find("\n", 1, true) then
+      log_warn(function()
+        return {
+          action = "so_verdict_bus_oversize",
+          size = #so_bus_buf
+        }
+      end)
+      so_bus_buf = ""
+    end
+    while true do
+      local _continue_0 = false
+      repeat
+        local nl = so_bus_buf:find("\n", 1, true)
+        if not (nl) then
+          break
+        end
+        local line = so_bus_buf:sub(1, nl - 1)
+        so_bus_buf = so_bus_buf:sub(nl + 1)
+        if #line == 0 then
+          _continue_0 = true
+          break
+        end
+        if apply_verdict_record(line, defer) then
+          released = released + 1
+        end
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
+    end
+  end
+  return released
+end
 local build_orphan_fields
 build_orphan_fields = function(info)
   return {
@@ -815,6 +936,7 @@ build_orphan_fields = function(info)
 end
 local sweep_parked
 sweep_parked = function()
+  drain_verdict_bus(false)
   if not (so_state and so_state.has_parked()) then
     return 
   end
@@ -996,6 +1118,7 @@ handle_response = function(qh_ptr, nfad, pkt_id)
       if q1 then
         local key = so_state.corr_key(client_ip, txid, q1.name)
         local override = make_override(dns_classify.classify(dns_msg, dns_raw))
+        broadcast_verdict(client_ip, txid, q1.name, override)
         local parked_ctx = so_state.take_parked(key)
         if parked_ctx then
           finalize_a(parked_ctx, override)
@@ -1246,6 +1369,8 @@ run = function(queue_num, rfd, rules_metadata)
     events_wfd = rfd.events_wfd
     chain_strip_enabled = rfd.chain_strip_enabled or false
     strip_learn_wfd = rfd.strip_learn_wfd
+    so_bus_rfd = rfd.so_rfd
+    so_bus_wfds = rfd.so_wfds
     rfd = rfd.question_response_rfd
   end
   pipe_rfd = rfd
@@ -1287,9 +1412,24 @@ run = function(queue_num, rfd, rules_metadata)
       }
     end)
   end
+  local on_batch
+  on_batch = function()
+    if so_bus_rfd then
+      drain_verdict_bus(true)
+    end
+    return flush_deferred()
+  end
   local run_opts = {
-    on_batch_end = flush_deferred
+    on_batch_end = on_batch
   }
+  if so_bus_rfd then
+    run_opts.extra_rfds = {
+      so_bus_rfd
+    }
+    run_opts.on_extra_ready = function()
+      return drain_verdict_bus(false)
+    end
+  end
   local all_resolvers = collect_all_resolvers()
   if #all_resolvers > 0 then
     local families = { }
@@ -1326,6 +1466,23 @@ _set_pipe_rfd = function(fd)
   pipe_rfd = fd
   return nil
 end
+local _set_so_state
+_set_so_state = function(st)
+  so_state = st
+  return nil
+end
+local _set_so_bus
+_set_so_bus = function(rfd, wfds)
+  so_bus_rfd = rfd
+  so_bus_wfds = wfds
+  so_bus_buf = ""
+  return nil
+end
+local _set_finalize_impl
+_set_finalize_impl = function(fn)
+  _finalize_impl = fn
+  return nil
+end
 return {
   run = run,
   rr_timeout = rr_timeout,
@@ -1355,5 +1512,12 @@ return {
   deferred_count = deferred_count,
   _set_defer_deps = _set_defer_deps,
   _reset_deferred = _reset_deferred,
-  finalize_a = finalize_a
+  finalize_a = finalize_a,
+  broadcast_verdict = broadcast_verdict,
+  drain_verdict_bus = drain_verdict_bus,
+  apply_verdict_record = apply_verdict_record,
+  release_parked = release_parked,
+  _set_so_state = _set_so_state,
+  _set_so_bus = _set_so_bus,
+  _set_finalize_impl = _set_finalize_impl
 }

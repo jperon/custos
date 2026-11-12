@@ -249,6 +249,15 @@ ip_to_mac = {}
 -- fd de lecture du pipe IPC, injecté par main.moon avant fork()
 pipe_rfd = nil
 
+-- Bus de verdicts « second avis » entre workers réponses (multi-worker) :
+-- `so_bus_rfd` = pipe que CE worker lit, `so_bus_wfds` = pipes de TOUS les
+-- workers réponses (fan-out). Nil à un seul worker : aucun coût.
+so_bus_rfd  = nil
+so_bus_wfds = nil
+so_bus_buf  = ""
+SO_BUS_CHUNK = 1024
+so_bus_read_buf = ffi.new "uint8_t[?]", SO_BUS_CHUNK
+
 sleep_req = ffi.new "timespec_t[1]"
 CLOCK_MONOTONIC = 1
 
@@ -784,6 +793,97 @@ finalize_a = (ctx, override) ->
 
   settle ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0 or probe_recs > 0)
 
+-- ── Bus de verdicts inter-workers ────────────────────────────────────
+-- Avec plusieurs workers réponses (`nfqueue.responses` = plage), la réponse
+-- d'origine (A : client ↔ résolveur) et celle du validateur (B : client ↔
+-- validateur) portent des couples d'adresses différents. Le hachage de flux du
+-- noyau (hash_v4 trie saddr/daddr, sans les ports) les envoie donc à des files
+-- différentes : le verdict calculé par le worker qui reçoit B doit être
+-- diffusé aux autres, sinon A expirerait systématiquement en fail-open.
+-- `finalize_a` est remplaçable en test (aucun paquet NFQUEUE forgé).
+_finalize_impl = nil
+
+--- Décharge une réponse A parquée avec le verdict désormais connu.
+-- @tparam table ctx      Contexte paquet parqué (muté : defer)
+-- @tparam table override Verdict validateur (cf. make_override)
+-- @treturn nil
+release_parked = (ctx, override) ->
+  if _finalize_impl
+    _finalize_impl ctx, override
+  else
+    finalize_a ctx, override
+  nil
+
+--- Diffuse un verdict B à tous les workers réponses (best-effort).
+-- Sans bus (un seul worker) : no-op strict. L'écriture est atomique
+-- (ligne < PIPE_BUF) ; un pipe plein (worker bloqué) perd le verdict, et la
+-- réponse A concernée expirera en fail-open — comportement historique.
+-- @tparam string client_ip IP du client (dst de B)
+-- @tparam number txid      ID de transaction DNS
+-- @tparam string qname     Nom de la question
+-- @tparam table  override  Verdict issu de make_override
+-- @treturn nil
+broadcast_verdict = (client_ip, txid, qname, override) ->
+  return unless so_bus_wfds and #so_bus_wfds > 0
+  line = second_opinion.encode_verdict client_ip, txid, qname, override
+  return unless line
+  for fd in *so_bus_wfds
+    libc.write fd, line, #line
+  nil
+
+--- Applique une ligne du bus de verdicts.
+-- Si la réponse A est parquée dans CE worker, elle est déchargée immédiatement ;
+-- sinon le verdict est mémorisé pour une A qui arrivera plus tard (même clé de
+-- corrélation : client, txid, qname).
+-- @tparam string  line  Ligne encodée (second_opinion.encode_verdict)
+-- @tparam boolean defer true en fin de lot NFQUEUE (verdict groupé avec l'ACK)
+-- @treturn boolean true si une réponse A parquée a été déchargée
+apply_verdict_record = (line, defer) ->
+  return false unless so_state
+  rec, err = second_opinion.decode_verdict line
+  unless rec
+    log_warn -> { action: "so_verdict_bus_invalid", reason: err or "decode_failed" }
+    return false
+  key = so_state.corr_key rec.client_ip, rec.txid, rec.qname
+  ctx = so_state.take_parked key
+  if ctx
+    ctx.defer = defer
+    release_parked ctx, rec.override
+    true
+  else
+    so_state.store_verdict key, rec.override, now!
+    false
+
+--- Draine le pipe de verdicts de CE worker (non bloquant).
+-- @tparam boolean defer true si appelé en fin de lot NFQUEUE (verdicts différés)
+-- @treturn number Nombre de réponses A déchargées
+drain_verdict_bus = (defer) ->
+  return 0 unless so_bus_rfd
+  released = 0
+  while true
+    n = libc.read so_bus_rfd, so_bus_read_buf, SO_BUS_CHUNK
+    if n == 0
+      -- Tous les écrivains ont fermé (arrêt) : ne pas boucler sur POLLHUP.
+      break
+    if n < 0
+      errno_p = libc.__errno_location!
+      errno = if errno_p then errno_p[0] else 0
+      break if errno == 11   -- EAGAIN / EWOULDBLOCK (même valeur sous Linux)
+      log_warn -> { action: "so_verdict_bus_read_failed", errno: errno }
+      break
+    so_bus_buf ..= ffi.string so_bus_read_buf, n
+    if #so_bus_buf > 8192 and not so_bus_buf\find "\n", 1, true
+      log_warn -> { action: "so_verdict_bus_oversize", size: #so_bus_buf }
+      so_bus_buf = ""
+    while true
+      nl = so_bus_buf\find "\n", 1, true
+      break unless nl
+      line = so_bus_buf\sub 1, nl - 1
+      so_bus_buf = so_bus_buf\sub nl + 1
+      continue if #line == 0
+      released += 1 if apply_verdict_record line, defer
+  released
+
 --- Construit les champs de la trace INFO d'une réponse orpheline (fonction pure).
 -- C'est le SEUL témoin d'une réponse client jetée faute de question appariée :
 -- la trace est donc émise en INFO (visible avec `log_level: "INFO"` en
@@ -816,6 +916,10 @@ build_orphan_fields = (info) ->
 
 --- Balaye les réponses A parquées dont le budget est dépassé (fail-open).
 sweep_parked = ->
+  -- Verdicts B reçus d'un autre worker (multi-worker) : les appliquer AVANT de
+  -- faire expirer les parqués, sinon on relâcherait en fail-open une réponse
+  -- dont le verdict est déjà arrivé.
+  drain_verdict_bus false
   return unless so_state and so_state.has_parked!
   for ctx in *so_state.expired current_benchmark_ms!
     -- Hors lot NFQUEUE (appelé depuis on_idle) : poser le verdict immédiatement.
@@ -985,6 +1089,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
       if q1
         key = so_state.corr_key client_ip, txid, q1.name
         override = make_override dns_classify.classify dns_msg, dns_raw
+        -- Plusieurs workers réponses : la réponse A correspondante peut être
+        -- parquée dans un AUTRE processus (couples d'adresses différents →
+        -- files différentes, cf. drain_verdict_bus). On diffuse le verdict.
+        broadcast_verdict client_ip, txid, q1.name, override
         parked_ctx = so_state.take_parked key
         if parked_ctx
           finalize_a parked_ctx, override
@@ -1228,6 +1336,9 @@ run = (queue_num, rfd, rules_metadata) ->
     events_wfd = rfd.events_wfd
     chain_strip_enabled = rfd.chain_strip_enabled or false
     strip_learn_wfd     = rfd.strip_learn_wfd
+    -- Bus de verdicts validateur (multi-worker) : nil à un seul worker.
+    so_bus_rfd  = rfd.so_rfd
+    so_bus_wfds = rfd.so_wfds
     rfd = rfd.question_response_rfd
   pipe_rfd = rfd
   -- Pré-remplit mac_clients / ip_to_mac depuis la table ARP/NDP courante,
@@ -1267,7 +1378,19 @@ run = (queue_num, rfd, rules_metadata) ->
 
   -- Flush des verdicts différés après chaque lecture netlink : indispensable au
   -- chemin nominal (le lot est vidé même sans second avis).
-  run_opts = { on_batch_end: flush_deferred }
+  -- Avec un bus inter-workers, on draine d'abord les verdicts B reçus : une
+  -- réponse A parquée qui vient d'être débloquée est ajoutée au lot courant et
+  -- donc acquittée avec lui (un seul ACK nft par lot, y compris ses insertions).
+  on_batch = ->
+    drain_verdict_bus true if so_bus_rfd
+    flush_deferred!
+  run_opts = { on_batch_end: on_batch }
+  -- Réveil immédiat sur verdict reçu (multi-worker) : sans cela, une réponse A
+  -- parquée attendrait le timeout de poll (budget second avis, 80 ms) alors que
+  -- son verdict est déjà là. Sans bus : comportement inchangé.
+  if so_bus_rfd
+    run_opts.extra_rfds = { so_bus_rfd }
+    run_opts.on_extra_ready = -> drain_verdict_bus false
   all_resolvers = collect_all_resolvers!
   if #all_resolvers > 0
     families = {}
@@ -1295,6 +1418,30 @@ _set_pipe_rfd = (fd) ->
   pipe_rfd = fd
   nil
 
+--- Injecte l'état « second avis » (tests unitaires uniquement).
+-- @tparam table|nil st État second_opinion.new, ou nil
+-- @treturn nil
+_set_so_state = (st) ->
+  so_state = st
+  nil
+
+--- Injecte les fd du bus de verdicts (tests unitaires uniquement).
+-- @tparam number|nil rfd  fd de lecture de ce worker
+-- @tparam table|nil wfds  fds d'écriture (fan-out vers tous les workers)
+-- @treturn nil
+_set_so_bus = (rfd, wfds) ->
+  so_bus_rfd  = rfd
+  so_bus_wfds = wfds
+  so_bus_buf  = ""
+  nil
+
+--- Remplace `finalize_a` dans le déchargement des parqués (tests uniquement).
+-- @tparam function|nil fn Espion (ctx, override), ou nil pour restaurer
+-- @treturn nil
+_set_finalize_impl = (fn) ->
+  _finalize_impl = fn
+  nil
+
 { :run, :rr_timeout, :patch_modified_dns, :bench_delta, :build_benchmark_fields,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :try_upstream_retry, :arm_retry_fds, :format_block_event,
@@ -1304,4 +1451,5 @@ _set_pipe_rfd = (fd) ->
   :plan_retry_tries, :retry_pending_match, :_retry_budget, :_set_pipe_rfd,
   :build_orphan_fields,
   :settle, :flush_deferred, :deferred_count, :_set_defer_deps, :_reset_deferred,
-  :finalize_a }
+  :finalize_a, :broadcast_verdict, :drain_verdict_bus, :apply_verdict_record,
+  :release_parked, :_set_so_state, :_set_so_bus, :_set_finalize_impl }

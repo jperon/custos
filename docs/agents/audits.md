@@ -2766,3 +2766,84 @@ awk '/^Summary$/{s=1} s && /^lua\//' tmp/coverage/luacov.report.out | sort -k3,3
 **Vérification.** `nix develop --command bash -c "make all && make check &&
 make test"` : **2812 succès / 0 échec / 0 erreur** (unitaires) et 12/12 JS.
 `make test-e2e` non exécuté dans cette passe.
+
+### Multi-worker NFQUEUE pour les questions et réponses DNS (branche d-multi)
+
+Décision : mettre en œuvre la piste §10.1 de `docs/agents/perf.md` (à 400-500 q/s
+`mixed`, `resp-q4` 78 %, `dns-q1` 77-83 % et `nft` 60-63 % d'un vCPU chacun,
+alors que la machine 4 cœurs n'est qu'à ~55 %). Objectif : `N` workers par file,
+par configuration, défaut = 1 worker, aucune régression à 1 worker.
+
+**Instruction préalable (ce que le code disait réellement).**
+
+- Répartition du noyau : `queue num A-B` hache **par flux** sans le flag
+  `fanout` (`nft_queue.c:36-46` → `nfqueue_hash`), et ce hachage est
+  **symétrique et sans ports** (`nf_queue.h:49-125`) : tous les paquets d'un
+  flux, dans les deux sens, vont au même worker. Le flag `fanout`, lui, répartit
+  **par CPU** : il ne devait pas être ajouté. Le template n'en avait pas
+  (`nft-rules/dns-filter-bridge.nft:189-190`) ; la sortie de `nft` pour
+  `queue num 4-5` a été vérifiée dans un espace de noms réseau isolé (nft 1.1.6).
+- État par processus de `worker_responses` : `pending` (`ipc.moon:310-543`) et
+  `mac_clients`/`ip_to_mac` étaient alimentés depuis **un seul** pipe partagé :
+  avec plusieurs files, une entrée n'était lue que par un worker et la réponse
+  livrée à un autre était jetée (`NF_DROP`, `response_orphan_dropped`). C'est
+  exactement la raison du garde-fou qui ramenait `nfqueue.responses` à une seule
+  file (`config.moon:478-492` avant cette branche).
+- Le « second avis » ne pouvait pas être corrigé par l'affinité : la réponse
+  d'origine A (client ↔ résolveur) et celle du validateur B (client ↔
+  validateur) ont des couples d'adresses différents, donc des files différentes
+  avec un hachage par couple trié. Le contexte parqué (`second_opinion.moon`)
+  contient `qh_ptr`/`pkt_id`, propres au processus qui a reçu A : impossible de
+  le débloquer depuis un autre worker. Sans mesure corrective, chaque réponse
+  sous règle `validate` aurait attendu son budget (80 ms) puis fail-open.
+- Le canal ACK était déjà correct : le `worker_idx` voyage dans la ligne nft et
+  `main.moon` alloue un pipe `ack_<i>` par worker réponses ; `worker_nft` écrit
+  un ACK par `widx`.
+- Superviseur : un worker par file, nommé `custos:resp-q<num>` /
+  `custos:dns-q<num>`, redémarré indépendamment après `worker_died`, reforké sur
+  SIGHUP par motif `^resp%-q` / `^dns%-q`, métriques par file.
+
+**Correctifs.**
+
+- `nfqueue.responses` accepte une plage contiguë : suppression du garde-fou
+  « une seule file » (`config.moon`), refus des listes non contiguës
+  `"4,6"` (syntaxe nft invalide, vérifié) via `lib.lowmem.is_contiguous_range`,
+  ramenées à la première file avec l'avertissement
+  `nfqueue_responses_range_not_contiguous`.
+- Fan-out question→réponse : `create_pipes` crée un pipe par worker réponses
+  (`main.moon:139-143`), `ipc.write_with_retry_all` écrit la même ligne dans
+  tous (`ipc.moon:137-144`), chaque worker réponses lit le sien. À 1 worker :
+  un seul pipe, comportement inchangé.
+- Bus de verdicts du second avis : un pipe par worker réponses
+  (`main.moon:335-344`, chaque worker n'écrivant qu'aux autres),
+  `second_opinion.encode_verdict`/`decode_verdict` (ligne texte bornée,
+  < `PIPE_BUF`), `worker_responses.broadcast_verdict` /
+  `drain_verdict_bus`/`apply_verdict_record` ; déblocage immédiat d'une réponse
+  parquée, sans attendre les 80 ms, grâce au `poll` élargi de `nfq_loop`
+  (`extra_rfds`/`on_extra_ready`).
+- Ordre des opérations préservé : le bus est drainé **avant** `flush_deferred`
+  en fin de lot, donc une réponse débloquée et ses insertions nft sont
+  acquittées par l'ACK unique du lot (`wait_ack` après `get_last_seq`).
+- `lowmem` est désormais décidé au chargement du module, **avant** la création
+  des pipes (`main.moon:72-77`), pour que la réduction des plages soit vue par
+  le nombre de pipes et par le ruleset.
+
+**Sécurité.** Inchangée : à 1 worker, tous les nouveaux chemins sont inertes
+(aucun fd de bus, un seul pipe) ; à N workers, l'appariement est plus complet
+qu'avant (chaque worker voit toutes les transactions) et un verdict validateur
+est appliqué soit dans le worker qui détient A, soit mémorisé pour son arrivée.
+Un verdict perdu (pipe de bus plein) laisse A expirer en fail-open, comme avant.
+
+**Tests.** `tests/unit/lib/lowmem_spec.moon` (`is_contiguous_range`),
+`tests/unit/config_spec.moon` (plage conservée, liste refusée),
+`tests/unit/ipc/ipc_spec.moon` (fan-out, échec partiel = false),
+`tests/unit/second_opinion_spec.moon` (encode/decode des quatre verdicts et
+rejets), `tests/unit/worker_responses_bus_spec.moon` (diffusion à tous les
+pipes, déblocage d'une réponse parquée, verdict mémorisé si A absente, ligne
+coupée en deux écritures, ligne invalide), `tests/unit/nft_dns_queues_spec.moon`
+(rendu `queue num 4-5`).
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **2833 succès / 0 échec / 0 erreur** (unitaires), `check_globals`
+OK, tests JS 12/12. `make test-e2e` : **94 passed, 0 failed** (lancé sans
+préparation préalable ; homelab déjà provisionné).

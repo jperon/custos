@@ -39,6 +39,16 @@ local plan_optional_workers
 plan_optional_workers = require("lib.worker_plan").plan_optional_workers
 local build_filter_data
 build_filter_data = require("lib.filter_data").build_filter_data
+local is_lowmem = lowmem.detect(config.runtime)
+if is_lowmem then
+  local collapsed = lowmem.collapse_nfqueue(config.nfqueue)
+  log_info(function()
+    return {
+      action = "lowmem_collapse_queues",
+      collapsed = collapsed
+    }
+  end)
+end
 ffi.cdef([[  unsigned int sleep(unsigned int seconds);
 ]])
 local O_NONBLOCK, SIG_BLOCK
@@ -98,8 +108,26 @@ create_pipe = function(name)
 end
 local create_pipes
 create_pipes = function()
+  local qr_count = math.max(1, #lowmem.parse_queues(config.nfqueue.responses))
+  local qr_pipes
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for i = 1, qr_count do
+      _accum_0[_len_0] = create_pipe((function()
+        if i > 1 then
+          return "question_response" .. tostring(i)
+        else
+          return "question_response"
+        end
+      end)())
+      _len_0 = _len_0 + 1
+    end
+    qr_pipes = _accum_0
+  end
   local pipes = {
-    question_response = create_pipe("question_response"),
+    question_response = qr_pipes[1],
+    question_response_list = qr_pipes,
     learn = create_pipe("mac_learn"),
     vlan_learn = create_pipe("vlan_learn"),
     events = create_pipe("events"),
@@ -172,12 +200,16 @@ end
 local close_supervisor_fds
 close_supervisor_fds = function(pipes)
   if pipes then
-    if pipes.question_response then
-      if pipes.question_response.rfd then
-        libc.close(pipes.question_response.rfd)
+    local _list_0 = (pipes.question_response_list or {
+      pipes.question_response
+    })
+    for _index_0 = 1, #_list_0 do
+      local p = _list_0[_index_0]
+      if p.rfd then
+        libc.close(p.rfd)
       end
-      if pipes.question_response.wfd then
-        libc.close(pipes.question_response.wfd)
+      if p.wfd then
+        libc.close(p.wfd)
       end
     end
     if pipes.learn then
@@ -219,16 +251,6 @@ local supervise
 supervise = function(pipes, sfd)
   local auth_cfg = load_auth_cfg()
   local parse_queues = lowmem.parse_queues
-  local is_lowmem = lowmem.detect(config.runtime)
-  if is_lowmem then
-    local collapsed = lowmem.collapse_nfqueue(config.nfqueue)
-    log_info(function()
-      return {
-        action = "lowmem_collapse_queues",
-        collapsed = collapsed
-      }
-    end)
-  end
   local optional = plan_optional_workers(config, is_lowmem)
   local questions_queues = parse_queues(config.nfqueue.questions)
   local responses_queues = parse_queues(config.nfqueue.responses)
@@ -300,6 +322,18 @@ supervise = function(pipes, sfd)
       rfd = p.rfd,
       worker_idx = widx
     }
+  end
+  local so_bus = {
+    rfds = { },
+    wfds = { }
+  }
+  if #responses_queues > 1 then
+    for i = 1, #responses_queues do
+      local p = create_pipe("so_verdict_" .. tostring(i - 1))
+      so_bus.rfds[i] = p.rfd
+      so_bus.wfds[i] = p.wfd
+      ack_pipes[#ack_pipes + 1] = p
+    end
   end
   table.insert(workers_without_filter, {
     name = "events",
@@ -398,6 +432,13 @@ supervise = function(pipes, sfd)
   local workers_with_filter = { }
   for i, q_num in ipairs(responses_queues) do
     local ack_info = alloc_ack_pipe()
+    local qr_pipe = pipes.question_response_list[i]
+    local so_others = { }
+    for j = 1, #so_bus.wfds do
+      if not (j == i) then
+        so_others[#so_others + 1] = so_bus.wfds[j]
+      end
+    end
     table.insert(workers_with_filter, {
       name = "resp-q" .. tostring(q_num),
       pid = nil,
@@ -405,13 +446,15 @@ supervise = function(pipes, sfd)
         return fork_worker("resp-q" .. tostring(q_num), function(fds)
           return require("worker_responses").run(q_num, fds, rules_metadata)
         end, {
-          question_response_rfd = pipes.question_response.rfd,
+          question_response_rfd = qr_pipe.rfd,
           nft_wfd = pipes.nft.wfd,
           ack_rfd = ack_info.rfd,
           worker_idx = ack_info.worker_idx,
           events_wfd = pipes.events.wfd,
           strip_learn_wfd = (pipes.strip_learn and pipes.strip_learn.wfd),
-          chain_strip_enabled = (pipes.strip_learn ~= nil)
+          chain_strip_enabled = (pipes.strip_learn ~= nil),
+          so_rfd = so_bus.rfds[i],
+          so_wfds = (#so_others > 0 and so_others or nil)
         })
       end
     })
@@ -428,6 +471,18 @@ supervise = function(pipes, sfd)
       })
     end
   })
+  local qr_wfds
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    local _list_0 = pipes.question_response_list
+    for _index_0 = 1, #_list_0 do
+      local p = _list_0[_index_0]
+      _accum_0[_len_0] = p.wfd
+      _len_0 = _len_0 + 1
+    end
+    qr_wfds = _accum_0
+  end
   for i, q_num in ipairs(questions_queues) do
     table.insert(workers_with_filter, {
       name = "dns-q" .. tostring(q_num),
@@ -436,7 +491,7 @@ supervise = function(pipes, sfd)
         return fork_worker("dns-q" .. tostring(q_num), (function(fds)
           return require("worker_questions").run(q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data)
         end), {
-          question_response_wfd = pipes.question_response.wfd,
+          question_response_wfd = qr_wfds,
           learn_wfd = pipes.learn.wfd,
           events_wfd = pipes.events.wfd,
           filter_data = filter_data
@@ -662,6 +717,7 @@ log_info(function()
     action = "ipc_pipes_created",
     question_response_rfd = pipes.question_response.rfd,
     question_response_wfd = pipes.question_response.wfd,
+    question_response_workers = #pipes.question_response_list,
     learn_rfd = pipes.learn.rfd,
     learn_wfd = pipes.learn.wfd,
     events_rfd = pipes.events.rfd,
