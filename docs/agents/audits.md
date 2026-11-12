@@ -2946,13 +2946,13 @@ test-e2e` non lancé (consigne « pas de ssh »).
 
 **1. Défaut.** Avec `nfqueue.responses` en plage, un worker réponses ne drainait
 son tube `question_response<i>` que dans `handle_response`
-(`src/worker_responses.moon:1013-1018`), donc uniquement à l'arrivée d'un paquet
+(`src/worker_responses.moon:1022-1027`), donc uniquement à l'arrivée d'un paquet
 sur SA file ; le fd du tube n'était pas dans les `extra_rfds` du `poll` (seul le
 bus `so_verdict` y figurait). Le hachage NFQUEUE répartissant par couple
 d'adresses (`perf.md` §11.1), une file peut rester inactive : son tube (64 Kio)
 se remplissait, `ipc.write_with_retry_all` échouait en EAGAIN après 5 × 20 ms de
 `nanosleep` (`src/ipc.moon:114-130`) et `worker_questions` en faisait un `NF_DROP`
-définitif (`src/worker_questions.moon:454-464`). Plus de question → plus de
+définitif (`src/worker_questions.moon:459-468`). Plus de question → plus de
 réponse → le tube de l'autre worker cessait d'être drainé : blocage définitif
 jusqu'au redémarrage. Observé en pré-prod (`tmp/bench3_report.md` §3-§4 : 0
 réponse sur 9 000, `questions_ipc_write_failed_exhausted errno=11`).

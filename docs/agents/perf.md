@@ -606,10 +606,11 @@ ensuite, à n'importe quel débit, jusqu'au redémarrage.
    et le worker questions écrit chaque transaction dans **tous**
    (`ipc.write_with_retry_all`).
 2. Côté worker réponses, le tube n'était lu que par `handle_response`
-   (`drain_pipe`, `src/worker_responses.moon:1013-1018`), donc **seulement quand
+   (`drain_pipe`, `src/worker_responses.moon:1022-1027`), donc **seulement quand
    un paquet arrivait sur SA file**. Le fd du tube n'était pas surveillé par le
    `poll` de `nfq_loop` : `extra_rfds` ne contenait que le bus de verdicts du
-   second avis (`src/worker_responses.moon:1390-1393`).
+   second avis (avant le correctif, `src/worker_responses.moon:1390-1393` ;
+   désormais `:1408-1423`).
 3. Le hachage NFQUEUE répartit par **couple d'adresses** (`§11.1`) : avec un seul
    client, tous les paquets tombent dans une seule file de la plage (mesuré :
    file 15 pour les réponses, file 14 inactive). Le tube du worker inactif
@@ -617,7 +618,7 @@ ensuite, à n'importe quel débit, jusqu'au redémarrage.
 4. `write_with_retry_all` renvoyait `false` dès qu'**un** destinataire échouait
    (EAGAIN, 5 × 20 ms de `nanosleep` par question, `src/ipc.moon:110-147`) et
    `worker_questions` traitait cet échec comme définitif : `return NF_DROP`
-   (`src/worker_questions.moon:449-464`).
+   (`src/worker_questions.moon:459-468`).
 5. Conséquence en boucle fermée : la question n'atteint plus le résolveur →
    aucune réponse → le worker qui traitait les réponses ne reçoit plus de paquet
    → **son** tube n'est plus drainé → l'échec devient permanent. Observé :
