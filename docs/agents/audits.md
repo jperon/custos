@@ -2606,5 +2606,6 @@ coupée en deux écritures, ligne invalide), `tests/unit/nft_dns_queues_spec.moo
 (rendu `queue num 4-5`).
 
 **Vérification.** `nix develop --command bash -c "make all && make check &&
-make test"` : **2830 succès / 0 échec / 0 erreur** (unitaires) + tests JS.
-`make test-e2e` non exécuté dans cette passe (pas de homelab engagé).
+make test"` : **2833 succès / 0 échec / 0 erreur** (unitaires), `check_globals`
+OK, tests JS 12/12. `make test-e2e` : **94 passed, 0 failed** (lancé sans
+préparation préalable ; homelab déjà provisionné).
