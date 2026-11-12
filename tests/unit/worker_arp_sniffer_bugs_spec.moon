@@ -1,20 +1,22 @@
 -- tests/unit/worker_arp_sniffer_bugs_spec.moon
--- Bugs constatés par la campagne de couverture, non corrigés (hors périmètre).
--- Chaque test est marqué pending et décrit fichier:ligne, entrée, attendu/obtenu.
+-- Régressions des bugs constatés par la campagne de couverture (branche
+-- d-bugs3) : TLLA finale ignorée et tableau pollfd initialisé en 1-based.
+-- Chaque test cite fichier:ligne, entrée et attendu.
 
 wa = require "worker_arp_sniffer"
+REAL_SOCKET = package.loaded["lib.socket"]
+REAL_WA = package.loaded["worker_arp_sniffer"]
 SRC_MAC = "\2\0\0\0\0\1"
 opt = (type, len_units, mac) -> string.char(type, len_units) .. mac
 
 describe "worker_arp_sniffer bugs connus", ->
   it "extract_tlla ignore une TLLA qui termine exactement la trame", ->
-    -- src/worker_arp_sniffer.moon:101 (`len < opt_start + NDP_OPT_MIN_LEN`)
-    -- exige un octet de plus que nécessaire, et :109 (`offset + opt_len >
-    -- len`) rejette l'option dont le dernier octet est à l'offset len.
+    -- src/worker_arp_sniffer.moon:101 exigeait `len >= opt_start + 8` (un
+    -- octet de trop) et :109 rejetait `offset + opt_len > len` alors que le
+    -- dernier octet est à `offset + opt_len - 1`.
     -- Entrée : trame de 86 octets (14 Eth + 40 IPv6 + 24 NA + 8 TLLA),
-    -- opt_start=79. Obtenu : nil (et process_ipv6 retombe sur la MAC source
-    -- Ethernet). Attendu : les 6 octets de MAC TLLA.
-    pending "TLLA en fin exacte de trame ignoré (off-by-one lignes 101/109)"
+    -- opt_start=79. Avant correctif : nil (repli sur la MAC source Ethernet).
+    -- Attendu : les 6 octets de la MAC TLLA.
     raw = string.rep("\0", 78) .. opt(2, 1, SRC_MAC)
     assert.equals SRC_MAC, wa.extract_tlla raw, 79, #raw
 
