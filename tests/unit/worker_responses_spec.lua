@@ -694,7 +694,7 @@ describe("build_orphan_fields (trace INFO du drop orphelin)", function()
     return assert.equals("-", (m.build_orphan_fields(info)).qname)
   end)
 end)
-return describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", function()
+describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)", function()
   local calls = nil
   local m = nil
   before_each(function()
@@ -847,5 +847,109 @@ return describe("verdicts différés par lot NFQUEUE (settle / flush_deferred)",
     m.settle(ctx, 1, nil, true)
     assert.equals(0, #calls.waits)
     return assert.equals(1, #calls.set)
+  end)
+end)
+return describe("worker_responses helpers complémentaires (couverture)", function()
+  before_each(function()
+    local config = require("config")
+    config.ipc = config.ipc or { }
+    config.ipc.match_retry = {
+      enabled = true,
+      count = 5,
+      sleep_ms = 0,
+      budget_ms = 100
+    }
+  end)
+  it("format_block_event sans timestamp utilise os.time", function()
+    local m = fresh_worker_responses()
+    local line = m.format_block_event({
+      qname = "exemple.test"
+    })
+    assert.truthy(line:match("^%d+\tblock\t"))
+    assert.truthy(line:match("exemple.test"))
+    return assert.equals("exemple.test", (line:gsub("\n", "")):match("\tblock\t([^\t]+)"))
+  end)
+  it("update_mac_clients : changement d'IPv6 oublie l'ancien mapping de cette MAC", function()
+    local m = fresh_worker_responses()
+    m.update_mac_clients({
+      mac_str = "aa:aa:aa:aa:aa:aa",
+      ip_str = "2001:db8::1"
+    }, 1)
+    assert.equals("aa:aa:aa:aa:aa:aa", m.ip_to_mac["2001:db8::1"])
+    m.update_mac_clients({
+      mac_str = "aa:aa:aa:aa:aa:aa",
+      ip_str = "2001:db8::2"
+    }, 2)
+    assert.is_nil(m.ip_to_mac["2001:db8::1"])
+    return assert.equals("aa:aa:aa:aa:aa:aa", m.ip_to_mac["2001:db8::2"])
+  end)
+  it("update_mac_clients ignore la MAC nulle (inconnue)", function()
+    local m = fresh_worker_responses()
+    m.update_mac_clients({
+      mac_str = "00:00:00:00:00:00",
+      ipv4 = true,
+      ip_str = "10.0.0.1"
+    }, 1)
+    return assert.is_nil(m.ip_to_mac["10.0.0.1"])
+  end)
+  it("maybe_dynamic_strip sans entrée ou sans rr_code renvoie la réponse intacte", function()
+    local m = fresh_worker_responses()
+    local raw = "payload"
+    assert.same({
+      raw,
+      false
+    }, {
+      m.maybe_dynamic_strip("a.test", raw, function()
+        return nil
+      end)
+    })
+    return assert.same({
+      raw,
+      false
+    }, {
+      m.maybe_dynamic_strip(nil, raw, function()
+        return 3
+      end)
+    })
+  end)
+  it("_reset_deferred vide la file de verdicts différés", function()
+    local m = fresh_worker_responses()
+    m.settle({
+      qh_ptr = "qh",
+      pkt_id = 1,
+      defer = true
+    }, 1, nil, false)
+    assert.equals(1, m.deferred_count())
+    m._reset_deferred()
+    assert.equals(0, m.deferred_count())
+    return assert.equals(0, m.flush_deferred())
+  end)
+  it("retry_pending_match est inactif si le retry est désactivé", function()
+    local config = require("config")
+    config.ipc.match_retry = {
+      enabled = false,
+      count = 5,
+      sleep_ms = 0
+    }
+    local m = fresh_worker_responses()
+    local entry, tries, waited, budget = m.retry_pending_match("tx", "10.0.0.1", 1, "1.1.1.1", 10)
+    assert.is_nil(entry)
+    assert.equals(0, tries)
+    assert.equals(0, waited)
+    return assert.is_false(budget)
+  end)
+  return it("retry_pending_match est inactif si count vaut 0", function()
+    local config = require("config")
+    config.ipc.match_retry = {
+      enabled = true,
+      count = 0,
+      sleep_ms = 0
+    }
+    local m = fresh_worker_responses()
+    local entry, tries, waited, budget = m.retry_pending_match("tx", "10.0.0.1", 1, "1.1.1.1", 10)
+    assert.is_nil(entry)
+    assert.equals(0, tries)
+    assert.equals(0, waited)
+    return assert.is_false(budget)
   end)
 end)

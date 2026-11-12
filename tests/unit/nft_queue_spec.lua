@@ -269,7 +269,7 @@ describe("nft_queue ACK consommé (last_acked_seq)", function()
     return close_pipe(ack_pipe)
   end)
 end)
-return describe("nft_queue element_spec (regroupement par set)", function()
+describe("nft_queue element_spec (regroupement par set)", function()
   it("décrit un élément de set concaténé ip4", function()
     local q = fresh_nft_queue()
     local spec = q.element_spec("ip4", "10.35.1.2", "93.184.216.1", "r_test", "660s")
@@ -311,5 +311,169 @@ return describe("nft_queue element_spec (regroupement par set)", function()
     return assert.same({
       "add element bridge dns-filter-bridge r_test_ip4 { 10.0.0.1 . 1.2.3.4 timeout 2m }"
     }, lines)
+  end)
+end)
+return describe("nft_queue écriture IPC et variantes (branches d'erreur)", function()
+  local saved_defs = nil
+  local saved_timeout = nil
+  local errno_box = nil
+  local writes = nil
+  local sleeps = nil
+  local fresh_with_libc
+  fresh_with_libc = function(write_fn, sleep_fn)
+    errno_box = ffi.new("int[1]")
+    local libc = setmetatable({
+      write = write_fn,
+      __errno_location = function()
+        return errno_box
+      end,
+      nanosleep = function(req, rem)
+        sleeps = sleeps + 1
+        if sleep_fn then
+          sleep_fn(req, rem)
+        end
+        return 0
+      end
+    }, {
+      __index = ffi.C
+    })
+    package.loaded["ffi_defs"] = {
+      ffi = ffi,
+      libc = libc
+    }
+    package.loaded["nft_queue"] = nil
+    return dofile("lua/nft_queue.lua")
+  end
+  setup(function()
+    saved_defs = package.loaded["ffi_defs"]
+    saved_timeout = package.loaded["config"].nft.ip_timeout
+  end)
+  teardown(function()
+    package.loaded["ffi_defs"] = saved_defs
+    package.loaded["config"].nft.ip_timeout = saved_timeout
+    package.loaded["nft_queue"] = nil
+  end)
+  before_each(function()
+    package.loaded["ffi_defs"] = saved_defs
+    writes = 0
+    sleeps = 0
+    errno_box = ffi.new("int[1]")
+  end)
+  it("sans tube de sortie, l'enqueue retourne false", function()
+    local q = fresh_nft_queue()
+    assert.is_false(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    return assert.is_false(q.send_barrier("corr"))
+  end)
+  it("une ligne plus grande que PIPE_BUF_SAFE est refusée sans écriture", function()
+    local wrote = 0
+    local q = fresh_with_libc((function(fd, line, len)
+      wrote = wrote + 1
+      return len
+    end), nil)
+    q.set_wfd(1)
+    local ok = q.add_ip4("10.0.0.1", "1.2.3.4", string.rep("r", 600), "2m")
+    assert.is_false(ok)
+    return assert.equals(0, wrote)
+  end)
+  it("une écriture EAGAIN réessaie après sleep puis réussit", function()
+    local q = fresh_with_libc((function(fd, line, len)
+      writes = writes + 1
+      if writes == 1 then
+        errno_box[0] = 11
+        return -1
+      end
+      return len
+    end), nil)
+    q.set_wfd(1)
+    assert.is_true(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.equals(2, writes)
+    return assert.equals(1, sleeps)
+  end)
+  it("une erreur d'écriture non EAGAIN abandonne immédiatement", function()
+    local q = fresh_with_libc((function(fd, line, len)
+      writes = writes + 1
+      errno_box[0] = 5
+      return -1
+    end), nil)
+    q.set_wfd(1)
+    assert.is_false(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.equals(1, writes)
+    return assert.equals(0, sleeps)
+  end)
+  it("EAGAIN sur toutes les tentatives épuise les reprises et retourne false", function()
+    local q = fresh_with_libc((function(fd, line, len)
+      writes = writes + 1
+      errno_box[0] = 11
+      return -1
+    end), nil)
+    q.set_wfd(1)
+    assert.is_false(q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m"))
+    assert.equals(3, writes)
+    return assert.equals(3, sleeps)
+  end)
+  it("send_barrier écrit une ligne barrier et get_last_seq la consomme", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    assert.is_true(q.send_barrier("corr-b"))
+    local line = read_pipe(p[1])
+    assert.truthy(line:find("|barrier|", 1, true))
+    assert.equals(1, q.get_last_seq())
+    assert.is_nil(q.get_last_seq())
+    return close_pipe(p)
+  end)
+  it("get_worker_idx reflète set_ack_rfd", function()
+    local q = fresh_nft_queue()
+    assert.is_nil(q.get_worker_idx())
+    q.set_ack_rfd(7, 3)
+    return assert.equals(3, q.get_worker_idx())
+  end)
+  it("enqueue refuse un tuple incomplet (kind/key/ip manquant)", function()
+    local q = fresh_nft_queue()
+    q.set_wfd(1)
+    assert.is_false(q.add_ip4(nil, "1.2.3.4", "r_test", "2m"))
+    return assert.is_false(q.add_ip4("10.0.0.1", nil, "r_test", "2m"))
+  end)
+  it("sanitize_timeout nil/invalide sans repli valide → 2m", function()
+    local q = fresh_nft_queue()
+    assert.equals("2m", q.sanitize_timeout(nil))
+    package.loaded["config"].nft.ip_timeout = "pas-valide"
+    q = fresh_nft_queue()
+    return assert.equals("2m", q.sanitize_timeout("encore-invalide"))
+  end)
+  it("sanitize_rule_id tronque au-delà de 126 octets", function()
+    local q = fresh_nft_queue()
+    assert.equals("", q.sanitize_rule_id(nil))
+    local long = string.rep("a", 200)
+    return assert.equals(126, #q.sanitize_rule_id(long))
+  end)
+  it("get_set_name et element_spec couvrent sip6 et auth_ip*", function()
+    local q = fresh_nft_queue()
+    assert.equals("sip_peers6", q.get_set_name("sip6", ""))
+    assert.equals("r_auth_ip4", q.get_set_name("auth_ip4", "r"))
+    assert.equals("r_auth_ip6", q.get_set_name("auth_ip6", "r"))
+    local spec = q.element_spec("sip6", "2001:db8::1", "_", "", "2m")
+    assert.equals("bridge", spec.family)
+    assert.equals("2001:db8::1 timeout 2m", spec.elem)
+    spec = q.element_spec("auth_ip6", "2001:db8::2", "_", "r", "2m")
+    return assert.equals("r_auth_ip6", spec.set_name)
+  end)
+  it("un bloc ACK mixte (complet + fragment) reste non interprété", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    put_ack(p[2], 5)
+    put_ack_partial(p[2], 9, 4)
+    q.set_ack_rfd(p[1], 0)
+    q.drain_ack()
+    assert.equals(0, q.get_last_acked())
+    return close_pipe(p)
+  end)
+  return it("tube ACK fermé : wait_ack échoue sans boucler sur POLLHUP", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_ack_rfd(p[1], 0)
+    ffi.C.close(p[2])
+    assert.is_false(q.wait_ack(1, "corr"))
+    return ffi.C.close(p[1])
   end)
 end)
