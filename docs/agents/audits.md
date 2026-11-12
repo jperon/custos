@@ -2305,6 +2305,73 @@ de validation sur les VMs du homelab).
   run propre (rc=0), donc la cible `coverage-quick` du `Makefile` (lignes
   229-242) n'a pas été modifiée.
 
+### Couverture de tests — chiffrage et comblement (branche d-cov2)
+
+**Mesure.** `make coverage-quick` échantillonne les lignes exécutées
+(`tests/helpers/quick_coverage_setup.lua` : hook `count` toutes les 50
+instructions), donc **sous-estime** la couverture réelle. Le rapport
+`tmp/cov_report.md` est produit par `tmp/gen_cov_report.lua` (non versionné) :
+dénominateur = lignes source non vides et non commentaires, ce qui majore un
+peu les « non couvertes » (quelques lignes structurelles). Les pourcentages par
+module du tableau ci-dessous viennent, eux, de **luacov** sur les specs du
+module (mesure exacte, pas un échantillonnage).
+
+- **Global avant** (`make coverage-quick`, run de référence) :
+  **7 224 / 37 881 lignes = 19,1 %**.
+- **Global après** (même méthode, après ajout des tests) :
+  **8 124 / 37 881 lignes = 21,4 %** (voir `tmp/cov_report.md`).
+
+**Modules traités** (avant → après, lignes couvertes / manquées) :
+
+| Module | Avant | Après |
+|---|---:|---:|
+| `src/nfq_loop.moon` | 170/30 (85,0 %) | 213/0 (100,0 %) |
+| `src/nft_queue.moon` | 208/60 (77,6 %) | 260/12 (95,6 %) |
+| `src/worker_nft.moon` | 211/46 (82,1 %) | 245/18 (93,2 %) |
+| `src/webui/audit.moon` | 57/1 (98,3 %) | 57/1 (98,3 %) |
+| `src/worker_responses.moon` | 534/298 (64,2 %) | 544/288 (65,4 %) |
+| `src/filter/nft_compiler.moon` | 472/214 (68,8 %) | 532/158 (77,1 %) |
+| `src/worker_questions.moon` | 275/120 (69,6 %) | 277/118 (70,1 %) |
+| `src/worker_tls.moon` | 394/427 (48,0 %) | 413/411 (50,1 %) |
+
+Tests ajoutés, par module : wrapper C de `run_queue` et échecs
+`nfq_open`/`nfq_create_queue`, ENOBUFS pendant le drain, erreur de lecture et
+timeout de poll (`tests/unit/nfq_loop_enobufs_spec.moon`) ; échecs d'écriture
+IPC, `send_barrier`, variantes `sip6`/`auth_ip*`, blocs ACK mixtes
+(`tests/unit/nft_queue_spec.moon`) ; tous les tuples, `build_batch`, rejets de
+`run` (`tests/unit/worker_nft_spec.moon`) ; `pid` autorisé et acteur par défaut
+(`tests/unit/webui/audit_spec.moon`) ; `format_block_event` sans timestamp,
+changement d'IPv6/MAC nulle, retry désactivé
+(`tests/unit/worker_responses_spec.moon`) ; `serialize_stable`, collecte des
+netlists, compilation condition/action
+(`tests/unit/filter/nft_compiler_spec.moon`) ; payload vide, MAC inconnue,
+absence de pipe d'événements (`tests/unit/worker_questions_spec.moon`) ;
+branches d'erreur du parseur TLS de repli, versions TLS, `sni_action_for`,
+seams QUIC, `validate_sni` et cache (`tests/unit/worker_tls_sni_spec.moon`).
+
+**Modules restants non couvrables en unitaire (et pourquoi).**
+
+- `src/main.moon`, `src/auth/worker.moon`, `src/bench/cli.moon`,
+  `src/filter/updater.moon`, `src/filter/convert.moon` : scripts exécutés au
+  chargement (`supervise`, `run_auth_worker`, `os.exit`, `argv`) ; déjà couverts
+  en sous-processus quand c'est possible (`updater_config_spec`, `convert_spec`),
+  invisibles du hook in-process (cf. § Couverture de tests, branche d-cov).
+- `src/auth/server.moon`, `src/mac_learner.moon`, `src/worker_doh.moon`,
+  `src/worker_arp_sniffer.moon` : les lignes restantes sont des boucles
+  socket/poll/événements (sockets réels, parfois RAW/root) ; leurs helpers purs
+  sont déjà testés, le reste relève des suites e2e.
+- `src/webui/schema/config_schema.moon` et `src/log.moon` : le reliquat est
+  constitué de champs de tables statiques (`default`, `hint`, fenêtres
+  `RL_CONFIG`), que luacov attribue à une seule ligne du constructeur ; les
+  tester n'apporterait rien.
+- `src/doh/hpack.moon` : déjà à 98,0 % en luacov isolé (11 lignes), ce que le
+  rapport échantillonné surestime comme un gros trou.
+
+**Aucun bug de production trouvé** ; aucun fichier de `src/` n'est modifié.
+À noter : un test avec un payload FFI de taille nulle (`ffi.new "uint8_t[?]", 0`)
+fait planter le processus sous luacov ; le test de la branche `payload_len <= 0`
+mocke donc `nfq_get_payload` à `-1` au lieu de passer une chaîne vide.
+
 ### d-audit — journal des modifications de l'interface admin
 
 **Constat.** Aucun module de `src/webui/` n'appelait `require "log"` : une
