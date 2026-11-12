@@ -11,19 +11,20 @@ bit = require "bit"
 sp = require("ipparse.lib.pack_compat").pack
 { :libc } = require "ffi_defs"
 
-pcall ffi.cdef "int pipe(int pipefd[2]);"
-pcall ffi.cdef "long read(int fd, void *buf, unsigned long count);"
-pcall ffi.cdef "int* __errno_location(void);"
-pcall ffi.cdef "struct sock_filter { uint16_t code; uint8_t jt; uint8_t jf; uint32_t k; };"
-pcall ffi.cdef "struct sock_fprog { unsigned short len; struct sock_filter *filter; };"
-pcall ffi.cdef [[
-  struct packet_mreq {
+for def in *{
+  "int pipe(int pipefd[2]);"
+  "long read(int fd, void *buf, unsigned long count);"
+  "int* __errno_location(void);"
+  "struct sock_filter { uint16_t code; uint8_t jt; uint8_t jf; uint32_t k; };"
+  "struct sock_fprog { unsigned short len; struct sock_filter *filter; };"
+  [[struct packet_mreq {
     int            mr_ifindex;
     unsigned short mr_type;
     unsigned short mr_alen;
     unsigned char  mr_address[8];
-  };
-]]
+  };]]
+}
+  pcall -> ffi.cdef def
 
 wa = require "worker_arp_sniffer"
 REAL_SOCKET = package.loaded["lib.socket"]

@@ -11,13 +11,14 @@ ffi = require "ffi"
 bit = require "bit"
 { :libc } = require "ffi_defs"
 
-pcall ffi.cdef [[
-  struct pollfd { int fd; short events; short revents; };
-  int pipe(int pipefd[2]);
-  long read(int fd, void *buf, unsigned long count);
-  int* __errno_location(void);
-  typedef struct { uint32_t ssi_signo; uint8_t _pad[124]; } signalfd_siginfo;
-]]
+for def in *{
+  "struct pollfd { int fd; short events; short revents; };"
+  "int pipe(int pipefd[2]);"
+  "long read(int fd, void *buf, unsigned long count);"
+  "int* __errno_location(void);"
+  "typedef struct { uint32_t ssi_signo; uint8_t _pad[124]; } signalfd_siginfo;"
+}
+  pcall -> ffi.cdef def
 
 w = require "worker_events"
 TMP = "tmp/worker_events_core_spec"

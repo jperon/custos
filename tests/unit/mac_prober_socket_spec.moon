@@ -7,7 +7,7 @@
 -- chargé le vrai module (pour disposer des cdefs struct sockaddr_ll/pollfd).
 
 ffi = require "ffi"
-pcall ffi.cdef "int* __errno_location(void);"
+pcall -> ffi.cdef "int* __errno_location(void);"
 
 mp = require "mac_prober"
 REAL_SOCKET = package.loaded["lib.socket"]
