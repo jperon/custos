@@ -344,6 +344,7 @@ local DEFAULTS = {
   },
   ipc = {
     pending_ttl = 5,
+    pending_max = 20000,
     match_retry = {
       count = 5,
       sleep_ms = 20,

@@ -495,6 +495,7 @@ Communication interne entre le worker questions et le worker réponses.
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
 | `pending_ttl` | int | `5` | Durée (s) de conservation d'une question en attente de réponse |
+| `pending_max` | int | `20000` | Taille maximale de la table `pending` par worker réponses ; au-delà, les entrées les plus anciennes sont évincées |
 | `match_retry.enabled` | bool | `true` | Active les tentatives de correspondance question/réponse |
 | `match_retry.count` | int | `5` | Nombre de tentatives |
 | `match_retry.sleep_ms` | int | `20` | Délai (ms) entre chaque tentative |
@@ -502,6 +503,38 @@ Communication interne entre le worker questions et le worker réponses.
 
 La clé de corrélation est `txid:ip:port:résolveur` (ID de transaction DNS + IP
 source du client + port source du client + IP du résolveur).
+
+### Borne de la table `pending` (`pending_max`)
+
+Chaque worker réponses conserve une table `pending` des questions en attente de
+réponse. Une entrée est créée par `set_pending` à chaque message IPC drainé,
+consommée par `consume` à la première réponse appariée, et purgée par
+`purge_pending` — appelée tous les 1000 paquets par `worker_responses`
+(`src/worker_responses.moon:1046-1053`) — dès que `now > expire`, avec
+`expire = now + pending_ttl` (5 s). Avec le fan-out multi-worker, chaque worker
+reçoit toutes les questions : la table existe en N copies.
+
+Sous une rafale de questions sans réponse (résolveur muet, flood d'un client),
+la table n'avait aucune borne et grossissait sans limite. `pending_max` la
+borne : au-delà, l'entrée à l'activité la plus ancienne (insertion ou
+rafraîchissement d'`expire` par retransmission) est évincée en O(1) — liste
+doublement chaînée, aucun tri à l'insertion. Un compteur d'évictions est exposé
+par `ipc.pending_stats`, et un `WARN` rate-limité `pending_evicted` (champs
+`evicted`, `entries`, `pending_max` ; `RL_CONFIG` clé = action, fenêtre 10 s)
+signale l'événement.
+
+Taille mémoire mesurée (`collectgarbage "count"`,
+`tests/unit/ipc/ipc_spec.moon`) : ≈ 0,84 Ko par entrée, soit ≈ 16 Mo pour
+20 000 entrées **par worker réponses**. Le défaut 20 000 laisse une marge de
+plusieurs ordres de grandeur au-dessus d'une charge nominale (~2 000 entrées à
+400 q/s sur 5 s) tout en restant borné. Sur une cible à 128 Mo ou avec
+plusieurs workers réponses, réduire `pending_max` : la mémoire est multipliée
+par le nombre de workers.
+
+Une réponse dont la question a été évincée suit **exactement** le chemin d'une
+question expirée : `get_pending_entry` renvoie `nil`, le retry d'appariement
+échoue, et la réponse est jetée (`NF_DROP`) sous `response_orphan_dropped`
+(`src/worker_responses.moon:1104-1163`). Aucun nouveau comportement.
 
 ### Budget du retry d'appariement (`match_retry.budget_ms`)
 
@@ -540,16 +573,16 @@ reste disponible en `DEBUG` (`response_no_matching_question`,
 `response_no_matching_question_after_retry`).
 
 Le volume est borné par le rate-limiting de `log.moon` : les actions
-`response_orphan_dropped`, `ipc_pending_overwrite` et
-`ipc_pending_overwrite_divergent` ont une entrée `RL_CONFIG` dédiée, **clé =
-action seule**, fenêtre 10 s. L'état du limiteur est une table mmap **partagée
-entre tous les workers** : au plus une ligne par 10 s, tous workers confondus,
-le nombre d'occurrences supprimées étant reporté dans le champ `suppressed=N`
-(une rafale de 400 réponses orphelines/s produit donc ~1 ligne / 10 s, pas
-400 lignes/s). Une action **sans** entrée dédiée retombe sur la règle par
-défaut de son niveau (`INFO` : 60 s, empreinte sur `RL_IDENTITY_KEYS`) : c'est
-pourquoi ces trois actions, très répétitives en rafale, ont une entrée à 10 s
-et sans champ discriminant.
+`response_orphan_dropped`, `ipc_pending_overwrite`,
+`ipc_pending_overwrite_divergent` et `pending_evicted` ont une entrée
+`RL_CONFIG` dédiée, **clé = action seule**, fenêtre 10 s. L'état du limiteur
+est une table mmap **partagée entre tous les workers** : au plus une ligne par
+10 s, tous workers confondus, le nombre d'occurrences supprimées étant reporté
+dans le champ `suppressed=N` (une rafale de 400 réponses orphelines/s produit
+donc ~1 ligne / 10 s, pas 400 lignes/s). Une action **sans** entrée dédiée
+retombe sur la règle par défaut de son niveau (`INFO` : 60 s, empreinte sur
+`RL_IDENTITY_KEYS`) : c'est pourquoi ces quatre actions, très répétitives en
+rafale, ont une entrée à 10 s et sans champ discriminant.
 
 **Réutilisation de clé (`ipc_pending_overwrite`).** Une nouvelle question qui
 réutilise une clé `pending` existante est comparée champ à champ avec l'entrée

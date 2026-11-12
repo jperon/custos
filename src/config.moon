@@ -263,6 +263,10 @@ DEFAULTS = {
 
   ipc: {
     pending_ttl: 5
+    -- Borne de la table `pending` par worker réponses (mesuré ≈ 0,84 Ko/entrée,
+    -- 20 000 ≈ 16 Mo) : au-delà, les entrées les plus anciennes sont évincées
+    -- (cf. doc/CONFIG.md § ipc). 0 ou valeur invalide → défaut.
+    pending_max: 20000
     match_retry: {
       count: 5
       sleep_ms: 20

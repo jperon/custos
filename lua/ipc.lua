@@ -22,6 +22,7 @@ local IPC_VERSION = "v1"
 local IPC_READ_CHUNK = 2048
 local IPC_MAX_LINE = 1024
 local IPC_WRITE_RETRY_COUNT = 5
+local PENDING_MAX_DEFAULT = 20000
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local timespec_ptr_t = ffi.typeof("timespec_t[1]")
@@ -411,6 +412,15 @@ decode_msg = function(raw)
 end
 local pending = { }
 local read_states = { }
+local _pending_head = nil
+local _pending_tail = nil
+local _pending_size = 0
+local _pending_evictions = 0
+local _configured_pending_max = tonumber(ipc_cfg.pending_max)
+local _pending_max = PENDING_MAX_DEFAULT
+if _configured_pending_max and _configured_pending_max >= 1 then
+  _pending_max = math.floor(_configured_pending_max)
+end
 local make_key
 make_key = function(txid, ip_str, src_port, resolver_ip_str)
   return string.format("%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str)
@@ -491,9 +501,102 @@ _most_restrictive = function(entry, msg)
     return "kept_allowed_conflict"
   end
 end
+local _unlink_pending_node
+_unlink_pending_node = function(node)
+  local prev, nxt = node.prev, node.next
+  if prev then
+    prev.next = nxt
+  else
+    _pending_head = nxt
+  end
+  if nxt then
+    nxt.prev = prev
+  else
+    _pending_tail = prev
+  end
+  node.prev = nil
+  node.next = nil
+end
+local _append_pending_node
+_append_pending_node = function(key, entry)
+  local node = {
+    key = key,
+    entry = entry,
+    prev = _pending_tail,
+    next = nil
+  }
+  if _pending_tail then
+    _pending_tail.next = node
+  else
+    _pending_head = node
+  end
+  _pending_tail = node
+  entry._pending_node = node
+  return node
+end
+local _move_pending_node_to_tail
+_move_pending_node_to_tail = function(node)
+  if _pending_tail == node then
+    return 
+  end
+  _unlink_pending_node(node)
+  node.prev = _pending_tail
+  node.next = nil
+  if _pending_tail then
+    _pending_tail.next = node
+  else
+    _pending_head = node
+  end
+  _pending_tail = node
+end
+local _remove_pending
+_remove_pending = function(key)
+  local entry = pending[key]
+  if not (entry) then
+    return false
+  end
+  pending[key] = nil
+  local node = entry._pending_node
+  if node then
+    _unlink_pending_node(node)
+    entry._pending_node = nil
+  end
+  _pending_size = _pending_size - 1
+  return true
+end
+local _enforce_pending_max
+_enforce_pending_max = function()
+  local evicted = 0
+  while _pending_size > _pending_max do
+    local node = _pending_head
+    if not (node) then
+      break
+    end
+    pending[node.key] = nil
+    node.entry._pending_node = nil
+    _unlink_pending_node(node)
+    _pending_size = _pending_size - 1
+    _pending_evictions = _pending_evictions + 1
+    evicted = evicted + 1
+  end
+  if evicted > 0 then
+    log_warn(function()
+      return {
+        action = "pending_evicted",
+        evicted = evicted,
+        entries = _pending_size,
+        pending_max = _pending_max
+      }
+    end)
+  end
+  return nil
+end
 local overwrite_pending
 overwrite_pending = function(key, entry, msg, now_fn)
   entry.expire = now_fn() + (ipc_cfg.pending_ttl or 5)
+  if entry._pending_node then
+    _move_pending_node_to_tail(entry._pending_node)
+  end
   if not (pending_meta_diverges(entry, msg)) then
     log_info(function()
       return {
@@ -533,7 +636,7 @@ set_pending = function(msg, now_fn)
   if previous then
     return overwrite_pending(key, previous, msg, now_fn)
   end
-  pending[key] = {
+  local entry = {
     expire = now_fn() + (ipc_cfg.pending_ttl or 5),
     refused = msg.refused,
     modifiers = msg.modifiers,
@@ -544,6 +647,11 @@ set_pending = function(msg, now_fn)
     timeout = msg.timeout,
     response_rule_ids = msg.response_rule_ids or { }
   }
+  pending[key] = entry
+  _append_pending_node(key, entry)
+  _pending_size = _pending_size + 1
+  _enforce_pending_max()
+  return entry
 end
 local drain_lines
 drain_lines = function(pipe_rfd, buf, now_fn, on_msg)
@@ -650,7 +758,7 @@ is_pending = function(txid, ip_str, src_port, resolver_ip_str, now_fn)
     return false
   end
   if now_fn() > entry.expire then
-    pending[key] = nil
+    _remove_pending(key)
     return false
   end
   return true
@@ -663,23 +771,31 @@ get_pending_entry = function(txid, ip_str, src_port, resolver_ip_str, now_fn)
     return nil
   end
   if now_fn() > entry.expire then
-    pending[key] = nil
+    _remove_pending(key)
     return nil
   end
   return entry
 end
 local consume
 consume = function(txid, ip_str, src_port, resolver_ip_str)
-  pending[make_key(txid, ip_str, src_port, resolver_ip_str)] = nil
+  return _remove_pending(make_key(txid, ip_str, src_port, resolver_ip_str))
 end
 local purge_pending
 purge_pending = function(now_fn)
   local now = now_fn()
   for key, entry in pairs(pending) do
     if now > entry.expire then
-      pending[key] = nil
+      _remove_pending(key)
     end
   end
+end
+local pending_stats
+pending_stats = function()
+  return {
+    size = _pending_size,
+    evicted = _pending_evictions,
+    pending_max = _pending_max
+  }
 end
 return {
   encode_msg = encode_msg,
@@ -691,10 +807,12 @@ return {
   encode_modifiers = encode_modifiers,
   decode_modifiers = decode_modifiers,
   drain_pipe = drain_pipe,
+  set_pending = set_pending,
   is_pending = is_pending,
   get_pending_entry = get_pending_entry,
   consume = consume,
   purge_pending = purge_pending,
+  pending_stats = pending_stats,
   MSG_IPV4 = MSG_IPV4,
   MSG_IPV6 = MSG_IPV6,
   MSG_IPV4_REFUSED = MSG_IPV4_REFUSED,
