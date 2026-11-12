@@ -1,5 +1,6 @@
 dns_mod = require "ipparse.l7.dns"
 sp = require("ipparse.lib.pack_compat").pack
+nfq = require "nfq_loop"
 
 QTYPE_A = dns_mod.types.A
 QTYPE_HTTPS = dns_mod.types.HTTPS
@@ -606,6 +607,115 @@ describe "verdicts différés par lot NFQUEUE (settle / flush_deferred)", ->
     m.settle ctx, 1, nil, true
     assert.equals 1, #calls.waits
     assert.equals 1, #calls.set
+
+  -- ── Lecture netlink pendant l'attente d'ACK du lot ───────────────────────
+  -- Pendant wait_ack, les paquets qui arrivent sont lus et traités, mais leurs
+  -- verdicts forment un lot SUIVANT, posé après SON PROPRE ACK (le plus grand
+  -- seq enfilé pendant l'attente) : aucun verdict avant l'ACK de ses
+  -- insertions (docs/agents/perf.md §16).
+  it "lit pendant l'attente : verdicts du lot suivant après SON ACK (pas celui du lot courant)", ->
+    events = {}
+    seqs = { 5, 9 }
+    m._set_defer_deps {
+      get_last_seq: ->
+        s = table.remove seqs, 1
+        events[#events + 1] = { "seq", s }
+        s
+      wait_ack: (seq, corr, on_wait) ->
+        events[#events + 1] = { "wait", seq }
+        on_wait! if on_wait
+        true
+      set_verdict: (qh, id, verdict, payload) ->
+        events[#events + 1] = { "set", id }
+    }
+    reads = 0
+    m._set_pipe_rfd -1   -- tube IPC invalide : le drain échoue proprement (EBADF)
+    read_packets = (budget) ->
+      reads += 1
+      events[#events + 1] = { "read", budget }
+      if reads == 1
+        -- Un paquet arrive pendant l'attente du lot 1 : son traitement diffère
+        -- son verdict dans le lot suivant.
+        m.settle { qh_ptr: "qh", pkt_id: 22, ack_corr: "c2", defer: true }, 1, nil, true
+        return 1
+      0
+    m.settle { qh_ptr: "qh", pkt_id: 21, ack_corr: "c1", defer: true }, 1, nil, true
+    n = m.flush_deferred read_packets
+    assert.equals 2, n
+    assert.same {
+      { "seq", 5 }
+      { "wait", 5 }
+      { "read", nfq.MAX_BATCH_PKTS }
+      { "set", 21 }
+      { "seq", 9 }
+      { "wait", 9 }
+      { "set", 22 }
+    }, events
+    assert.equals 0, m.deferred_count!
+
+  it "timeout de l'ACK : verdicts posés (fail-open historique) et lot suivant traité", ->
+    events = {}
+    seqs = { 5, 9 }
+    m._set_defer_deps {
+      get_last_seq: ->
+        s = table.remove seqs, 1
+        events[#events + 1] = { "seq", s }
+        s
+      wait_ack: (seq, corr, on_wait) ->
+        events[#events + 1] = { "wait", seq }
+        on_wait! if on_wait
+        false   -- budget écoulé, avertissement déjà émis par nft_queue
+      set_verdict: (qh, id, verdict, payload) ->
+        events[#events + 1] = { "set", id }
+    }
+    reads = 0
+    read_packets = (budget) ->
+      reads += 1
+      if reads == 1
+        m.settle { qh_ptr: "qh", pkt_id: 32, ack_corr: "c2", defer: true }, 1, nil, true
+      budget
+    m.settle { qh_ptr: "qh", pkt_id: 31, ack_corr: "c1", defer: true }, 1, nil, true
+    n = m.flush_deferred read_packets
+    assert.equals 2, n, "les deux lots sont posés malgré les timeouts"
+    assert.same {
+      { "seq", 5 }
+      { "wait", 5 }
+      { "set", 31 }
+      { "seq", 9 }
+      { "wait", 9 }
+      { "set", 32 }
+    }, events
+
+  it "borne le lot suivant à MAX_BATCH_PKTS paquets lus pendant l'attente", ->
+    budgets = {}
+    m._set_defer_deps {
+      get_last_seq: -> 5
+      wait_ack: (seq, corr, on_wait) ->
+        on_wait! for _ = 1, 3   -- trois tours de poll dans la même attente
+        true
+      set_verdict: -> nil
+    }
+    m.settle { qh_ptr: "qh", pkt_id: 1, ack_corr: "c", defer: true }, 1, nil, true
+    m.flush_deferred (budget) ->
+      budgets[#budgets + 1] = budget
+      nfq.MAX_BATCH_PKTS
+    assert.same { nfq.MAX_BATCH_PKTS }, budgets, "budget épuisé : plus aucune lecture"
+
+  it "sans lecture fournie (sortie de boucle), aucune lecture n'est tentée", ->
+    events = {}
+    m._set_defer_deps {
+      get_last_seq: -> 5
+      wait_ack: (seq, corr, on_wait) ->
+        events[#events + 1] = { "wait", seq }
+        on_wait! if on_wait
+        true
+      set_verdict: -> nil
+    }
+    m.settle { qh_ptr: "qh", pkt_id: 2, ack_corr: "c", defer: true }, 1, nil, true
+    n = m.flush_deferred!
+    assert.equals 1, n
+    assert.same { { "wait", 5 } }, events
+    assert.equals 0, m.deferred_count!
 
 describe "worker_responses helpers complémentaires (couverture)", ->
   before_each ->

@@ -35,10 +35,10 @@ do
   local _obj_0 = require("nft_queue")
   add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
-local run_queue, NF_ACCEPT, NF_DROP
+local run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS
 do
   local _obj_0 = require("nfq_loop")
-  run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
+  run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.MAX_BATCH_PKTS
 end
 local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled, get_last_write_us
 do
@@ -346,36 +346,58 @@ _reset_deferred = function()
   deferred = { }
   return nil
 end
+local _flush_batch
+_flush_batch = function(batch, deps, read_packets)
+  local pending_seq = deps.get_last_seq()
+  if pending_seq then
+    local budget = MAX_BATCH_PKTS
+    local on_wait
+    on_wait = function()
+      if pipe_rfd then
+        drain_pipe(pipe_rfd, now, drain_on_msg)
+      end
+      if read_packets and budget > 0 then
+        budget = budget - read_packets(budget)
+      end
+    end
+    deps.wait_ack(pending_seq, (batch[#batch].corr or ""), on_wait)
+  end
+  for _index_0 = 1, #batch do
+    local rec = batch[_index_0]
+    deps.set_verdict(rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload)
+  end
+  return nil
+end
 local flush_deferred
-flush_deferred = function()
+flush_deferred = function(read_packets)
   local n = #deferred
   if n == 0 then
     return 0
   end
   local deps = verdict_deps()
+  local posed = 0
   local ok, err = pcall(function()
-    local pending_seq = deps.get_last_seq()
-    if pending_seq then
-      deps.wait_ack(pending_seq, (deferred[n].corr or ""), (function()
-        return drain_pipe(pipe_rfd, now, drain_on_msg)
-      end))
-    end
-    for _index_0 = 1, #deferred do
-      local rec = deferred[_index_0]
-      deps.set_verdict(rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload)
+    local batch = deferred
+    deferred = { }
+    posed = #batch
+    _flush_batch(batch, deps, read_packets)
+    if #deferred > 0 then
+      local nxt = deferred
+      deferred = { }
+      posed = posed + #nxt
+      return _flush_batch(nxt, deps, nil)
     end
   end)
   if not (ok) then
     log_warn(function()
       return {
         action = "deferred_flush_error",
-        count = n,
+        count = posed,
         err = tostring(err)
       }
     end)
   end
-  deferred = { }
-  return n
+  return posed
 end
 local settle
 settle = function(ctx, verdict, payload, need_ack)
@@ -1415,11 +1437,11 @@ run = function(queue_num, rfd, rules_metadata)
     end)
   end
   local on_batch
-  on_batch = function()
+  on_batch = function(read_packets)
     if so_bus_rfd then
       drain_verdict_bus(true)
     end
-    return flush_deferred()
+    return flush_deferred(read_packets)
   end
   local run_opts = {
     on_batch_end = on_batch

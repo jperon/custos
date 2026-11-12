@@ -124,6 +124,22 @@ L'ACK porte le plus grand `seq` appliqué pour ce worker : un inject dont les
 lignes sont réparties sur plusieurs flushes (`MAX_BATCH`) n'est acquitté qu'une
 fois la dernière ligne traitée.
 
+**Lecture de la file pendant l'attente d'ACK** (`src/nfq_loop.moon`
+`read_packets`, `src/worker_responses.moon` `_flush_batch`) : le worker réponses
+ne lit plus seulement le tube d'ACK pendant `wait_ack`. `nfq_loop.run_queue`
+fournit au hook `on_batch_end` une fonction de lecture non bloquante, bornée à
+`MAX_BATCH_PKTS` (64) et non réentrante (garde `reading` : un appel depuis un
+callback de paquet rend 0). Le worker s'en sert via le `on_wait` de `wait_ack`
+(après le drain du tube question), et les paquets ainsi lus et traités sont
+placés dans le **lot suivant** : leurs verdicts ne sont posés qu'après **son
+propre** ACK (plus grand `seq` enfilé pendant l'attente), jamais après l'ACK du
+lot courant qui ne couvre pas leurs insertions. Aucune lecture pendant la
+seconde attente : les paquets restants sont lus par la boucle principale, et le
+budget total de 150 ms par `wait_ack` (comportement en timeout inclus) est
+inchangé. Motivation : 9-23 % du temps du worker passait dans une attente
+pendant laquelle le socket netlink n'était pas lu, d'où une file noyau qui
+grossit (`response_entry_ms`, cf. [perf.md](../docs/agents/perf.md) §16).
+
 ### Workers DNS multiples (questions et réponses)
 
 `nfqueue.questions` et `nfqueue.responses` acceptent une plage contiguë
