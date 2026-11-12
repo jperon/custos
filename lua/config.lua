@@ -565,6 +565,68 @@ config_warn = function(fields)
     return io.stderr:write("config: " .. tostring(fields.action) .. "\n")
   end
 end
+local config_error
+config_error = function(fields)
+  local logger = package.loaded["log"]
+  if type(logger) == "table" and type(logger.log_error) == "function" then
+    return logger.log_error(function()
+      return fields
+    end)
+  else
+    local parts = {
+      "config: ERROR",
+      tostring(fields.action)
+    }
+    local keys
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for k in pairs(fields) do
+        if k ~= "action" then
+          _accum_0[_len_0] = k
+          _len_0 = _len_0 + 1
+        end
+      end
+      keys = _accum_0
+    end
+    table.sort(keys)
+    for _index_0 = 1, #keys do
+      local k = keys[_index_0]
+      parts[#parts + 1] = tostring(k) .. "=" .. tostring(tostring(fields[k]))
+    end
+    return io.stderr:write(table.concat(parts, " ") .. "\n")
+  end
+end
+local NFQUEUE_ROLES = {
+  "questions",
+  "responses",
+  "captive",
+  "reject",
+  "auth",
+  "sni",
+  "sip",
+  "doh_vlan"
+}
+local find_nfqueue_overlap
+find_nfqueue_overlap = function(nfqueue, parse_queues)
+  local owner = { }
+  for _index_0 = 1, #NFQUEUE_ROLES do
+    local role = NFQUEUE_ROLES[_index_0]
+    local _list_0 = parse_queues(nfqueue[role])
+    for _index_1 = 1, #_list_0 do
+      local q = _list_0[_index_1]
+      if owner[q] ~= nil then
+        return {
+          queue = q,
+          role = owner[q],
+          conflict = role
+        }
+      end
+      owner[q] = role
+    end
+  end
+  return nil
+end
 local valid_list_name
 valid_list_name = function(name)
   if not (type(name) == "string") then
@@ -647,6 +709,16 @@ normalize = function(cfg)
       reason = "queue num accepts only a number or a contiguous range (a-b)"
     })
     cfg.nfqueue.responses = first
+  end
+  local overlap = find_nfqueue_overlap(cfg.nfqueue, lowmem.parse_queues)
+  if overlap then
+    config_error({
+      action = "nfqueue_overlap",
+      queue = overlap.queue,
+      role = overlap.role,
+      conflict = overlap.conflict
+    })
+    error("config: nfqueue queue " .. tostring(overlap.queue) .. " is shared by '" .. tostring(overlap.role) .. "' and '" .. tostring(overlap.conflict) .. "' (one role per queue)")
   end
   cfg.doh = cfg.doh or { }
   cfg.dns = cfg.dns or { }

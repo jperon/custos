@@ -9,6 +9,7 @@ compiler_api  = require "filter.compiler_api"
 to_domainlist = require "filter.conditions.to_domainlist"
 to_domainlists = require "filter.conditions.to_domainlists"
 bin48         = require "filter.lib.bin48"
+updater_io    = require "filter.updater_io"
 
 -- Répertoires confinés au projet (cf. AGENTS.md : jamais /tmp système).
 TMP_DIR   = "./tmp/list_warnings_spec"
@@ -140,6 +141,18 @@ describe "to_domainlist : avertissement à la construction", ->
     cond = (to_domainlist.factory cfg) "custom/valide"
     assert.is_true (cond.eval { domain: "exemple.fr" })
     assert.equals 0, #warns
+
+  it "source vide compilée par l'updater → liste vide valide, jamais filter_list_missing", ->
+    pending "ffi_xxhash non disponible" unless xxhash_ok!
+    src = "#{TMP_DIR}/custom_src"
+    os.execute "mkdir -p #{src}"
+    write_file "#{src}/ferme.txt", "# liste volontairement vide\n"
+    updater_io.process_custom_dir src, "#{DL_DIR}/custom", false
+    capture_warns!
+    cond = (to_domainlist.factory cfg) "custom/ferme"
+    assert.is_false (cond.eval { domain: "exemple.fr" })
+    assert.equals 1, #warns
+    assert.equals "filter_list_empty", warns[1].action
 
   it "to_domainlists délègue le chargement et nomme la condition", ->
     pending "ffi_xxhash non disponible" unless xxhash_ok!

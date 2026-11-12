@@ -447,12 +447,12 @@ pas de la capacité totale.
 ### 10.1 Répartir réponses et questions sur plusieurs workers — gain ×1,75 à ×2
 
 **Implémenté** (branche `d-multi`, voir §11) : `nfqueue.responses` accepte une
-plage (`"4-5"`), un worker par file, avec fan-out IPC et bus de verdicts.
+plage (`"14-15"`), un worker par file, avec fan-out IPC et bus de verdicts.
 
 - Mesure : `resp-q4` (un seul process, file `4`) à 78 % d'un vCPU à 400 q/s ;
   `dns-q1` à 77-83 % ; `nft` 60-63 %. Le superviseur crée un worker par file
   (`questions_queues`/`responses_queues`, `main.moon`) et alloue **un pipe ACK
-  par worker réponses** : passer à `nfqueue.responses: "4-5"` (2 workers)
+  par worker réponses** : passer à `nfqueue.responses: "14-15"` (2 workers)
   double la capacité du chemin réponses. Avant cette branche, une plage
   `responses` était ramenée à sa première file par `config.moon` (avertissement
   `nfqueue_responses_single_queue_only`) parce que la table `pending` est privée
@@ -570,18 +570,18 @@ verdicts.
 ```moonscript
 nfqueue: {
   questions: "0-1"   -- 2 workers questions (défaut)
-  responses: "4-5"   -- 2 workers réponses
+  responses: "14-15" -- 2 workers réponses
   captive:   "20"    -- inchangé
   reject:    "10-11" -- inchangé
 }
 ```
 
-Le ruleset rend `queue num 0-1` et `queue num 4-5` (`nft_rules.substitute`) ;
-les workers sont nommés `custos:dns-q0`, `custos:dns-q1`, `custos:resp-q4`,
-`custos:resp-q5` et redémarrés indépendamment. Contrôles après déploiement :
+Le ruleset rend `queue num 0-1` et `queue num 14-15` (`nft_rules.substitute`) ;
+les workers sont nommés `custos:dns-q0`, `custos:dns-q1`, `custos:resp-q14`,
+`custos:resp-q15` et redémarrés indépendamment. Contrôles après déploiement :
 `logread | grep -E "queue_open|question_response_workers|nft_rules_applied"`,
 `nft list ruleset | grep "queue to"`, `/proc/net/netfilter/nfnetlink_queue`
-(deux lignes `peer_portid` distinctes pour les files 4 et 5), et absence de
+(deux lignes `peer_portid` distinctes pour les files 14 et 15), et absence de
 `action=response_orphan_dropped`.
 
 ### 11.4 Non mesuré ici

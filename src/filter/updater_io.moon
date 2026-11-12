@@ -82,6 +82,9 @@ download_file = (url, dest, timeout) ->
 
 --- Hash, trie et écrit un ensemble de domaines dans un fichier .bin.
 -- Le fichier est écrit de façon atomique via un fichier temporaire.
+-- Une liste vide est écrite comme un .bin de 0 octet : c'est une liste vide
+-- VALIDE (le filtre la charge et ne logue pas `filter_list_missing`), et non
+-- une raison de ne rien produire.
 -- @tparam  table   domains     Tableau de chaînes de domaines
 -- @tparam  string  output_path Chemin du fichier .bin de destination
 -- @tparam  boolean dry_run     Si vrai, n'écrit pas
@@ -90,11 +93,6 @@ download_file = (url, dest, timeout) ->
 -- @treturn boolean             Vrai si la liste est vide (non-erreur)
 write_bin = (domains, output_path, dry_run) ->
   payload, n = bin48.pack_domains domains
-
-  if n == 0
-    -- Liste vide (placeholder, commentaires seuls) : ce n'est pas une erreur,
-    -- on le signale via un 3e retour « skipped » pour ne pas faire échouer la CI.
-    return false, "aucun domaine valide", true
 
   if dry_run
     return true, "dry-run : #{n} domaines → #{output_path}"
@@ -112,6 +110,8 @@ write_bin = (domains, output_path, dry_run) ->
     os.remove tmp
     return false, "rename échoué : #{tmp} → #{output_path}"
 
+  if n == 0
+    return true, "liste vide (0 domaine) → #{output_path}", false
   true, "#{n} domaines → #{output_path} (#{#payload} octets)"
 
 --- Traite une source dont le contenu est un fichier texte local.
