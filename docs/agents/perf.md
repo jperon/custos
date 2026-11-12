@@ -1819,9 +1819,9 @@ sites + raisons : `tmp/prof_report.md` §4.
 | cache borné (8 entrées, purge en bloc) des deux conversions hex | `src/lib/ipc_hex.moon:29-43,56-61,98-103` | ipc_drain −38 %, so_cycle −27 %, response −15 %, question −6 % | `b2331c8` |
 
 Chaque commit porte son avant/après ; tests d'équivalence ajoutés
-(`tests/unit/lib/ipc_hex_spec.moon` : sortie identique sur les 256 octets,
-arité `gsub`, débordement du cache ; `tests/unit/filter/conditions_spec.moon` :
-8 cas d'équivalence des suffixes).
+(`tests/unit/lib/ipc_hex_spec.moon` : +8 — sortie identique sur les 256 octets,
+arité `gsub`, débordement du cache, erreurs jamais mises en cache ;
+`tests/unit/filter/conditions_spec.moon` : +7 cas d'équivalence des suffixes).
 
 ### 18.6 Correctifs proposés, non appliqués
 

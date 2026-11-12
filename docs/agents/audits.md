@@ -3856,9 +3856,9 @@ response 55,6 → 30,1 (−46 %), cycle second avis 220,6 → 94,7 µs (−57 %)
 (`so_cycle`), −28 % (`ipc_drain`). Les parts du profil sont transposables à
 l'A55, pas les µs absolus (rapport ~25×).
 
-**Tests** : `tests/unit/lib/ipc_hex_spec.moon` (+6 : équivalence sur les
+**Tests** : `tests/unit/lib/ipc_hex_spec.moon` (+8 : équivalence sur les
 256 octets, arité `gsub`, débordement du cache, erreurs jamais mises en cache),
-`tests/unit/filter/conditions_spec.moon` (+8 : équivalence des suffixes).
+`tests/unit/filter/conditions_spec.moon` (+7 : équivalence des suffixes).
 
 **Non fait / douteux** : aucun correctif appliqué sur les postes restants — tous
 sous le seuil de 5 % mesuré (`is_valid_timeout` 3,8-4,2 %, `build_line` 2-3 %,
