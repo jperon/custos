@@ -184,9 +184,9 @@ l'appariement du fait des fan-outs ci-dessus.
 
 | État | Où | Multi-worker |
 |------|----|--------------|
-| `pending` (appariement) | `ipc.moon:293-522`, privé au processus | **fan-out** : chaque worker reçoit toutes les transactions → correct |
-| `mac_clients` / `ip_to_mac` (MAC du client, cross-family) | `worker_responses.moon:248-260` | alimentés par le même `pending` → complets dans chaque worker |
-| `tcp_state` (réassemblage DNS/TCP) | `worker_responses.moon:184` | hachage par flux → tous les segments d'un flux au même worker |
+| `pending` (appariement) | `ipc.moon:310-543`, privé au processus | **fan-out** : chaque worker reçoit toutes les transactions → correct |
+| `mac_clients` / `ip_to_mac` (MAC du client, cross-family) | `worker_responses.moon:239-242` | alimentés par le même `pending` → complets dans chaque worker |
+| `tcp_state` (réassemblage DNS/TCP) | `worker_responses.moon:175` | hachage par flux → tous les segments d'un flux au même worker |
 | `deferred` (verdicts différés du lot) | `worker_responses.moon:395` | par lot, donc par processus → correct |
 | `nft_queue` (`seq`, `last_acked_seq`) | `nft_queue.moon:32-51` | un tube ACK par worker (`worker_idx` dans la ligne nft) → correct |
 | `so_state` (parqués + verdicts B) | `second_opinion.moon` | **bus `so_verdict`** entre workers (A et B ont des files différentes) |
