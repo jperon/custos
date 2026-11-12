@@ -26,6 +26,43 @@ describe "lib.ipc_hex", ->
       assert.equals "", to_hex ""
       assert.equals "", to_hex nil
 
+    -- Garde-fou d'équivalence : l'encodage par table (perf §18) doit rendre
+    -- exactement la même sortie que l'encodage de référence, sur TOUS les
+    -- octets, y compris ceux qui ont une signification dans les motifs Lua.
+    it "est identique à l'encodage de référence sur les 256 octets", ->
+      ref = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+      all = table.concat [ string.char(i) for i = 0, 255 ]
+      assert.equals ref(all), to_hex(all)
+      for i = 0, 255
+        c = string.char i
+        assert.equals ref(c), to_hex(c), "octet #{i}"
+
+    it "préserve le aller-retour avec from_hex sur une chaîne longue", ->
+      raw = table.concat [ string.char((i * 7) % 256) for i = 1, 300 ]
+      assert.equals raw, (from_hex to_hex raw)
+
+    -- Le cache de conversion (perf §18) ne doit changer ni la sortie ni
+    -- l'ARITÉ : `to_hex` rend exactement une valeur, comme avant le cache.
+    -- Une deuxième valeur casserait `nft_queue.build_line`, qui place
+    -- `to_hex corr` en dernier champ d'un constructeur de table : elle y
+    -- ajouterait un 10e champ, `worker_nft.parse_line` exigeant 9 champs
+    -- rejetterait TOUTES les insertions nft (régression e2e T03/T74, puis
+    -- absence de SYN → plus de log `sni_captured`, T121-T124b).
+    it "rend exactement une valeur, y compris sur un hit du cache", ->
+      s = "\1\2\3"
+      assert.equals 1, select "#", to_hex s
+      assert.equals "010203", to_hex s
+      -- Second appel : hit du cache, même arité.
+      assert.equals 1, select "#", to_hex s
+
+    it "reste exact après le débordement du cache (entrées multiples)", ->
+      for i = 1, 20
+        s = string.rep(string.char(i), 4)
+        expected = string.rep(string.format("%02x", i), 4)
+        assert.equals expected, (to_hex s), "entrée #{i}"
+      -- Le premier encodé a été purgé puis réencodé : sortie toujours juste.
+      assert.equals "01010101", (to_hex string.rep("\1", 4))
+
   describe "from_hex", ->
     it "décode l'hexadécimal, majuscules acceptées", ->
       value, err = from_hex "00FF10"
@@ -41,6 +78,9 @@ describe "lib.ipc_hex", ->
       value, err = from_hex ""
       assert.equals "", value
       assert.is_nil err
+      value, err = from_hex nil
+      assert.equals "", value
+      assert.is_nil err
 
     it "rejette une longueur impaire", ->
       value, err = from_hex "abc"
@@ -51,6 +91,35 @@ describe "lib.ipc_hex", ->
       value, err = from_hex "zz"
       assert.is_nil value
       assert.equals "hex_invalid_chars", err
+      value, err = from_hex "0g"
+      assert.is_nil value
+      assert.equals "hex_invalid_chars", err
+
+    it "préfère hex_odd_length à hex_invalid_chars (ordre de vérification)", ->
+      value, err = from_hex "zzz"
+      assert.is_nil value
+      assert.equals "hex_odd_length", err
+
+    it "décodé puis encodé est identique sur tous les octets", ->
+      all = table.concat [ string.char(i) for i = 0, 255 ]
+      assert.equals all, (from_hex (to_hex all))
+
+    it "rend la même sortie sur un appel répété (cache) sans erreur", ->
+      value, err = from_hex "616263"
+      assert.equals "abc", value
+      assert.is_nil err
+      value2, err2 = from_hex "616263"
+      assert.equals "abc", value2
+      assert.is_nil err2
+
+    it "reste exact après le débordement du cache et ne met jamais en cache une erreur", ->
+      for i = 1, 20
+        hex = string.format "%02x%02x%02x%02x", i, i, i, i
+        value = from_hex hex
+        assert.equals string.char(i, i, i, i), value, "entrée #{i}"
+      -- Une entrée invalide après des succès : erreur toujours détectée.
+      assert.is_nil (from_hex "zz")
+      assert.equals "abc", (from_hex "616263")
 
   describe "split_fields", ->
     it "découpe sur '|' en préservant les champs vides", ->

@@ -17,25 +17,95 @@ encode_ip16 = (ip_raw) ->
   return ip_raw .. "\0\0\0\0\0\0\0\0\0\0\0\0" if #ip_raw == 4
   nil
 
+-- Table octet → 2 caractères hexadécimaux. `gsub` avec une TABLE ne crée ni
+-- closure ni appel `string.format` par octet : le chemin IPC encode ~50 octets
+-- par message (raison, rule_id, corrélateur nft) et chaque insertion nft en
+-- encode 2 de plus — le coût mesuré de l'ancien encodage (closure + format par
+-- octet) atteignait 12-40 % du hot path (docs/agents/perf.md §18).
+HEX_BYTE = {}
+for i = 0, 255
+  HEX_BYTE[string.char(i)] = string.format "%02x", i
+
+-- ── Cache de conversion (borné) ──────────────────────────────────────
+-- Les mêmes valeurs reviennent des dizaines de fois par paquet : chaque
+-- réponse nft encode `rule_id` + corrélateur sur SES 16 lignes (32
+-- conversions), et `rule_id`/raison sont identiques d'un paquet à l'autre.
+-- 8 entrées maximum, purge complète au débordement : mémoire bornée à
+-- 8 entrées × (256 + 512) o, aucune invalidation possible (les deux
+-- fonctions sont pures : même entrée → même sortie). Mesure chiffrée :
+-- docs/agents/perf.md §18.
+CACHE_MAX_ENTRIES = 8
+CACHE_MAX_INPUT   = 256
+
+_hex_enc_cache = {}
+_hex_enc_n     = 0
+_hex_dec_cache = {}
+_hex_dec_n     = 0
+
 --- Encode une chaîne d'octets en hexadécimal minuscule.
 -- @tparam string s Chaîne d'octets
 -- @treturn string Représentation hexadécimale ("" si vide)
 to_hex = (s) ->
   return "" unless s and #s > 0
-  (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+  hit = _hex_enc_cache[s]
+  -- Contrat : UNE seule valeur, comme le `(s\gsub ...)` parenthésé d'avant le
+  -- cache. `nft_queue.build_line` place `to_hex corr` en DERNIER champ d'un
+  -- constructeur de table : une deuxième valeur y ajouterait un 10e champ, et
+  -- `worker_nft.parse_line` (exactement 9 champs) rejetterait alors TOUTES les
+  -- insertions nft avec `field_count` (régression e2e T03/T74 : sets vides, puis
+  -- SYN bloqué vers 10.42.0.50 d'où l'absence de logs SNI T121-T124b). Le
+  -- compte de substitutions n'a aucun appelant : ne pas le rendre.
+  return hit if hit
+  out = (s\gsub ".", HEX_BYTE)
+  if #s <= CACHE_MAX_INPUT
+    if _hex_enc_n >= CACHE_MAX_ENTRIES
+      _hex_enc_cache = {}
+      _hex_enc_n = 0
+    _hex_enc_cache[s] = out
+    _hex_enc_n += 1
+  out
+
+-- Valeur hexadécimale d'un octet de code (nil si ce n'est pas un caractère
+-- hexadécimal) : décodage par paires sans `sub`+`tonumber`+`string.char`
+-- intermédiaires (cf. docs/agents/perf.md §18 : le décodage pèse ~50 % du
+-- coût du tube question→réponse mesuré par le banc `make bench-hotpath`).
+HEX_VAL = {}
+for i = 0, 9
+  HEX_VAL[string.byte("0") + i] = i
+for i = 0, 5
+  HEX_VAL[string.byte("a") + i] = 10 + i
+  HEX_VAL[string.byte("A") + i] = 10 + i
 
 --- Décode une chaîne hexadécimale en octets, avec validation.
+-- Ordre des erreurs inchangé : longueur impaire d'abord, puis caractère non
+-- hexadécimal (l'ancienne version validait par un motif avant de décoder).
 -- @tparam string h Chaîne hexadécimale
 -- @treturn string|nil Octets décodés
 -- @treturn string|nil Code d'erreur ("hex_odd_length", "hex_invalid_chars")
 from_hex = (h) ->
   return "", nil if not h or #h == 0
-  return nil, "hex_odd_length"   if (#h % 2) != 0
-  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
+  hit = _hex_dec_cache[h]
+  return hit, nil if hit
+  n = #h
+  return nil, "hex_odd_length"   if (n % 2) != 0
   out = {}
-  for i = 1, #h, 2
-    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
-  table.concat(out), nil
+  j = 1
+  i = 1
+  while i <= n
+    hi = HEX_VAL[h\byte(i)]
+    lo = HEX_VAL[h\byte(i + 1)]
+    return nil, "hex_invalid_chars" unless hi and lo
+    out[j] = string.char(hi * 16 + lo)
+    j += 1
+    i += 2
+  decoded = table.concat(out)
+  if n <= CACHE_MAX_INPUT
+    if _hex_dec_n >= CACHE_MAX_ENTRIES
+      _hex_dec_cache = {}
+      _hex_dec_n = 0
+    _hex_dec_cache[h] = decoded
+    _hex_dec_n += 1
+  decoded, nil
 
 --- Découpe une ligne IPC sur le séparateur "|", champs vides préservés.
 -- @tparam string line Ligne IPC

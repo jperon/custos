@@ -779,8 +779,15 @@ finalize_a = (ctx, override) ->
       resp_ctx.action_label or= "response_chain_strip"
 
   answers_dns = dns_msg
-  parsed_modified, _ = parse_dns dns_raw, 1, false
-  answers_dns = parsed_modified if parsed_modified
+  -- Re-parse UNIQUEMENT si le payload a été réécrit (callback on_response :
+  -- strip/CNAME — toujours `ctx.modified = true`, cf. filter/actions — ou strip
+  -- dynamique ci-dessus). Sinon `dns_raw` est exactement celui déjà parsé en
+  -- tête de `handle_response` (`parse_dns_packet` rend le même `dns_msg`) :
+  -- reparser ne produirait qu'une copie jetable de la même table (cf.
+  -- docs/agents/perf.md §18).
+  if payload_modified
+    parsed_modified, _ = parse_dns dns_raw, 1, false
+    answers_dns = parsed_modified if parsed_modified
 
   -- ── Apprentissage : si cette réponse vient d'être strippée pour une règle
   -- follow_cname (resp_ctx.chain_strip_rr posé par dns_strip), enregistre les

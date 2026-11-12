@@ -704,9 +704,11 @@ finalize_a = function(ctx, override)
     end
   end
   local answers_dns = dns_msg
-  local parsed_modified, _ = parse_dns(dns_raw, 1, false)
-  if parsed_modified then
-    answers_dns = parsed_modified
+  if payload_modified then
+    local parsed_modified, _ = parse_dns(dns_raw, 1, false)
+    if parsed_modified then
+      answers_dns = parsed_modified
+    end
   end
   if chain_strip_enabled and strip_learn_wfd and resp_ctx.chain_strip_rr then
     record_chain_targets(answers_dns, dns_raw, resp_ctx.chain_strip_rr, function(m)

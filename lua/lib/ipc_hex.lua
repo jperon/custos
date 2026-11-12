@@ -11,31 +11,80 @@ encode_ip16 = function(ip_raw)
   end
   return nil
 end
+local HEX_BYTE = { }
+for i = 0, 255 do
+  HEX_BYTE[string.char(i)] = string.format("%02x", i)
+end
+local CACHE_MAX_ENTRIES = 8
+local CACHE_MAX_INPUT = 256
+local _hex_enc_cache = { }
+local _hex_enc_n = 0
+local _hex_dec_cache = { }
+local _hex_dec_n = 0
 local to_hex
 to_hex = function(s)
   if not (s and #s > 0) then
     return ""
   end
-  return (s:gsub(".", function(c)
-    return string.format("%02x", c:byte())
-  end))
+  local hit = _hex_enc_cache[s]
+  if hit then
+    return hit
+  end
+  local out = (s:gsub(".", HEX_BYTE))
+  if #s <= CACHE_MAX_INPUT then
+    if _hex_enc_n >= CACHE_MAX_ENTRIES then
+      _hex_enc_cache = { }
+      _hex_enc_n = 0
+    end
+    _hex_enc_cache[s] = out
+    _hex_enc_n = _hex_enc_n + 1
+  end
+  return out
+end
+local HEX_VAL = { }
+for i = 0, 9 do
+  HEX_VAL[string.byte("0") + i] = i
+end
+for i = 0, 5 do
+  HEX_VAL[string.byte("a") + i] = 10 + i
+  HEX_VAL[string.byte("A") + i] = 10 + i
 end
 local from_hex
 from_hex = function(h)
   if not h or #h == 0 then
     return "", nil
   end
-  if (#h % 2) ~= 0 then
+  local hit = _hex_dec_cache[h]
+  if hit then
+    return hit, nil
+  end
+  local n = #h
+  if (n % 2) ~= 0 then
     return nil, "hex_odd_length"
   end
-  if not (h:match("^[0-9a-fA-F]+$")) then
-    return nil, "hex_invalid_chars"
-  end
   local out = { }
-  for i = 1, #h, 2 do
-    out[#out + 1] = string.char(tonumber(h:sub(i, i + 1), 16))
+  local j = 1
+  local i = 1
+  while i <= n do
+    local hi = HEX_VAL[h:byte(i)]
+    local lo = HEX_VAL[h:byte(i + 1)]
+    if not (hi and lo) then
+      return nil, "hex_invalid_chars"
+    end
+    out[j] = string.char(hi * 16 + lo)
+    j = j + 1
+    i = i + 2
   end
-  return table.concat(out), nil
+  local decoded = table.concat(out)
+  if n <= CACHE_MAX_INPUT then
+    if _hex_dec_n >= CACHE_MAX_ENTRIES then
+      _hex_dec_cache = { }
+      _hex_dec_n = 0
+    end
+    _hex_dec_cache[h] = decoded
+    _hex_dec_n = _hex_dec_n + 1
+  end
+  return decoded, nil
 end
 local split_fields
 split_fields = function(line)

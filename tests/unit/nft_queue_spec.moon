@@ -93,6 +93,11 @@ describe "nft_queue", ->
 
     line = read_pipe rfd
     fields = split_fields line
+    -- Contrat de format : `worker_nft.parse_line` exige EXACTEMENT 9 champs et
+    -- rejette la ligne (`field_count`) sinon, donc aucune insertion nft n'est
+    -- appliquée. Un helper rendant plusieurs valeurs dans le dernier champ du
+    -- constructeur de table ajouterait un 10e champ (régression e2e d-prof).
+    assert.equals 9, #fields
     assert.equals "v1", fields[1]
     assert.equals "ip4", fields[2]
     assert.equals "192.168.1.42", fields[3]
@@ -414,6 +419,9 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     assert.is_true q.send_barrier "corr-b"
     line = read_pipe p[1]
     assert.truthy line\find "|barrier|", 1, true
+    -- Même contrat de format que les lignes d'insertion : 9 champs.
+    bfields = split_fields line
+    assert.equals 9, #bfields
     assert.equals 1, q.get_last_seq!
     assert.is_nil q.get_last_seq!
     close_pipe p
