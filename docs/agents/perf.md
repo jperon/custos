@@ -1956,6 +1956,17 @@ encore servables.
   locale (noyau 6.18.60, netns non privilégié, script jetable `tmp/tsprobe.lua`) :
   `ts_rc=0`, âge mesuré **1 200 ms** après un retard de lecture imposé de
   1 200 ms — le mécanisme et l'horloge sont donc justes.
+- **Activation automatique** (`src/lib/netstamp.moon`) : au démarrage du
+  worker questions, quand `max_age_ms > 0`, un socket UDP `SO_TIMESTAMP` est
+  ouvert sans `bind` ni trafic et conservé jusqu'à la fin du processus ; il
+  active `netstamp_needed_key` pour tout le système. Constantes dans
+  `src/ffi_defs.moon` : `SO_TIMESTAMP` = 29 (`asm-generic`, x86_64/arm),
+  `SO_TIMESTAMP_NEW` = 63 (32 bits avec `time_t` 64 bits, musl d'OpenWrt) ;
+  sur MIPS `SOL_SOCKET` = `0xffff` (au lieu de 1), essayé en repli. Un échec
+  (`socket` ou `setsockopt`) produit le WARN `netstamp_enable_failed` et n'est
+  **pas fatal**. Au premier paquet traité, un INFO unique
+  `question_shed_timestamp` (`available: true|false`) indique si
+  l'horodatage est réellement joint ; aucun log par paquet ensuite.
 - **Décision** : dans `src/worker_questions.moon`, avant la copie du payload,
   `age_ms > nfqueue.max_age_ms` (**1 500 ms** par défaut, `0` = désactivé) →
   `NF_DROP` immédiat, compteur `shed_total`, log INFO rate-limité
@@ -1974,10 +1985,9 @@ encore servables.
 - **Non mesuré** : aucun palier de charge n'a été rejoué sur la cible dans cette
   branche (pas d'accès au homelab, consigne §17.8) ; le gain CPU attendu
   (part des questions > 1,5 s × coût complet par question) reste à chiffrer.
-  Surtout, l'effet réel dépend de la présence de `NFQA_TIMESTAMP` sur la cible :
-  si aucun processus n'active `netstamp`, la clé est inerte. Le log
-  `question_shed_armed` signale le seuil actif, mais **pas** la disponibilité
-  de l'horodatage ; un compteur dédié (`question_shed` absent sous charge alors
-  que la file est en retard) est le seul diagnostic indirect.
+  L'horodatage noyau est désormais activé automatiquement par un socket
+  `SO_TIMESTAMP`, et le log `question_shed_timestamp` (au premier paquet) dit
+  s'il est réellement disponible ; la mesure de charge sur `custos.lan`, elle,
+  reste à faire.
 
 

@@ -340,7 +340,7 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 | `rcvbuf` | integer | auto (4 Mio, 512 Kio en RAM faible) | Taille du tampon de réception netlink de **chaque** socket NFQUEUE, en octets (voir note). |
 | `maxlen` | integer | auto (4096, 1024 en RAM faible) | Longueur de la file **noyau** de chaque NFQUEUE, en paquets (voir note). |
-| `max_age_ms` | integer | `1500` | Délestage précoce : une **question** plus vieille que ce seuil dans la file noyau est jetée sans analyse (voir note). `0` = désactivé. |
+| `max_age_ms` | integer | `1500` | Délestage précoce : une **question** plus vieille que ce seuil dans la file noyau est jetée sans analyse (voir note ; nécessite l'horodatage noyau, activé automatiquement). `0` = désactivé. |
 
 > **Tampon de réception netlink (`nfqueue.rcvbuf`).** libnetfilter_queue crée
 > son socket netlink sans `setsockopt(SO_RCVBUF)` : le défaut noyau
@@ -402,10 +402,21 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 > entière, non numérique) : WARN `nfqueue_max_age_invalid` et retour au défaut.
 > **Disponibilité de l'horodatage** : le noyau ne joint `NFQA_TIMESTAMP` que
 > s'il horodate les paquets à la réception (`skb->tstamp`, static key
-> `netstamp_needed_key`, activée par un socket `SO_TIMESTAMP`) ; sans lui
-> `nfq_get_timestamp` rend -1 et aucun délestage n'a lieu (comportement sûr,
-> mais la clé est alors sans effet). Le worker journalise `question_shed_armed`
-> au démarrage quand le seuil est actif.
+> `netstamp_needed_key`, activée par un socket `SO_TIMESTAMP`). Pour que le
+> délestage ne soit pas silencieusement inerte, le worker questions ouvre donc
+> **automatiquement** au démarrage (quand `max_age_ms > 0`) un socket UDP
+> `SO_TIMESTAMP`, sans `bind` ni trafic, conservé jusqu'à la fin du processus :
+> il maintient `netstamp_needed_key` active pour tout le système. Un échec
+> d'ouverture ou de `setsockopt` produit le WARN `netstamp_enable_failed`
+> (champs `stage`, `errno`) mais n'est **pas fatal** : le worker démarre et le
+> délestage reste simplement inactif. Les constantes sont dans
+> `src/ffi_defs.moon` ; sur MIPS (`SOL_SOCKET` = `0xffff`) le module essaie
+> aussi ce niveau, et `SO_TIMESTAMP_NEW` (63) quand `time_t` est 64 bits (musl
+> d'OpenWrt). Le worker journalise `question_shed_armed` au démarrage quand le
+> seuil est actif ; au **premier paquet** traité, un unique INFO
+> `question_shed_timestamp` (champ `available: true|false`) indique si
+> l'horodatage est réellement joint, donc si le délestage peut opérer. Aucun
+> log n'est émis par paquet ensuite.
 
 **Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
 les paquets par le noyau sur **un worker par file**. Deux modes selon le nombre

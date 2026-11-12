@@ -3934,12 +3934,23 @@ complet, alors que le client a déjà dépassé son timeout DNS (`perf.md`
   résolu à la construction (`have_packet_timestamp`) pour qu'une
   libnetfilter_queue ancienne ne tue pas le worker.
 - `src/ffi_defs.moon` : déclaration `nfq_get_timestamp(nfq_data*, struct
-  timeval*)`.
+  timeval*)`, plus les constantes `SO_TIMESTAMP` (29), `SO_TIMESTAMP_NEW` (63),
+  `SOL_SOCKET` (1) et `SOL_SOCKET_MIPS` (`0xffff`).
+- `src/lib/netstamp.moon` (nouveau) : au démarrage du worker questions, quand
+  `max_age_ms > 0`, ouvre un socket UDP `SO_TIMESTAMP` sans bind ni trafic,
+  conservé jusqu'à la fin du processus : il active `netstamp_needed_key` pour
+  tout le système, sans quoi `NFQA_TIMESTAMP` n'est jamais joint. Le module
+  essaie `SOL_SOCKET` générique puis MIPS, et `SO_TIMESTAMP` puis
+  `SO_TIMESTAMP_NEW` (32 bits avec `time_t` 64 bits). Échec → WARN
+  `netstamp_enable_failed` (`stage`, `errno`), non fatal.
 - `src/worker_questions.moon` : avant toute analyse, si
   `age_ms > nfqueue.max_age_ms`, verdict **`NF_DROP`** immédiat (jamais ACCEPT),
   compteur `shed_total`, log INFO rate-limité `question_shed` (`age_ms`,
   `max_age_ms`, `shed_total`). Aucune écriture IPC, donc aucune entrée
-  `pending` et aucun second avis pour ces paquets.
+  `pending` et aucun second avis pour ces paquets. Un log INFO **unique**
+  `question_shed_timestamp` (`available: true|false`) est émis au premier
+  paquet traité pour vérifier que l'horodatage — donc le délestage — est
+  réellement opérationnel ; aucun log par paquet ensuite.
 - `src/config.moon` : nouvelle clé `nfqueue.max_age_ms`, défaut **1500 ms**
   (`0` = désactivé), même valeur en RAM faible ; valeur invalide écartée avec
   `nfqueue_max_age_invalid` et retour au défaut.
@@ -3954,20 +3965,24 @@ complet, alors que le client a déjà dépassé son timeout DNS (`perf.md`
 **Vérification de l'horodatage** : en-têtes et source Linux v6.12
 (`nfqnl_build_packet_message`, `skb_tstamp_cond`) : `NFQA_TIMESTAMP` n'est
 émis que si `netstamp_needed_key` est active (socket `SO_TIMESTAMP`), et il
-n'existe pas de flag de configuration dédié. Sonde locale (noyau 6.18.60,
-netns non privilégié, `tmp/tsprobe.lua` jetable) : attribut présent, âge mesuré
-1 200 ms pour un retard de lecture de 1 200 ms ⇒ conversion et horloge justes.
-Sans attribut, `packet_age_ms` rend `nil` : le délestage est simplement inactif
-(chemin sûr).
+n'existe pas de flag de configuration dédié. Le socket n'est donc plus laissé
+au hasard : `lib.netstamp` l'ouvre lui-même au démarrage et le garde ouvert.
+Sonde locale (noyau 6.18.60, netns non privilégié, `tmp/tsprobe.lua` jetable) :
+attribut présent, âge mesuré 1 200 ms pour un retard de lecture de 1 200 ms ⇒
+conversion et horloge justes. Sans attribut, `packet_age_ms` rend `nil` : le
+délestage est simplement inactif (chemin sûr), et le log
+`question_shed_timestamp` le signale (`available: false`).
 
 **Tests** : `tests/unit/worker_questions_spec.moon` (seuil strict, `0` =
-désactivé, âge `nil`, compteur, NF_DROP sans IPC/événement),
-`tests/unit/nfq_loop_age_spec.moon` (conversion, attribut absent, symbole
-absent, horloge reculée), `tests/unit/config_spec.moon`
+désactivé, âge `nil`, compteur, NF_DROP sans IPC/événement, socket
+`SO_TIMESTAMP` ouvert si `max_age_ms > 0` et pas sinon, repli MIPS, échecs
+`socket`/`setsockopt` non fatals, log `question_shed_timestamp` unique
+`available` vrai/faux), `tests/unit/nfq_loop_age_spec.moon` (conversion,
+attribut absent, symbole absent, horloge reculée), `tests/unit/config_spec.moon`
 (`config.nfqueue.max_age_ms`), `tests/unit/worker_responses_spec.moon`
 (`retry_worthwhile`). Suite complète : `make all && make check && make test`.
 
 **Non fait / douteux** : aucun palier de charge rejoué sur la cible ; le gain
-CPU réel dépend de la présence de `NFQA_TIMESTAMP` sur la cible (aucun
-processus ne l'active peut-être) et n'est donc pas chiffré. Le log
-`question_shed_armed` confirme le seuil actif, pas l'horodatage disponible.
+CPU réel n'est donc pas chiffré. L'horodatage est désormais activé
+automatiquement, et `question_shed_timestamp` dit s'il est effectivement
+disponible au premier paquet ; la mesure sur `custos.lan` reste à faire.
