@@ -3,7 +3,7 @@
 
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 
-{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_cname_response, :build_sinkhole_response, :build_captive_response } = require "dns_ede"
+{ :strip_https_rr, :strip_a_rr, :strip_aaaa_rr, :add_ede_modified, :clear_ad_bit, :build_blocked_response, :build_nxdomain_response, :build_cname_response, :build_sinkhole_response, :build_captive_response } = require "dns_ede"
 { :encode_dns_name } = require "lib.dns_name"
 dns_mod = require "ipparse.l7.dns"
 { :s2ip } = require "ipparse.l3.ip"
@@ -178,6 +178,46 @@ describe "dns_ede.strip_aaaa_rr", ->
     header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     raw = header .. question .. answer_a
     assert.equals raw, strip_aaaa_rr(raw)
+
+describe "en-tête des réponses construites depuis la requête", ->
+  make_query = (qtype = QTYPE_A) ->
+    header = sp(">H H H H H H", 0x1234, 0x0100, 1, 0, 0, 0)
+    header .. qname_example .. sp(">H H", qtype, QCLASS_IN)
+
+  it "build_blocked_response : QR=1, RA=1, REFUSED et ancount=0", ->
+    resp = build_blocked_response {}, make_query!, "Test"
+    assert.is_not_nil resp
+    parsed = dns_mod.parse resp, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 5, parsed.header.rcode
+    assert.equals 0, parsed.header.ancount
+    assert.equals 0, #(parsed.answers or {})
+    -- L'EDE reste joint en additionals.
+    assert.equals 1, parsed.header.arcount
+
+  it "build_nxdomain_response : QR=1 et RA=1", ->
+    resp = build_nxdomain_response {}, make_query!, "Test"
+    parsed = dns_mod.parse resp, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 3, parsed.header.rcode
+    assert.equals 0, parsed.header.ancount
+
+  it "build_sinkhole_response : QR=1 et RA=1", ->
+    sink = { a: { string.rep("\0", 4) }, aaaa: {}, ttl: 30 }
+    resp = build_sinkhole_response {}, make_query!, "Test", sink
+    parsed = dns_mod.parse resp, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 1, parsed.header.ancount
+
+  it "build_cname_response : QR=1 et RA=1", ->
+    resp = build_cname_response {}, make_query!, "safe.example.com", "Test"
+    parsed = dns_mod.parse resp, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 1, parsed.header.ancount
 
 describe "build_cname_response", ->
   CNAME = dns_mod.types.CNAME

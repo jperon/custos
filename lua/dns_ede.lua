@@ -40,6 +40,12 @@ add_ede = function(dns, code, text)
   dns.header.arcount = #dns.additionals
   return dns
 end
+local mark_response_header
+mark_response_header = function(dns)
+  dns.header.qr = true
+  dns.header.ra = true
+  return dns
+end
 local build_blocked_response
 build_blocked_response = function(dns_orig, dns_raw, reason)
   if not (dns_orig and dns_raw) then
@@ -49,26 +55,10 @@ build_blocked_response = function(dns_orig, dns_raw, reason)
   if not (dns) then
     return nil
   end
+  mark_response_header(dns)
   dns.header.rcode = REFUSED
   dns.answers = { }
-  if dns.question and dns.question.qtype then
-    local qtype = dns.question.qtype
-    local rdata
-    if qtype == A then
-      rdata = string.char(0, 0, 0, 0)
-    elseif qtype == AAAA then
-      rdata = string.char(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    else
-      rdata = string.char(0, 0, 0, 0)
-    end
-    dns.answers[1] = {
-      rname = string.char(0xC0, 0x0C),
-      rtype = qtype,
-      rclass = 1,
-      rdata = rdata
-    }
-    dns.header.ancount = 1
-  end
+  dns.header.ancount = 0
   local ede_text
   if reason and reason ~= "" then
     ede_text = "Ne intretis. " .. reason
@@ -87,6 +77,7 @@ build_nxdomain_response = function(dns_orig, dns_raw, reason)
   if not (dns) then
     return nil
   end
+  mark_response_header(dns)
   dns.header.rcode = NXDOMAIN
   dns.answers = { }
   dns.header.ancount = 0
@@ -155,6 +146,7 @@ build_sinkhole_response = function(dns_orig, dns_raw, reason, sink)
   if not (dns) then
     return nil
   end
+  mark_response_header(dns)
   dns.header.rcode = NOERROR
   local ttl = (sink and tonumber(sink.ttl)) or 60
   if ttl <= 0 then
@@ -210,6 +202,7 @@ build_cname_response = function(dns_orig, dns_raw, target, reason, target_rrs)
   if not (dns) then
     return nil
   end
+  mark_response_header(dns)
   dns.header.rcode = NOERROR
   local answers = {
     {
