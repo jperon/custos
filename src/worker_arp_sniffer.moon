@@ -98,7 +98,8 @@ write_learn = (learn_wfd, msg) ->
 -- @tparam number len       Longueur totale de la trame
 -- @treturn string|nil  6 octets de la MAC si trouvée, nil sinon
 extract_tlla = (raw, opt_start, len) ->
-  return nil if len < opt_start + NDP_OPT_MIN_LEN
+  -- Au moins l'en-tête d'option (Type + Length) doit tenir dans la trame.
+  return nil if len < opt_start + 2
 
   offset = opt_start
   while offset + 2 <= len
@@ -106,11 +107,12 @@ extract_tlla = (raw, opt_start, len) ->
     opt_len  = raw\byte(offset + 1) * 8  -- Length est en unités de 8 octets
 
     return nil if opt_len < 2 or opt_len > 255  -- Option invalide
-    return nil if offset + opt_len > len  -- Option tronquée
+    -- Dernier octet de l'option à offset + opt_len - 1 (base 1 Lua).
+    return nil if offset + opt_len - 1 > len  -- Option tronquée
 
     if opt_type == NDP_OPT_TGT_LLA
       -- Vérifier qu'il y a au moins 6 octets de données (après Type + Length)
-      if opt_len >= 8  -- 2 octets header + 6 octets MAC minimum
+      if opt_len >= NDP_OPT_MIN_LEN  -- 2 octets header + 6 octets MAC minimum
         mac_start = offset + 2
         -- Vérifier que la MAC n'est pas nulle
         all_zero = true
@@ -406,11 +408,11 @@ run = (ifnames, learn_wfd) ->
 
   log_info -> { action: "start", interfaces: table.concat(ifnames, ","), sockets: #fds }
 
-  -- poll sur tous les sockets
+  -- poll sur tous les sockets (tableaux FFI : indices 0-based)
   pfds = ffi.new "struct pollfd[?]", #fds
   for i, fd in ipairs fds
-    pfds[i].fd = fd
-    pfds[i].events = POLLIN
+    pfds[i - 1].fd = fd
+    pfds[i - 1].events = POLLIN
 
   -- Buffer de réception partagé (MTU 1500 + Eth 14 + marge)
   buf     = ffi.new "uint8_t[2048]"

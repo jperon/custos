@@ -65,7 +65,7 @@ probe_creat_excl = function()
     0x40,
     0x100
   }) do
-    local fd = C.open(path, bit.bor(o_wronly, v), 0600)
+    local fd = C.open(path, bit.bor(o_wronly, v), ffi.cast("int", 0600))
     if fd >= 0 then
       C.close(fd)
       C.unlink(path)
@@ -77,11 +77,11 @@ probe_creat_excl = function()
     0x80,
     0x400
   }) do
-    local fd1 = C.open(path, bit.bor(o_wronly, creat), 0600)
+    local fd1 = C.open(path, bit.bor(o_wronly, creat), ffi.cast("int", 0600))
     if fd1 >= 0 then
       C.close(fd1)
     end
-    local fd2 = C.open(path, bit.bor(o_wronly, creat, v), 0600)
+    local fd2 = C.open(path, bit.bor(o_wronly, creat, v), ffi.cast("int", 0600))
     if fd2 < 0 then
       C.unlink(path)
       excl = v

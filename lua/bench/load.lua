@@ -67,7 +67,7 @@ _real_client_factory = function(target, port, timeout_ms)
     end
     pcall(ffi.cdef, "int fcntl(int, int, ...);")
     local F_SETFL, O_NONBLOCK = 4, 2048
-    local flags = C.fcntl(fd, 3, 0)
+    local flags = C.fcntl(fd, 3, ffi.cast("int", 0))
     C.fcntl(fd, F_SETFL, ffi.cast("int", flags + O_NONBLOCK))
     local buf = ffi.new("uint8_t[?]", 2048)
     return {

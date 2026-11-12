@@ -226,13 +226,15 @@ flush_to_file = (agg, hour, events_dir) ->
   path = "#{events_dir}/events-#{hour}.tsv"
 
   -- Tentative de création exclusive : réussit uniquement si le fichier est nouveau
-  fd_excl = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_EXCL), FILE_MODE
+  -- Le mode est un argument variadique (ffi_defs.moon:23) : un number Lua
+  -- passerait en double et le noyau lirait un mode_t indéfini (fichier 0000).
+  fd_excl = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_EXCL), ffi.cast("int", FILE_MODE)
   if fd_excl >= 0
     libc.write fd_excl, HEADER, #HEADER
     libc.close fd_excl
 
   -- Ouverture en append pour les lignes de données
-  fd = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), FILE_MODE
+  fd = libc.open path, bit.bor(O_WRONLY, O_CREAT, O_APPEND), ffi.cast("int", FILE_MODE)
   if fd < 0
     errno = tonumber(ffi.C.__errno_location()[0])
     log_warn -> { action: "open_failed", path: path, errno: errno }

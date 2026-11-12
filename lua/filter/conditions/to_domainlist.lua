@@ -68,7 +68,7 @@ load_list = function(path)
     return nil, "ffi_xxhash non disponible"
   end
   if path:match("%.bin$") then
-    local fd = libc.open(path, O_RDONLY, 0)
+    local fd = libc.open(path, O_RDONLY, ffi.cast("int", 0))
     if fd < 0 then
       return nil, "Cannot open " .. tostring(path), "missing"
     end

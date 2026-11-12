@@ -105,7 +105,9 @@ load_list = (path) ->
     -- Aucune recopie : le pointeur FFI pointe directement sur la page (tmpfs),
     -- partagée entre tous les workers forkés (lecture seule → jamais dupliquée).
     -- Format : N × 6 octets (xxh64 tronqué 48 bits), little-endian, trié.
-    fd = libc.open path, O_RDONLY, 0
+    -- Mode variadique (ffi_defs.moon:23) : cast explicite (le mode est ignoré
+    -- sans O_CREAT, mais un number Lua passerait en double).
+    fd = libc.open path, O_RDONLY, ffi.cast("int", 0)
     return nil, "Cannot open #{path}", "missing" if fd < 0
     size = tonumber libc.lseek fd, 0, SEEK_END
     if size <= 0

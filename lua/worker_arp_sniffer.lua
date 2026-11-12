@@ -57,7 +57,7 @@ write_learn = function(learn_wfd, msg)
 end
 local extract_tlla
 extract_tlla = function(raw, opt_start, len)
-  if len < opt_start + NDP_OPT_MIN_LEN then
+  if len < opt_start + 2 then
     return nil
   end
   local offset = opt_start
@@ -67,11 +67,11 @@ extract_tlla = function(raw, opt_start, len)
     if opt_len < 2 or opt_len > 255 then
       return nil
     end
-    if offset + opt_len > len then
+    if offset + opt_len - 1 > len then
       return nil
     end
     if opt_type == NDP_OPT_TGT_LLA then
-      if opt_len >= 8 then
+      if opt_len >= NDP_OPT_MIN_LEN then
         local mac_start = offset + 2
         local all_zero = true
         for i = 0, 5 do
@@ -421,8 +421,8 @@ run = function(ifnames, learn_wfd)
   end)
   local pfds = ffi.new("struct pollfd[?]", #fds)
   for i, fd in ipairs(fds) do
-    pfds[i].fd = fd
-    pfds[i].events = POLLIN
+    pfds[i - 1].fd = fd
+    pfds[i - 1].events = POLLIN
   end
   local buf = ffi.new("uint8_t[2048]")
   local buf_len = 2048

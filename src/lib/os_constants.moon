@@ -70,9 +70,11 @@ probe_creat_excl = ->
   o_wronly = 1
   creat, excl = 0x40, 0x80   -- valeurs x86 par défaut
 
+  -- Mode variadique (ffi_defs.moon:23) : cast explicite, sinon le noyau lit un
+  -- mode_t indéfini (number Lua transmis comme double) et le fichier naît en 0000.
   C.unlink path  -- s'assurer que le fichier n'existe pas
   for _, v in ipairs {0x40, 0x100}  -- x86=64, MIPS=256
-    fd = C.open path, bit.bor(o_wronly, v), 0600
+    fd = C.open path, bit.bor(o_wronly, v), ffi.cast("int", 0600)
     if fd >= 0
       C.close fd
       C.unlink path
@@ -81,9 +83,9 @@ probe_creat_excl = ->
 
   -- O_EXCL : avec le bon O_CREAT, la seconde ouverture doit échouer (fd<0)
   for _, v in ipairs {0x80, 0x400}  -- x86=128, MIPS=1024
-    fd1 = C.open path, bit.bor(o_wronly, creat), 0600
+    fd1 = C.open path, bit.bor(o_wronly, creat), ffi.cast("int", 0600)
     C.close fd1 if fd1 >= 0
-    fd2 = C.open path, bit.bor(o_wronly, creat, v), 0600
+    fd2 = C.open path, bit.bor(o_wronly, creat, v), ffi.cast("int", 0600)
     if fd2 < 0  -- EEXIST → bonne valeur d'O_EXCL
       C.unlink path
       excl = v

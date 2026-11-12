@@ -74,7 +74,7 @@ _real_client_factory = (target, port, timeout_ms = 2000) ->
     -- Mode non bloquant : O_NONBLOCK via fcntl.
     pcall ffi.cdef, "int fcntl(int, int, ...);"
     F_SETFL, O_NONBLOCK = 4, 2048
-    flags = C.fcntl fd, 3, 0   -- F_GETFL
+    flags = C.fcntl fd, 3, ffi.cast("int", 0)   -- F_GETFL
     C.fcntl fd, F_SETFL, ffi.cast("int", flags + O_NONBLOCK)
     buf = ffi.new "uint8_t[?]", 2048
     {

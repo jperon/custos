@@ -206,6 +206,10 @@ Types de base : `string`, `number`, `boolean`, `nil`, `table`, `function`,
 
 ## Pièges de refactoring
 
+### Tableaux FFI : indices 0-based
+
+`ffi.new "T[?]", n` expose les indices `0 .. n-1` : avec `ipairs` (1-based), écrire `t[i - 1]`, jamais `t[i]` (débordement silencieux, LuaJIT ne vérifie pas les bornes).
+
 ### Destructuration avec alias
 
 `{ :name }` est un raccourci pour `{ name: name }`. Dès que le nom local

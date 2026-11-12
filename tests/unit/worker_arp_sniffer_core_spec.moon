@@ -276,7 +276,7 @@ describe "worker_arp_sniffer cœur", ->
       ifindex = 0
       assert.is_nil wa2.run "brX", 99
 
-    -- Les tests de boucle avec socket sont marqués pending dans
-    -- worker_arp_sniffer_bugs_spec.moon : run() écrit hors bornes du tableau
-    -- pollfd (voir ce fichier), ce qui corrompt la mémoire du processus de
-    -- test. Seul le retour anticipé sans socket est donc exécuté ici.
+    -- Le démarrage de la boucle (initialisation 0-based des pollfd) et le
+    -- traitement d'une trame sont couverts par worker_arp_sniffer_bugs_spec.moon
+    -- (run() sort par erreur depuis poll simulé) ; ici, seul le retour anticipé
+    -- sans socket est exécuté.
