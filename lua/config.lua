@@ -303,7 +303,8 @@ local DEFAULTS = {
     auth = "5",
     sni = "6",
     sip = "12",
-    doh_vlan = "13"
+    doh_vlan = "13",
+    max_age_ms = 1500
   },
   dns = {
     port = 53,
@@ -731,6 +732,18 @@ normalize = function(cfg)
       })
     end
     cfg.nfqueue.maxlen = nil
+  end
+  local max_age_ms = tonumber(cfg.nfqueue.max_age_ms)
+  if max_age_ms and max_age_ms >= 0 and max_age_ms % 1 == 0 then
+    cfg.nfqueue.max_age_ms = max_age_ms
+  else
+    if cfg.nfqueue.max_age_ms ~= nil and max_age_ms ~= 0 then
+      config_warn({
+        action = "nfqueue_max_age_invalid",
+        configured = tostring(cfg.nfqueue.max_age_ms)
+      })
+    end
+    cfg.nfqueue.max_age_ms = DEFAULTS.nfqueue.max_age_ms
   end
   cfg.doh = cfg.doh or { }
   cfg.dns = cfg.dns or { }

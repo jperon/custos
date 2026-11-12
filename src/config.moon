@@ -226,6 +226,11 @@ DEFAULTS = {
     sni: "6"
     sip: "12"
     doh_vlan: "13"
+    -- Délestage précoce : une question déjà âgée de plus de max_age_ms dans la
+    -- file noyau est DROPPée sans analyse (client DNS déjà en timeout). 0 =
+    -- désactivé. N'agit que si le noyau fournit NFQA_TIMESTAMP (cf.
+    -- docs/agents/perf.md §17.9).
+    max_age_ms: 1500
   }
 
   dns: {
@@ -639,6 +644,19 @@ normalize = (cfg) ->
         configured: tostring cfg.nfqueue.maxlen
       }
     cfg.nfqueue.maxlen = nil
+  -- nfqueue.max_age_ms : seuil de délestage précoce des questions (ms).
+  -- 0 = désactivé ; absent = défaut ; valeur négative, non entière ou non
+  -- numérique écartée avec un avertissement, retour au défaut.
+  max_age_ms = tonumber cfg.nfqueue.max_age_ms
+  if max_age_ms and max_age_ms >= 0 and max_age_ms % 1 == 0
+    cfg.nfqueue.max_age_ms = max_age_ms
+  else
+    if cfg.nfqueue.max_age_ms != nil and max_age_ms != 0
+      config_warn {
+        action: "nfqueue_max_age_invalid"
+        configured: tostring cfg.nfqueue.max_age_ms
+      }
+    cfg.nfqueue.max_age_ms = DEFAULTS.nfqueue.max_age_ms
   cfg.doh = cfg.doh or {}
   cfg.dns = cfg.dns or {}
   cfg.dns.ttl_grace = cfg.dns.ttl_grace or {}

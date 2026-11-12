@@ -13,6 +13,10 @@ ipc = require "ipc"
 -- Charge d'abord lib.socket : ses cdef (dont __errno_location) sont déclarés en
 -- un bloc ; les déclarer après coup échouerait en redéfinition.
 pcall require, "lib.socket"
+pcall ffi.cdef, [[
+  struct pollfd { int fd; short events; short revents; };
+  int poll(struct pollfd *fds, unsigned long nfds, int timeout);
+]]
 
 for decl in *{
   "int  pipe(int pipefd[2]);"
@@ -46,6 +50,15 @@ read_fd = (fd) ->
   n = tonumber ffi.C.read fd, buf, 4096
   return "" unless n and n > 0
   ffi.string buf, n
+
+-- Lecture non bloquante : "" si rien n'est disponible (assertion « aucun
+-- message IPC/événement » sans bloquer sur un tube vide).
+read_available = (fd) ->
+  pfd = ffi.new "struct pollfd[1]"
+  pfd[0].fd = fd
+  pfd[0].events = 1
+  n = tonumber ffi.C.poll pfd, 1, 0
+  if n and n > 0 then read_fd fd else ""
 
 -- Query DNS (id 0xabcd, qr=0, question example.com A) et sa variante réponse.
 DNS_QUERY = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7example\3com\0\0\1\0\1"
@@ -87,6 +100,9 @@ describe "worker_questions", ->
   -- run_queue et l'ordre des appels au module metrics.
   captured_opts = nil
   metrics_calls = {}
+  -- Âge renvoyé par le stub nfq_loop.packet_age_ms ; nil = horodatage absent.
+  stub_age = nil
+  cfg = require "config"
 
   before_each ->
     save_all!
@@ -94,6 +110,9 @@ describe "worker_questions", ->
     payload  = ""
     captured_opts = nil
     metrics_calls = {}
+    stub_age = nil
+    cfg.nfqueue = cfg.nfqueue or {}
+    cfg.nfqueue.max_age_ms = 1500
 
     ev_r, ev_w     = make_pipe!
     pipe_r, pipe_w = make_pipe!
@@ -124,6 +143,7 @@ describe "worker_questions", ->
     package.loaded["nfq_loop"] = {
       NF_ACCEPT: 1
       NF_DROP: 0
+      packet_age_ms: (nfad) -> stub_age
       run_queue: (queue, cb, opts) ->
         captured_opts = opts
         nil
@@ -232,6 +252,54 @@ describe "worker_questions", ->
       fields = split_tabs read_fd ev_r
       assert.equals "block", fields[2]
       assert.equals "malware.example", fields[3]
+
+  -- ── Délestage précoce des questions périmées (nfqueue.max_age_ms) ─────────
+  describe "délestage précoce (question_shed)", ->
+    it "jette (NF_DROP) une question plus vieille que le seuil, sans aucun IPC", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      stub_age = 2000
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 0, rc
+      -- Aucune analyse : pas de message IPC, pas d'événement allow/block.
+      assert.equals "", read_available pipe_r
+      assert.equals "", read_available ev_r
+      assert.equals 1, wq.get_shed_total!
+
+    it "ne jette pas à l'âge exact du seuil (comparaison stricte)", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      stub_age = 1500
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      assert.is_not_nil ipc.decode_msg read_fd pipe_r
+      assert.equals 0, wq.get_shed_total!
+
+    it "max_age_ms = 0 désactive le délestage", ->
+      cfg.nfqueue.max_age_ms = 0
+      wq.run 0, pipe_w, nil, ev_w, nil
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      stub_age = 999999
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      assert.is_not_nil ipc.decode_msg read_fd pipe_r
+      assert.equals 0, wq.get_shed_total!
+
+    it "horodatage noyau absent (packet_age_ms nil) : pas de délestage", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      stub_age = nil
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      assert.is_not_nil ipc.decode_msg read_fd pipe_r
+      assert.equals 0, wq.get_shed_total!
+
+    it "compte chaque question jetée, sans compter les servies", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      stub_age = 5000
+      assert.equals 0, invoke ipv4_udp DNS_QUERY
+      assert.equals 0, invoke ipv4_udp DNS_QUERY
+      assert.equals 2, wq.get_shed_total!
+      stub_age = 100
+      assert.equals 1, invoke ipv4_udp DNS_QUERY
+      assert.equals 2, wq.get_shed_total!
 
   -- ── handle_question : décisions et messages IPC ───────────────────────────
   describe "handle_question", ->
