@@ -3857,7 +3857,8 @@ response 55,6 → 30,1 (−46 %), cycle second avis 220,6 → 94,7 µs (−57 %)
 l'A55, pas les µs absolus (rapport ~25×).
 
 **Tests** : `tests/unit/lib/ipc_hex_spec.moon` (+8 : équivalence sur les
-256 octets, arité `gsub`, débordement du cache, erreurs jamais mises en cache),
+256 octets, arité de `to_hex` — une seule valeur, y compris sur un hit de
+cache —, débordement du cache, erreurs jamais mises en cache),
 `tests/unit/filter/conditions_spec.moon` (+7 : équivalence des suffixes).
 
 **Non fait / douteux** : aucun correctif appliqué sur les postes restants — tous
@@ -3868,5 +3869,56 @@ sous-module **moontastik non modifiable** (`Makefile:63-68`), et l'évaluation
 des règles (`eval`, 10-25 %) touche à la sémantique de filtrage. Le GC reste à
 29-47 % des échantillons : la suite logique est une campagne « allocation par
 paquet » (11,2 Ko/paquet sur `response`), hors périmètre des correctifs locaux.
-**`make test-e2e` non lancé** dans cette branche (à faire avant fusion) ; aucune
-mesure sur la cible aarch64.
+**`make test-e2e`** a depuis été lancé : il a révélé la régression du contrat
+d'arité de `to_hex` ci-dessous, corrigée (94 passed / 0 failed) ; aucune mesure
+sur la cible aarch64.
+
+### Régression e2e du contrat d'arité de `to_hex` (branche `d-prof`)
+
+**Symptôme.** Première campagne e2e de la branche : échec déterministe (deux
+runs identiques, 86 passed / 8 failed ; `dev` sans les correctifs : 94/0).
+`r_homelab_not_blocked_ip4` ne recevait pas 10.42.0.50 (T03), `…_ip6` pas
+fd42:42:0:1::50 (T74), et plus aucun log `sni_captured`/`sni_verdict_*`
+n'était émis (T121-T124b).
+
+**Cause : `b2331c8`.** Le cache de conversion faisait rendre **deux** valeurs à
+`to_hex` (`return hit, #s` / `out, #s`, `src/lib/ipc_hex.moon`), alors que la
+version d'avant rendait une seule valeur — `(s\gsub ...)` parenthésé tronque à
+une valeur. `nft_queue.build_line` (`src/nft_queue.moon:200-211`) place
+`to_hex corr or ""` en **dernier** élément d'un constructeur de table : la
+seconde valeur y ajoutait un 10e champ. `worker_nft.parse_line`
+(`src/worker_nft.moon:56-58`) exige **exactement 9 champs** et rejette la ligne
+sinon (`field_count`) : plus aucune insertion nft n'était appliquée, d'où les
+sets vides (T03/T74). En cascade, le SYN vers 10.42.0.50 (pourtant autorisé par
+la résolution de site-a.lan) restait bloqué, le ClientHello n'atteignait plus le
+pont et `worker_tls` n'émettait plus `sni_captured` (T121-T124b, cf.
+`tests/e2e/homelab_e2e.sh:1002-1052`).
+
+**Bissection.** `git revert --no-commit b2331c8` (les quatre autres correctifs
+restant en place) puis `make all && make test-e2e` : 94 passed / 0 failed
+(`tmp/e2e-revert-b2331c8.log`). Le commit est seul responsable ; il est le
+dernier de la série, donc aucun autre candidat n'est en cause.
+
+**Correctif.** `to_hex` rend de nouveau **une seule valeur**
+(`src/lib/ipc_hex.moon:48-66`) ; le cache borné et l'encodage par table sont
+conservés, seules les deux lignes de `return` changent — le gain de perf de
+§18.5 est préservé. Aucun appelant n'utilisait le compte de substitutions.
+
+**Tests ajoutés** (constatés en échec avant le correctif : 2 valeurs / 10
+champs) : `tests/unit/lib/ipc_hex_spec.moon` (arité 1 via `select "#"`, y
+compris sur un hit de cache) et `tests/unit/nft_queue_spec.moon` (la ligne
+produite par `add_ip4` et par `send_barrier` a exactement 9 champs — le contrat
+consommé par `worker_nft.parse_line`).
+
+**Résultat.** `make test` : 3154 successes / 0 failures / 0 errors
+(`tmp/test.log`). `make test-e2e` avec le correctif : 94 passed / 0 failed,
+deux runs consécutifs (`tmp/e2e-final2.log`, `tmp/e2e-final3.log`) ; les
+groupes T03, T74 et T121-T124b passent.
+
+**Observation non reproductible (hors périmètre).** Un run intermédiaire
+(`tmp/e2e-final.log`) a échoué sur 10 tests d'authentification (G4
+T30-T36, G5 T40/T41/T43, `HTTP_STATUS:000`, set auth non peuplé) alors que
+T03/T74/T121-T124b passaient déjà : blackout d'environ une minute du portail
+HTTPS 33443, non reproduit par les deux runs identiques suivants (94/0). Aucun
+fichier modifié par ce correctif n'est impliqué dans le chemin AUTH ; à
+surveiller si cela réapparaît.

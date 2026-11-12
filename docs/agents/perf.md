@@ -1812,16 +1812,20 @@ sites + raisons : `tmp/prof_report.md` §4.
 
 | Correctif | Fichier:ligne | Gain mesuré | Commit |
 |---|---|---|---|
-| `to_hex` par table 256 entrées au lieu d'une closure + `string.format`/octet | `src/lib/ipc_hex.moon:25-27,49-62` | question −24 %, response −30 %, so_cycle −34 % | `b3d44d0` |
-| `from_hex` par table de nibbles au lieu de `sub`+`tonumber`+motif | `src/lib/ipc_hex.moon:68-73,81-104` | ipc_drain −21 % | `552be16` |
+| `to_hex` par table 256 entrées au lieu d'une closure + `string.format`/octet | `src/lib/ipc_hex.moon:25-27,48-66` | question −24 %, response −30 %, so_cycle −34 % | `b3d44d0` |
+| `from_hex` par table de nibbles au lieu de `sub`+`tonumber`+motif | `src/lib/ipc_hex.moon:72-77,85-108` | ipc_drain −21 % | `552be16` |
 | suffixes de domaine sans allocation (rejet O(1) par le dernier octet + `find` littéral) | `src/filter/conditions/to_domain.moon:39,50-51,56-63` | question −25 % | `9013d37` |
 | pas de re-parse de la réponse si aucun callback ne l'a réécrite | `src/worker_responses.moon:767-776` | response −11 %, so_cycle −10 % | `e84ee03` |
-| cache borné (8 entrées, purge en bloc) des deux conversions hex | `src/lib/ipc_hex.moon:29-43,56-61,98-103` | ipc_drain −38 %, so_cycle −27 %, response −15 %, question −6 % | `b2331c8` |
+| cache borné (8 entrées, purge en bloc) des deux conversions hex | `src/lib/ipc_hex.moon:29-43,50,59-65,102-107` | ipc_drain −38 %, so_cycle −27 %, response −15 %, question −6 % | `b2331c8` |
 
 Chaque commit porte son avant/après ; tests d'équivalence ajoutés
 (`tests/unit/lib/ipc_hex_spec.moon` : +8 — sortie identique sur les 256 octets,
-arité `gsub`, débordement du cache, erreurs jamais mises en cache ;
+**arité (une seule valeur, y compris sur un hit de cache)**, débordement du
+cache, erreurs jamais mises en cache ;
 `tests/unit/filter/conditions_spec.moon` : +7 cas d'équivalence des suffixes).
+L'arité de `to_hex` est un **contrat** : la 2e valeur ajoutée par le cache de
+`b2331c8` corrompait les lignes nft (cf. `audits.md`, « Régression e2e du
+contrat d'arité de `to_hex` »).
 
 ### 18.6 Correctifs proposés, non appliqués
 
@@ -1840,8 +1844,9 @@ campagne dédiée et non un correctif local.
 
 ### 18.7 Reste à faire
 
-- `make test-e2e` avant fusion (les4 correctifs sont des calculs purs couverts
-  en unitaire, mais la Definition of Done l'exige) ;
+- `make test-e2e` avant fusion : **fait** — la première campagne a révélé la
+  régression du contrat d'arité de `to_hex` (cf. `audits.md`, « Régression e2e
+  du contrat d'arité de `to_hex` »), corrigée ; 94 passed / 0 failed depuis ;
 - re-mesurer sur la cible aarch64, où les parts ci-dessus (et non les µs) sont
   transposables — idéalement en déployant le banc lui-même (`make bench-hotpath`
   tourne sans NFQUEUE ni réseau ; le flush `ip_whitelist` est neutralisé par la
