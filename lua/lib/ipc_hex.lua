@@ -11,14 +11,16 @@ encode_ip16 = function(ip_raw)
   end
   return nil
 end
+local HEX_BYTE = { }
+for i = 0, 255 do
+  HEX_BYTE[string.char(i)] = string.format("%02x", i)
+end
 local to_hex
 to_hex = function(s)
   if not (s and #s > 0) then
     return ""
   end
-  return (s:gsub(".", function(c)
-    return string.format("%02x", c:byte())
-  end))
+  return (s:gsub(".", HEX_BYTE))
 end
 local from_hex
 from_hex = function(h)

@@ -26,6 +26,21 @@ describe "lib.ipc_hex", ->
       assert.equals "", to_hex ""
       assert.equals "", to_hex nil
 
+    -- Garde-fou d'équivalence : l'encodage par table (perf §18) doit rendre
+    -- exactement la même sortie que l'encodage de référence, sur TOUS les
+    -- octets, y compris ceux qui ont une signification dans les motifs Lua.
+    it "est identique à l'encodage de référence sur les 256 octets", ->
+      ref = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+      all = table.concat [ string.char(i) for i = 0, 255 ]
+      assert.equals ref(all), to_hex(all)
+      for i = 0, 255
+        c = string.char i
+        assert.equals ref(c), to_hex(c), "octet #{i}"
+
+    it "préserve le aller-retour avec from_hex sur une chaîne longue", ->
+      raw = table.concat [ string.char((i * 7) % 256) for i = 1, 300 ]
+      assert.equals raw, (from_hex to_hex raw)
+
   describe "from_hex", ->
     it "décode l'hexadécimal, majuscules acceptées", ->
       value, err = from_hex "00FF10"
@@ -41,6 +56,9 @@ describe "lib.ipc_hex", ->
       value, err = from_hex ""
       assert.equals "", value
       assert.is_nil err
+      value, err = from_hex nil
+      assert.equals "", value
+      assert.is_nil err
 
     it "rejette une longueur impaire", ->
       value, err = from_hex "abc"
@@ -51,6 +69,18 @@ describe "lib.ipc_hex", ->
       value, err = from_hex "zz"
       assert.is_nil value
       assert.equals "hex_invalid_chars", err
+      value, err = from_hex "0g"
+      assert.is_nil value
+      assert.equals "hex_invalid_chars", err
+
+    it "préfère hex_odd_length à hex_invalid_chars (ordre de vérification)", ->
+      value, err = from_hex "zzz"
+      assert.is_nil value
+      assert.equals "hex_odd_length", err
+
+    it "décodé puis encodé est identique sur tous les octets", ->
+      all = table.concat [ string.char(i) for i = 0, 255 ]
+      assert.equals all, (from_hex (to_hex all))
 
   describe "split_fields", ->
     it "découpe sur '|' en préservant les champs vides", ->

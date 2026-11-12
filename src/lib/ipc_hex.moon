@@ -17,12 +17,21 @@ encode_ip16 = (ip_raw) ->
   return ip_raw .. "\0\0\0\0\0\0\0\0\0\0\0\0" if #ip_raw == 4
   nil
 
+-- Table octet → 2 caractères hexadécimaux. `gsub` avec une TABLE ne crée ni
+-- closure ni appel `string.format` par octet : le chemin IPC encode ~50 octets
+-- par message (raison, rule_id, corrélateur nft) et chaque insertion nft en
+-- encode 2 de plus — le coût mesuré de l'ancien encodage (closure + format par
+-- octet) atteignait 12-40 % du hot path (docs/agents/perf.md §18).
+HEX_BYTE = {}
+for i = 0, 255
+  HEX_BYTE[string.char(i)] = string.format "%02x", i
+
 --- Encode une chaîne d'octets en hexadécimal minuscule.
 -- @tparam string s Chaîne d'octets
 -- @treturn string Représentation hexadécimale ("" si vide)
 to_hex = (s) ->
   return "" unless s and #s > 0
-  (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+  (s\gsub ".", HEX_BYTE)
 
 --- Décode une chaîne hexadécimale en octets, avec validation.
 -- @tparam string h Chaîne hexadécimale
