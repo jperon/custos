@@ -1644,7 +1644,7 @@ réponses au lieu de saturer une seule file chaude (70,6 % sur `resp-q14`,
 §16.3). **Non mesuré** sur la cible (pas de déploiement depuis cette branche).
 
 
-### 16.6 Correctif implémenté : cache d'upsert dans `worker_nft` (branche `d-nftcache`, 2026-11-12)
+### 16.8 Correctif implémenté : cache d'upsert dans `worker_nft` (branche `d-nftcache`, 2026-11-12)
 
 La piste (3) de §16.5 est **implémentée** : `worker_nft` saute désormais les
 ré-insertions d'un même élément (clé `(famille/table, set, élément)`) inséré
