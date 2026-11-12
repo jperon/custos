@@ -25,13 +25,17 @@ local filter = require("filter")
 local pidfile = require("lib.pidfile")
 local metrics = require("metrics")
 do
-  local gc_cfg = config.runtime or { }
-  if gc_cfg.gc_pause then
-    collectgarbage("setpause", gc_cfg.gc_pause)
-  end
-  if gc_cfg.gc_stepmul then
-    collectgarbage("setstepmul", gc_cfg.gc_stepmul)
-  end
+  local gc_state = require("lib.gc_tune").shared()
+  gc_state.apply()
+  log_info(function()
+    return {
+      action = "gc_tuning",
+      pause = gc_state.values.pause,
+      stepmul = gc_state.values.stepmul,
+      idle_step = gc_state.values.idle_step,
+      max_heap_mb = gc_state.values.max_heap_mb
+    }
+  end)
 end
 local nft_extra = require("nft_extra_rules")
 local lowmem = require("lib.lowmem")

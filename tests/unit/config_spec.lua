@@ -646,7 +646,7 @@ describe("config.nfqueue chevauchement", function()
     end
   end)
 end)
-return describe("config.auth.cert_dir", function()
+describe("config.auth.cert_dir", function()
   reload = function(path)
     package.loaded["config"] = nil
     local actual = path or "tmp/__no_config_for_test__.moon"
@@ -667,5 +667,82 @@ return describe("config.auth.cert_dir", function()
     local cfg = reload(path)
     os.remove(path)
     return assert.equals("/var/run/custos/certs", cfg.auth.cert_dir)
+  end)
+end)
+return describe("config.gc (réglage du GC par worker)", function()
+  local gc_tune = require("lib.gc_tune")
+  reload = function(path)
+    package.loaded["config"] = nil
+    local actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv("CUSTOS_CONFIG_PATH", actual, 1)
+    return require("config")
+  end
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  it("section absente : défauts de lib.gc_tune", function()
+    local cfg = reload(nil)
+    return assert.same(gc_tune.DEFAULTS, cfg.gc)
+  end)
+  it("section présente : valeurs reprises telles quelles", function()
+    local path = "tmp/config_spec_gc.moon"
+    write_moon(path, [[return { gc: { pause: 300, stepmul: 400, idle_step: 50, max_heap_mb: 12 } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.same({
+      pause = 300,
+      stepmul = 400,
+      idle_step = 50,
+      max_heap_mb = 12
+    }, cfg.gc)
+  end)
+  it("hérite de runtime.gc_pause/gc_stepmul quand la section gc est absente", function()
+    local path = "tmp/config_spec_gc_legacy.moon"
+    write_moon(path, [[return { runtime: { gc_pause: 250, gc_stepmul: 350 } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.equals(250, cfg.gc.pause)
+    assert.equals(350, cfg.gc.stepmul)
+    return assert.equals(gc_tune.DEFAULTS.idle_step, cfg.gc.idle_step)
+  end)
+  it("gc.pause explicite prime sur runtime.gc_pause", function()
+    local path = "tmp/config_spec_gc_priority.moon"
+    write_moon(path, [[return {
+      gc: { pause: 300 }
+      runtime: { gc_pause: 250, gc_stepmul: 350 }
+    }]])
+    local cfg = reload(path)
+    os.remove(path)
+    assert.equals(300, cfg.gc.pause)
+    return assert.equals(350, cfg.gc.stepmul)
+  end)
+  return it("valeurs invalides : retour aux défauts (et avertissement)", function()
+    local path = "tmp/config_spec_gc_invalid.moon"
+    write_moon(path, [[return { gc: { pause: "x", stepmul: 0, idle_step: -1, max_heap_mb: -2 } }]])
+    local old_log = package.loaded["log"]
+    local calls = { }
+    package.loaded["log"] = {
+      log_warn = function(thunk)
+        calls[#calls + 1] = thunk()
+      end,
+      log_error = function(thunk)
+        calls[#calls + 1] = thunk()
+      end
+    }
+    local holder = { }
+    local ok, err = pcall(function()
+      holder.cfg = reload(path)
+    end)
+    package.loaded["log"] = old_log
+    os.remove(path)
+    assert.is_true(ok, tostring(err))
+    assert.same(gc_tune.DEFAULTS, holder.cfg.gc)
+    local seen = { }
+    for _index_0 = 1, #calls do
+      local c = calls[_index_0]
+      seen[c.action] = true
+    end
+    return assert.is_true(seen.gc_invalid)
   end)
 end)
