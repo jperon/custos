@@ -115,7 +115,7 @@ arm_resolvers = function(resolvers, active)
   end
 end
 local maybe_duplicate
-maybe_duplicate = function(ip, l4, raw, rule_resolvers)
+maybe_duplicate = function(ip, l4, raw, rule_resolvers, dns_id)
   if not (so_enabled and l4.proto == "udp") then
     return 
   end
@@ -127,7 +127,8 @@ maybe_duplicate = function(ip, l4, raw, rule_resolvers)
     return 
   end
   local resolvers = rule_resolvers or so_resolvers
-  local validator = dup_query.pick_resolver(resolvers, ip.version)
+  local picker = dup_query.get_picker(resolvers)
+  local validator = picker(ip.version, dns_id, l4.spt)
   if not (validator) then
     return 
   end
@@ -502,7 +503,7 @@ handle_question = function(qh_ptr, nfad, pkt_id)
   local do_duplicate = allow_modifiers and allow_modifiers.validate
   if verdict == NF_ACCEPT and do_duplicate then
     local rule_resolvers = type(do_duplicate) == "table" and do_duplicate or nil
-    maybe_duplicate(ip, l4, raw, rule_resolvers)
+    maybe_duplicate(ip, l4, raw, rule_resolvers, dns_msg.header.id)
   end
   return NF_ACCEPT
 end

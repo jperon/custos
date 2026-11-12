@@ -129,7 +129,7 @@ return {
     resolvers = {
       type = "string_list",
       label = "Résolveurs validateurs",
-      hint = "IP v4 et v6 mélangées ; famille choisie selon le paquet"
+      hint = "IP v4 et v6 mélangées ; famille choisie selon le paquet, IP d'une famille réparties par question (même validateur ou équivalents, même filtrage)"
     },
     budget_ms = {
       type = "integer",

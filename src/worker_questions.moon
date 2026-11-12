@@ -104,8 +104,9 @@ arm_resolvers = (resolvers, active) ->
 -- @tparam table l4  En-tête UDP parsé
 -- @tparam string raw Paquet IP brut d'origine
 -- @tparam table|nil rule_resolvers Résolveurs per-règle (nil → résolveurs globaux)
+-- @tparam number|nil dns_id ID de transaction DNS (répartition des validateurs)
 -- @treturn nil
-maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
+maybe_duplicate = (ip, l4, raw, rule_resolvers, dns_id) ->
   return unless so_enabled and l4.proto == "udp"
   fd = so_fds[ip.version == 6 and "ipv6" or "ipv4"]
   return unless fd
@@ -113,7 +114,10 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers) ->
   -- réponse est filtrée à la source ; worker_responses la laisse passer).
   return if so_resolver_set[ip2s ip.dst]
   resolvers = rule_resolvers or so_resolvers
-  validator = dup_query.pick_resolver resolvers, ip.version
+  -- Répartit les questions sur toutes les IP de la famille (sélecteur
+  -- précalculé et mémoïsé : ni allocation ni recherche par paquet).
+  picker = dup_query.get_picker resolvers
+  validator = picker ip.version, dns_id, l4.spt
   return unless validator
   dns_raw = raw\sub l4.data_off, l4.off + l4.len - 1
   pkt = dup_query.build_udp ip, l4, dns_raw, validator
@@ -473,7 +477,7 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   do_duplicate = allow_modifiers and allow_modifiers.validate
   if verdict == NF_ACCEPT and do_duplicate
     rule_resolvers = type(do_duplicate) == "table" and do_duplicate or nil
-    maybe_duplicate ip, l4, raw, rule_resolvers
+    maybe_duplicate ip, l4, raw, rule_resolvers, dns_msg.header.id
 
   NF_ACCEPT
 

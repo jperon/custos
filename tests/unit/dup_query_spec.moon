@@ -35,6 +35,64 @@ describe "dup_query", ->
       assert.same "2a01:4f8::1", dup.pick_resolver(resolvers, 6)
     it "nil si aucune IP de la bonne famille", ->
       assert.is_nil dup.pick_resolver({ "1.2.3.4" }, 6)
+    it "ignore une URL DoH (elle contient ':' mais n'est pas une IPv6)", ->
+      assert.same "2a01:4f8::1", dup.pick_resolver({ "https://dns.example/dns-query", "2a01:4f8::1" }, 6)
+    it "nil sur liste vide", ->
+      assert.is_nil dup.pick_resolver({}, 4)
+
+  describe "new_picker", ->
+    v4 = { "94.130.180.225", "78.47.64.161", "167.235.236.107" }
+    mixed = { "https://dns.example/dns-query", "94.0.0.1", "78.0.0.1", "2a01::1", "2a01::2" }
+
+    it "répartit sur les n adresses IPv4 ((id + port) % n)", ->
+      pick = dup.new_picker v4
+      seen = {}
+      for i = 0, 2
+        ip = pick 4, i, 1000
+        assert.is_truthy ip
+        seen[ip] = true
+      for ip in *v4
+        assert.is_true seen[ip] == true
+
+    it "respecte la famille du paquet", ->
+      pick = dup.new_picker mixed
+      for i = 0, 9
+        ip4 = pick 4, i, 53
+        ip6 = pick 6, i, 53
+        assert.is_nil (ip4\find ":", 1, true)
+        assert.is_not_nil (ip6\find ":", 1, true)
+
+    it "ignore les URL https:// (jamais choisies)", ->
+      pick = dup.new_picker mixed
+      for i = 0, 20
+        for ver in *{ 4, 6 }
+          ip = pick ver, i, 4242
+          assert.is_nil (ip\find "://", 1, true)
+
+    it "est déterministe pour un même (id, port)", ->
+      pick = dup.new_picker v4
+      assert.same pick(4, 0x1234, 5353), pick(4, 0x1234, 5353)
+
+    it "liste à une seule adresse : renvoie toujours celle-ci", ->
+      pick = dup.new_picker { "94.0.0.1" }
+      for i = 0, 5
+        assert.same "94.0.0.1", pick 4, i, i
+
+    it "liste vide → nil", ->
+      pick = dup.new_picker {}
+      assert.is_nil pick 4, 1, 1
+      assert.is_nil pick 6, 1, 1
+
+    it "aucune IP de la famille demandée → nil", ->
+      pick = dup.new_picker { "94.0.0.1" }
+      assert.is_nil pick 6, 1, 1
+
+    it "get_picker mémoïse le sélecteur par liste", ->
+      assert.is_true dup.get_picker(v4) == dup.get_picker(v4)
+
+    it "get_picker accepte une liste nil (aucun validateur)", ->
+      pick = dup.get_picker nil
+      assert.is_nil pick 4, 1, 1
 
   describe "build_udp", ->
     dns = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7example\3com\0\0\1\0\1"

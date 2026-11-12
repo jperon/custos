@@ -732,7 +732,7 @@ de la réponse validateur ou l'expiration de `budget_ms` (→ fail-open).
 
 | Clé | Type | Défaut | Description |
 |-----|------|--------|-------------|
-| `resolvers` | liste | — | IPs v4/v6 (UDP/53) et/ou URLs DoH `https://…` (via libcurl) ; la famille UDP est choisie selon le paquet client |
+| `resolvers` | liste | — | IPs v4/v6 (UDP/53) et/ou URLs DoH `https://…` (via libcurl) ; la famille UDP est choisie selon le paquet client, et les IP UDP d'une famille sont réparties par question. Plusieurs IP par famille servent à répartir la charge entre les workers réponses : ce doivent être des adresses du même validateur ou de validateurs équivalents (même politique de filtrage) |
 | `budget_ms` | int | `80` | Attente max de la réponse validateur **UDP** avant fail-open |
 | `doh_budget_ms` | int | `3000` | Attente max pour les endpoints **DoH** `https://…` (TLS + HTTP/2 plus longs à établir) |
 | `fail_open` | bool | `true` | Validateur silencieux → laisser passer la réponse d'origine |
