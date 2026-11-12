@@ -340,6 +340,29 @@ ffi.cdef [[
 ]]
 
 -- ═══════════════════════════════════════════════════════════════
+-- Horodatage noyau des paquets (SO_TIMESTAMP / netstamp)
+-- ═══════════════════════════════════════════════════════════════
+-- Un socket avec SO_TIMESTAMP active la static key `netstamp_needed_key` :
+-- sans elle, le noyau ne renseigne pas `skb->tstamp` à la réception et NFQUEUE
+-- n'ajoute pas NFQA_TIMESTAMP (le délestage nfqueue.max_age_ms serait inerte).
+-- Voir src/lib/netstamp.moon.
+--
+-- Valeurs vérifiées dans les en-têtes Linux v6.12 :
+--   include/uapi/asm-generic/socket.h : SO_TIMESTAMP_OLD = 29,
+--     SO_TIMESTAMP_NEW = 63. Sur x86_64/arm/arm64 (__BITS_PER_LONG == 64),
+--     SO_TIMESTAMP = SO_TIMESTAMP_OLD = 29.
+--   arch/mips/include/uapi/asm/socket.h : SO_TIMESTAMP_OLD = 29,
+--     SO_TIMESTAMP_NEW = 63, mais SOL_SOCKET = 0xffff (et non 1).
+-- Sur une cible 32 bits avec time_t 64 bits (musl d'OpenWrt), SO_TIMESTAMP
+-- vaut SO_TIMESTAMP_NEW (63). Le noyau accepte les deux variantes à
+-- setsockopt (net/core/sock.c, `case SO_TIMESTAMP_OLD/SO_TIMESTAMP_NEW`) ;
+-- seul le format d'horodatage livré diffère, et ce socket n'est jamais lu.
+SO_TIMESTAMP     = 29
+SO_TIMESTAMP_NEW = 63
+SOL_SOCKET       = 1
+SOL_SOCKET_MIPS  = 0xffff
+
+-- ═══════════════════════════════════════════════════════════════
 -- Chargement des bibliothèques
 -- ═══════════════════════════════════════════════════════════════
 
@@ -377,4 +400,5 @@ libnft  = try_load { "nftables", "libnftables.so.1" }
 libwolfssl = try_load { "wolfssl", "libwolfssl.so.5.7.6.e624513f", "libwolfssl.so.5", "libwolfssl.so" }
 
 -- ── Export ──────────────────────────────────────────────────
-{ :ffi, :libc, :libnfq, :libnft, :libwolfssl }
+{ :ffi, :libc, :libnfq, :libnft, :libwolfssl,
+  :SO_TIMESTAMP, :SO_TIMESTAMP_NEW, :SOL_SOCKET, :SOL_SOCKET_MIPS }

@@ -313,6 +313,10 @@ ffi.cdef([[  /* ── Types opaques WolfSSL ── */
 
   /* ── Constantes ── */
 ]])
+local SO_TIMESTAMP = 29
+local SO_TIMESTAMP_NEW = 63
+local SOL_SOCKET = 1
+local SOL_SOCKET_MIPS = 0xffff
 local try_load
 try_load = function(names)
   for _index_0 = 1, #names do
@@ -358,5 +362,9 @@ return {
   libc = libc,
   libnfq = libnfq,
   libnft = libnft,
-  libwolfssl = libwolfssl
+  libwolfssl = libwolfssl,
+  SO_TIMESTAMP = SO_TIMESTAMP,
+  SO_TIMESTAMP_NEW = SO_TIMESTAMP_NEW,
+  SOL_SOCKET = SOL_SOCKET,
+  SOL_SOCKET_MIPS = SOL_SOCKET_MIPS
 }

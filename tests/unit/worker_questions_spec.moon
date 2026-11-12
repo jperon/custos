@@ -30,6 +30,7 @@ for decl in *{
 STUB_KEYS = {
   "ffi_defs", "worker_questions", "filter", "nfq/ethernet", "nfq_loop"
   "forge_dns", "captive_ips", "bridge_raw", "dup_query", "raw_send", "metrics"
+  "log", "lib.netstamp"
 }
 saved = {}
 
@@ -102,6 +103,18 @@ describe "worker_questions", ->
   metrics_calls = {}
   -- Âge renvoyé par le stub nfq_loop.packet_age_ms ; nil = horodatage absent.
   stub_age = nil
+  -- Captures de l'activation de l'horodatage noyau : le vrai module
+  -- lib.netstamp est utilisé, avec un faux libc (socket/setsockopt/close).
+  socket_calls = {}
+  setsockopt_calls = {}
+  closed_fds = {}
+  fail_socket = false
+  fail_setsockopt = false
+  setsockopt_ok = nil
+  fake_errno = nil
+  -- Captures des logs INFO/WARN émis par worker_questions et lib.netstamp.
+  log_infos = {}
+  log_warns = {}
   cfg = require "config"
 
   before_each ->
@@ -111,16 +124,69 @@ describe "worker_questions", ->
     captured_opts = nil
     metrics_calls = {}
     stub_age = nil
+    socket_calls = {}
+    setsockopt_calls = {}
+    closed_fds = {}
+    fail_socket = false
+    fail_setsockopt = false
+    setsockopt_ok = nil
+    log_infos = {}
+    log_warns = {}
+    fake_errno = ffi.new "int[1]", 0
     cfg.nfqueue = cfg.nfqueue or {}
     cfg.nfqueue.max_age_ms = 1500
 
     ev_r, ev_w     = make_pipe!
     pipe_r, pipe_w = make_pipe!
 
+    -- Stub de log : capture INFO/WARN (dont question_shed_timestamp et
+    -- netstamp_enable_failed) tout en conservant les autres fonctions.
+    base_log = saved["log"] or {}
+    log_stub = {}
+    for k, v in pairs base_log
+      log_stub[k] = v
+    log_stub.log_info = (thunk) -> log_infos[#log_infos + 1] = thunk!
+    log_stub.log_warn = (thunk) -> log_warns[#log_warns + 1] = thunk!
+    package.loaded["log"] = log_stub
+
+    -- Faux libc : les appels sans rapport (write, clock_gettime, …) retombent
+    -- sur ffi.C ; socket/setsockopt/close sont scriptés pour vérifier
+    -- l'activation de SO_TIMESTAMP sans ouvrir de vrai fd.
+    fake_libc = setmetatable {
+      __errno_location: -> fake_errno
+      socket: (domain, type, protocol) ->
+        socket_calls[#socket_calls + 1] = { :domain, :type, :protocol }
+        if fail_socket
+          fake_errno[0] = 97   -- EAFNOSUPPORT
+          return -1
+        77
+      setsockopt: (fd, level, optname, optval, optlen) ->
+        val = ffi.cast "int*", optval
+        setsockopt_calls[#setsockopt_calls + 1] = {
+          :fd, :level, :optname, optlen: optlen, value: val[0]
+        }
+        ok = false
+        if setsockopt_ok
+          ok = setsockopt_ok level, optname
+        elseif not fail_setsockopt
+          ok = true
+        if ok
+          return 0
+        fake_errno[0] = 92   -- ENOPROTOOPT
+        -1
+      close: (fd) ->
+        closed_fds[#closed_fds + 1] = fd
+        0
+    }, { __index: ffi.C }
+
     -- Stubs locaux : restaurés en after_each (cf. save_all/restore_all).
     package.loaded["ffi_defs"] = {
       :ffi
-      libc: ffi.C
+      libc: fake_libc
+      SO_TIMESTAMP: 29
+      SO_TIMESTAMP_NEW: 63
+      SOL_SOCKET: 1
+      SOL_SOCKET_MIPS: 0xffff
       libnfq: {
         nfq_get_payload: (nfad, out) ->
           ffi.copy payload_buf, payload, #payload
@@ -172,6 +238,7 @@ describe "worker_questions", ->
     }
 
     package.loaded["worker_questions"] = nil
+    package.loaded["lib.netstamp"] = nil
     wq = require "worker_questions"
     wq.run 0, pipe_w, nil, ev_w, nil
 
@@ -183,6 +250,11 @@ describe "worker_questions", ->
   invoke = (raw) ->
     payload = raw
     wq.handle_question nil, nil, 1
+
+  find_log = (entries, action) ->
+    for entry in *entries
+      return entry if entry and entry.action == action
+    nil
 
   -- ── Câblage métriques (P2.3) ─────────────────────────────────────────────
   -- Depuis la suppression de `maybe_flush`, la seule écriture périodique des
@@ -300,6 +372,103 @@ describe "worker_questions", ->
       stub_age = 100
       assert.equals 1, invoke ipv4_udp DNS_QUERY
       assert.equals 2, wq.get_shed_total!
+
+  -- ── Activation de l'horodatage noyau (netstamp) ───────────────────────────
+  -- Sans socket SO_TIMESTAMP ouvert, `netstamp_needed_key` reste inactive et
+  -- NFQA_TIMESTAMP n'est jamais joint : le délestage serait silencieusement
+  -- inerte. Ces tests utilisent le vrai lib.netstamp avec un faux libc.
+  describe "horodatage noyau (netstamp)", ->
+    it "ouvre un socket UDP SO_TIMESTAMP au démarrage quand max_age_ms > 0", ->
+      assert.equals 1, #socket_calls
+      assert.equals 2, socket_calls[1].domain    -- AF_INET
+      assert.equals 2, socket_calls[1].type      -- SOCK_DGRAM
+      assert.equals 0, socket_calls[1].protocol
+      assert.equals 1, #setsockopt_calls
+      assert.equals 77, setsockopt_calls[1].fd
+      assert.equals 1, setsockopt_calls[1].level        -- SOL_SOCKET générique
+      assert.equals 29, setsockopt_calls[1].optname      -- SO_TIMESTAMP
+      assert.equals 1, setsockopt_calls[1].value
+      assert.equals 4, setsockopt_calls[1].optlen
+      assert.equals 0, #closed_fds
+      assert.equals 77, package.loaded["lib.netstamp"].get_fd!
+
+    it "n'ouvre aucun socket quand max_age_ms = 0", ->
+      socket_calls = {}
+      setsockopt_calls = {}
+      cfg.nfqueue.max_age_ms = 0
+      wq.run 0, pipe_w, nil, ev_w, nil
+      assert.equals 0, #socket_calls
+      assert.equals 0, #setsockopt_calls
+
+    it "essaie SOL_SOCKET 0xffff après échec du niveau générique (MIPS)", ->
+      socket_calls = {}
+      setsockopt_calls = {}
+      closed_fds = {}
+      setsockopt_ok = (level) -> level == 0xffff
+      wq.run 0, pipe_w, nil, ev_w, nil
+      assert.equals 1, #socket_calls
+      last = setsockopt_calls[#setsockopt_calls]
+      assert.equals 0xffff, last.level
+      assert.equals 29, last.optname
+      assert.equals 0, #closed_fds
+
+    it "échec de socket : WARN netstamp_enable_failed (stage socket), non fatal", ->
+      socket_calls = {}
+      setsockopt_calls = {}
+      fail_socket = true
+      wq.run 0, pipe_w, nil, ev_w, nil
+      assert.equals 1, #socket_calls
+      assert.equals 0, #setsockopt_calls
+      warn = find_log log_warns, "netstamp_enable_failed"
+      assert.is_not_nil warn
+      assert.equals "socket", warn.stage
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      assert.equals 1, invoke ipv4_udp DNS_QUERY
+
+    it "échec de setsockopt : WARN, fd fermé, worker non fatal", ->
+      socket_calls = {}
+      setsockopt_calls = {}
+      closed_fds = {}
+      fail_setsockopt = true
+      wq.run 0, pipe_w, nil, ev_w, nil
+      assert.equals 1, #socket_calls
+      assert.equals 4, #setsockopt_calls   -- 2 niveaux × 2 variantes
+      assert.same { 77 }, closed_fds
+      warn = find_log log_warns, "netstamp_enable_failed"
+      assert.is_not_nil warn
+      assert.equals "setsockopt", warn.stage
+      assert.equals 92, warn.errno
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      assert.equals 1, invoke ipv4_udp DNS_QUERY
+
+    it "log INFO unique question_shed_timestamp available=true au premier paquet", ->
+      stub_age = 100
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      assert.equals 1, invoke ipv4_udp DNS_QUERY
+      assert.equals 1, invoke ipv4_udp DNS_QUERY
+      entries = {}
+      for entry in *log_infos
+        entries[#entries + 1] = entry if entry and entry.action == "question_shed_timestamp"
+      assert.equals 1, #entries
+      assert.is_true entries[1].available
+
+    it "log INFO unique question_shed_timestamp available=false sans horodatage", ->
+      stub_age = nil
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      invoke ipv4_udp DNS_QUERY
+      invoke ipv4_udp DNS_QUERY
+      entries = {}
+      for entry in *log_infos
+        entries[#entries + 1] = entry if entry and entry.action == "question_shed_timestamp"
+      assert.equals 1, #entries
+      assert.is_false entries[1].available
+
+    it "aucun log question_shed_timestamp quand le délestage est désactivé", ->
+      cfg.nfqueue.max_age_ms = 0
+      wq.run 0, pipe_w, nil, ev_w, nil
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      invoke ipv4_udp DNS_QUERY
+      assert.is_nil find_log log_infos, "question_shed_timestamp"
 
   -- ── handle_question : décisions et messages IPC ───────────────────────────
   describe "handle_question", ->

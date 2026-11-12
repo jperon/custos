@@ -59,6 +59,7 @@ do
 end
 local dup_query = require("dup_query")
 local raw_send = require("raw_send")
+local netstamp = require("lib.netstamp")
 local so_cfg = config.second_opinion or { }
 local pipe_wfd = nil
 local mac_learn_wfd = nil
@@ -75,6 +76,7 @@ end
 local events_wfd = nil
 local shed_max_age_ms = nil
 local shed_total = 0
+local shed_ts_logged = false
 local captive_domain = nil
 local captive_ip4 = nil
 local captive_ip6 = nil
@@ -270,6 +272,15 @@ local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
   if shed_max_age_ms then
     local age_ms = packet_age_ms(nfad)
+    if not (shed_ts_logged) then
+      shed_ts_logged = true
+      log_info(function()
+        return {
+          action = "question_shed_timestamp",
+          available = age_ms ~= nil
+        }
+      end)
+    end
     if age_ms and age_ms > shed_max_age_ms then
       shed_total = shed_total + 1
       log_info(function()
@@ -548,7 +559,9 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   else
     shed_max_age_ms = nil
   end
+  shed_ts_logged = false
   if shed_max_age_ms then
+    netstamp.enable()
     log_info(function()
       return {
         action = "question_shed_armed",

@@ -207,6 +207,7 @@ local RL_IDENTITY_KEYS = {
   "src",
   "src_ip",
   "ssl_err",
+  "stage",
   "status",
   "target",
   "tlla",

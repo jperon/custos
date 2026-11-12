@@ -123,7 +123,7 @@ RL_IDENTITY_KEYS = {
   "resolver", "resolver_ip", "resolvers", "resolution", "response"
   "ret", "retry_budget_skipped", "rl_shared", "role", "rule", "rule_id", "rule_kept", "rule_new", "rules"
   "section", "selected", "selected_mac", "sessions_file", "sip_method", "sip_status", "slots", "sni", "source"
-  "src", "src_ip", "ssl_err", "status", "target", "tlla", "transient"
+  "src", "src_ip", "ssl_err", "stage", "status", "target", "tlla", "transient"
   "type", "upstream_ip", "upstream_port", "url", "user", "username"
   "verdict", "verify_tls", "version", "vlan", "worker", "worker_idx"
 }

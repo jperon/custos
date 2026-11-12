@@ -37,6 +37,7 @@ bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 dup_query = require "dup_query"
 raw_send = require "raw_send"
+netstamp = require "lib.netstamp"
 so_cfg = config.second_opinion or {}
 
 -- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
@@ -66,6 +67,9 @@ events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactiv
 -- encore servables. Fail-closed : le verdict est NF_DROP, jamais NF_ACCEPT.
 shed_max_age_ms = nil
 shed_total = 0
+-- Log unique de disponibilité de l'horodatage noyau, émis au premier paquet
+-- traité quand le délestage est armé (voir question_shed_timestamp).
+shed_ts_logged = false
 
 -- ── Vol de question DNS pour le portail captif ───────────────────
 -- Initialisés dans run() depuis filter.get_auth_cfg().
@@ -256,6 +260,12 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- ne sont jamais délestées sur l'âge (worker_responses).
   if shed_max_age_ms
     age_ms = packet_age_ms nfad
+    -- Observabilité unique : le premier paquet révèle si l'horodatage noyau
+    -- est réellement joint (NFQA_TIMESTAMP). Sans lui, le délestage est
+    -- inerte même si le seuil est armé ; aucun log par paquet ensuite.
+    unless shed_ts_logged
+      shed_ts_logged = true
+      log_info -> { action: "question_shed_timestamp", available: age_ms != nil }
     if age_ms and age_ms > shed_max_age_ms
       shed_total += 1
       log_info -> {
@@ -532,7 +542,12 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   age_cfg = tonumber (config.nfqueue or {}).max_age_ms
   age_cfg = 1500 if age_cfg == nil
   shed_max_age_ms = if age_cfg > 0 then age_cfg else nil
+  shed_ts_logged = false
   if shed_max_age_ms
+    -- Active netstamp_needed_key (socket SO_TIMESTAMP conservé, jamais fermé)
+    -- pour que le noyau joigne NFQA_TIMESTAMP aux paquets de la file. Un
+    -- échec est journalisé en WARN mais n'empêche pas le worker de démarrer.
+    netstamp.enable!
     log_info -> { action: "question_shed_armed", max_age_ms: shed_max_age_ms }
 
   -- Initialize filter with data passed from main.moon
