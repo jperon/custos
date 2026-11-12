@@ -684,6 +684,28 @@ describe "worker_doh.handle_doh_client — routage HTTP/1.1", ->
     assert.equals "RESP_BYTES", capture.sent[1].body
     assert.is_true tls._closed!
 
+  it "réponse de refus DoH (REFUSED+EDE) : 200 application/dns-message, QR=1 RA=1", ->
+    -- Une REFUSED de doh.query doit rester une réponse DoH valide pour Firefox
+    -- (sinon TRR_RCODE_FAIL) : statut HTTP 200, content-type binaire, en-tête
+    -- DNS de réponse. Cf. dns_ede.build_blocked_response.
+    dns_ede = require "dns_ede"
+    query = doh.build_dns_query "example.com", 1
+    blocked = dns_ede.build_blocked_response {}, query, "denied"
+    assert.is_not_nil blocked
+    query_stub.process_query = (raw) -> blocked, nil
+    run_client {
+      method: "POST", path: "/dns-query"
+      headers: { ["content-type"]: "application/dns-message" }
+      body: query
+    }
+    assert.equals 200, capture.sent[1].status
+    assert.equals "application/dns-message", capture.sent[1].headers["Content-Type"]
+    assert.equals blocked, capture.sent[1].body
+    parsed = require("ipparse.l7.dns").parse capture.sent[1].body, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 5, parsed.header.rcode
+
   it "GET JSON construit la requête demandée et rend le JSON DNS", ->
     forged_resp = make_dns_response 0, { { rtype: 1, ttl: 60, rdata: string.char(1,2,3,4) } }
     query_stub.process_query = (raw) ->

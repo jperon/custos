@@ -22,12 +22,13 @@ describe "config.default_rules", ->
     ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
     package.loaded["config"] = nil
 
-  -- Defaults : 3 règles captives/DoH + 4 règles SafeSearch (Google/YouTube/Bing/DDG)
-  -- car captive_portal ET safe_search sont true par défaut.
-  it "sans config externe : default_rules = captives/DoH (3) + SafeSearch (4)", ->
+  -- Defaults : 4 règles captives/DoH/TRR + 4 règles SafeSearch
+  -- (Google/YouTube/Bing/DDG) car captive_portal ET safe_search sont true par
+  -- défaut.
+  it "sans config externe : default_rules = captives/DoH/TRR (4) + SafeSearch (4)", ->
     cfg = reload nil
-    assert.equals 7, #cfg.filter.default_rules
-    assert.equals 7, #cfg.filter.rules
+    assert.equals 8, #cfg.filter.default_rules
+    assert.equals 8, #cfg.filter.rules
 
   it "default_rules[1] utilise l'action nxdomain", ->
     cfg = reload nil
@@ -42,6 +43,12 @@ describe "config.default_rules", ->
   it "default_rules[3] utilise l'action dnsonly", ->
     cfg = reload nil
     assert.equals "dnsonly", cfg.filter.rules[3].actions[1]
+
+  it "default_rules[4] est la confirmation TRR (dnsonly, example.com)", ->
+    cfg = reload nil
+    assert.equals "dnsonly", cfg.filter.rules[4].actions[1]
+    assert.same {"example.com"}, cfg.filter.rules[4].conditions.to_domains
+    assert.same {"example.com"}, cfg.filter.trr_confirmation
 
   it "les règles captives par défaut sont autonomes (to_domains en ligne, pas de liste externe)", ->
     cfg = reload nil
@@ -65,14 +72,14 @@ describe "config.default_rules", ->
     } } }]]
     cfg = reload path
     os.remove path
-    assert.equals 4, #cfg.filter.rules
+    assert.equals 5, #cfg.filter.rules
     assert.equals "nxdomain", cfg.filter.rules[1].actions[1]
-    assert.equals "Règle user", cfg.filter.rules[4].description
+    assert.equals "Règle user", cfg.filter.rules[5].description
 
   it "captive_portal défaut true : les 2 règles captives sont présentes, sans marqueur interne", ->
     cfg = reload nil
     assert.is_true cfg.filter.captive_portal
-    assert.equals 7, #cfg.filter.rules   -- 3 captives/DoH + 4 SafeSearch
+    assert.equals 8, #cfg.filter.rules   -- 4 captives/DoH/TRR + 4 SafeSearch
     for idx in *{2, 3}
       assert.is_nil cfg.filter.rules[idx].captive, "le marqueur interne 'captive' ne doit pas fuiter"
 
@@ -82,7 +89,7 @@ describe "config.default_rules", ->
     cfg = reload path
     os.remove path
     assert.is_false cfg.filter.captive_portal
-    assert.equals 1, #cfg.filter.rules
+    assert.equals 2, #cfg.filter.rules   -- nxdomain + confirmation TRR
     assert.equals "nxdomain", cfg.filter.rules[1].actions[1]
     assert.equals "use-application-dns.net", cfg.filter.rules[1].conditions.to_domain
 
@@ -92,7 +99,7 @@ describe "config.default_rules", ->
     cfg = reload path
     os.remove path
     assert.is_false cfg.filter.captive_portal
-    assert.equals 1, #cfg.filter.rules
+    assert.equals 2, #cfg.filter.rules   -- nxdomain + confirmation TRR
 
   it "default_rules: {} dans la config utilisateur désactive les defaults", ->
     path = "tmp/config_spec_nodefault.moon"

@@ -49,6 +49,7 @@ upstream_resp  = nil
 decide_result  = nil
 user_result    = nil
 validator_override = nil  -- override renvoyé par le stub doh.validator (query_classified)
+response_inject_nft = true -- inject_nft renvoyé par le stub filter.run_on_response
 
 reset = ->
   nft_calls      = {}
@@ -58,6 +59,7 @@ reset = ->
   decide_result  = { verdict: true, reason: "ok", rule_id: "r_main", timeout: "5m", description: "allow", allow_modifiers: {} }
   user_result    = nil
   validator_override = nil
+  response_inject_nft = true
 
 record_add = (key, dest, rule_id, timeout, corr) ->
   nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id, :corr }
@@ -90,7 +92,7 @@ package.loaded["filter"] = {
     last_req = req
     decide_result
   run_on_response: (rule_id, dns_raw, reason) ->
-    { dns_raw: dns_raw, modified: false, inject_nft: true, action_label: nil }
+    { dns_raw: dns_raw, modified: false, inject_nft: response_inject_nft, action_label: nil }
 }
 package.loaded["nft_queue"] = {
   add_ip4: record_add, add_ip6: record_add, add_mac4: record_add, add_mac6: record_add
@@ -145,7 +147,26 @@ describe "doh.query.process_query", ->
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.is_not_nil resp
     assert.equals 5, rcode_of resp        -- REFUSED
+    -- Réponse bien formée pour Firefox (TRR/DoH) : QR=1, RA=1, ancount=0.
+    parsed = dns_mod.parse resp, 1, false
+    assert.is_true parsed.header.qr
+    assert.is_true parsed.header.ra
+    assert.equals 5, parsed.header.rcode
+    assert.equals 0, parsed.header.ancount
     assert.equals 0, #nft_calls
+
+  it "dnsonly (nom de confirmation TRR) : NOERROR livrée, aucune injection nft", ->
+    -- Le nom de confirmation TRR de Firefox reçoit une vraie résolution
+    -- (NOERROR) sans entrée d'allowlist nft : c'est la sémantique de l'action
+    -- `dnsonly` (skip_nft, cf. src/filter/actions/dnsonly.moon).
+    decide_result = { verdict: true, reason: "DNS only (no nft) by rule: trr", rule_id: "r_trr", timeout: "5m", description: "trr", allow_modifiers: {} }
+    response_inject_nft = false
+    resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
+    assert.is_not_nil resp
+    assert.equals 0, rcode_of resp        -- NOERROR : réponse amont réelle
+    assert.equals upstream_resp, resp
+    assert.equals 0, #nft_calls
+    assert.equals 0, #wait_acks
 
   it "fail-closed : insertion nft échouée → REFUSED", ->
     nft_result = false                    -- toutes les insertions échouent
@@ -176,7 +197,8 @@ describe "doh.query.process_query", ->
   it "captive : vole le domaine du portail vers l'IP locale, sans upstream", ->
     query_mod.set_captive "example.com", "10.35.1.254", nil
     upstream_resp = nil   -- l'upstream ne doit PAS être appelé
-    decide_called = false
+    -- Le vol précède la décision : même un refus ne doit pas l'empêcher.
+    decide_result = { verdict: false, reason: "denied", description: "deny" }
     resp = query_mod.process_query make_query!, "10.0.0.1", "unknown", {}
     assert.is_not_nil resp
     assert.equals 0, rcode_of resp           -- NOERROR
