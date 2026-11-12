@@ -325,4 +325,9 @@ run = (queue_num, fds) ->
   :classify_direction
   :resolve_outbound_mac
   remember_phone_ip: cache_ip_to_mac
+  -- Exports de test (couverture unitaire) : mêmes fonctions, aucun changement
+  -- de comportement.
+  :format_ip, :cache_ip_to_mac, :known_phone_mac, :is_lan_ip
+  :query_phone_mac, :allow_mac_ip, :allow_sip_peer, :handle_packet
+  :ip_to_mac
 }
