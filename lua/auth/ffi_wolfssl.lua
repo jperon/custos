@@ -240,8 +240,17 @@ newcontext = function(opts)
   if ctx == nil then
     error("wolfSSL_CTX_new() failed")
   end
-  local ret = libwolfssl.wolfSSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM)
-  if ret < 0 then
+  local ret = nil
+  if symbol_available("wolfSSL_CTX_use_certificate_chain_file") then
+    ret = libwolfssl.wolfSSL_CTX_use_certificate_chain_file(ctx, cert_file)
+    if ret ~= 1 then
+      ret = nil
+    end
+  end
+  if not (ret == 1) then
+    ret = libwolfssl.wolfSSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM)
+  end
+  if ret ~= 1 then
     libwolfssl.wolfSSL_CTX_free(ctx)
     error("wolfSSL_CTX_use_certificate_file() failed")
   end

@@ -233,8 +233,19 @@ newcontext = (opts = {}) ->
   if ctx == nil
     error "wolfSSL_CTX_new() failed"
 
-  ret = libwolfssl.wolfSSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM)
-  if ret < 0
+  -- Charger la chaîne complète quand le symbole existe : un fichier
+  -- `fullchain.pem` (feuille + intermédiaires) doit être envoyé au client,
+  -- sinon il ne peut pas vérifier la feuille (« unable to verify the first
+  -- certificate »). `wolfSSL_CTX_use_certificate_file` ne lit que le premier
+  -- certificat du fichier. Repli sur l'ancien appel si le symbole manque ou
+  -- si le chargement de la chaîne échoue (fichier feuille seule).
+  ret = nil
+  if symbol_available "wolfSSL_CTX_use_certificate_chain_file"
+    ret = libwolfssl.wolfSSL_CTX_use_certificate_chain_file(ctx, cert_file)
+    ret = nil if ret != 1
+  unless ret == 1
+    ret = libwolfssl.wolfSSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM)
+  if ret != 1
     libwolfssl.wolfSSL_CTX_free(ctx)
     error "wolfSSL_CTX_use_certificate_file() failed"
 
