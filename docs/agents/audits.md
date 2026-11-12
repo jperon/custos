@@ -3436,3 +3436,35 @@ gain attendu est celui de `perf.md` §15.3 (0 % de perte jusqu'à 300 q/s
 `mixed` en 2/2 contre 12,6 % en 1/1 dès 400). Les paliers 700/900 `mixed` et
 l'effet de `pending_max` 5 000 sous afflux restent non mesurés (`perf.md`
 §15.5, « reste à faire » de `d-tune`).
+
+### Audit aller/retour DNS : coût de l'authentification (branche d-perfaudit)
+
+Audit **lecture seule** (aucun code modifié, aucun redémarrage, `/etc/custos`
+jamais lu, aucune capture, `perf` absent de la cible et rien installé).
+Détail, protocole et sources : `tmp/perfaudit_report.md` et `perf.md` §16 ;
+données brutes `tmp/perfaudit/results/`.
+
+- **Paliers** : repos + 200 et 350 q/s `mixed` de 30 s, `servus` authentifié
+  (sonde `dig` de 8 A avant chaque phase), 2 destinations (files 0-1/14-15).
+  0 % de perte dans les deux cas ; RTT p50 24,7 ms à 200 mais **474 ms à 350**
+  avec `response_entry` p50 **337 ms** (file noyau, profondeurs max 210/140) —
+  genou entre 200 et 350, machine à 11 % d'idle.
+- **Mécanismes confirmés par le code** : verdict question sans attente
+  (`worker_questions.moon:453-478`), verdict réponse **bloqué sur l'ACK nft une
+  fois par lot** (`worker_responses.moon:446-461`), et **pendant `wait_ack` le
+  socket netlink n'est pas lu** (`on_wait` ne draine que le tube question,
+  `:455`) — mesuré 9-23 % du temps resp via échantillonnage de
+  `/proc/<pid>/syscall` à 20 Hz.
+- **Authentification** : ×1,70-1,71 paquets resp (second avis), **70,6 % des
+  paquets de réponse sur une seule file** (toutes les réponses validateur),
+  réponse A parquée jusqu'au verdict B (occupe la file noyau), 16-20 upserts
+  nft/réponse pour **delta de sets nul** (rafraîchissement des mêmes éléments),
+  `nft` 50,9-64,5 % contre 5-12 % non auth, **≈7,5-8,3 ms CPU/requête contre
+  ≈3,4 ms** en §13 — soit ×2, le coût par paquet restant identique.
+- **Correctifs proposés sans les implémenter** (classement `tmp/perfaudit_report.md`
+  §5.3) : arbitrage config du second avis ; drain netlink pendant `wait_ack`
+  (invariant « pas de verdict avant ACK » à préserver) ; cache d'upsert dans
+  `worker_nft` ; dispersion des IP validateurs ; écritures events/learn/nft
+  coalescées ; `nfq_set_queue_maxlen` ; `jit.profile` avant optimisation CPU.
+- **Documentation** : `perf.md` §16 (nouvelle section datée). Aucune ligne
+  ajoutée à `AGENTS.md`.

@@ -1328,3 +1328,104 @@ emplacements dans le pire cas. **Aucune mesure de charge n'a été rejouée** :
 les paliers 500 `mixed` / 1000 `up` de §15.3 restent à refaire avec une valeur
 supérieure à 1024 pour vérifier que `queue_dropped` disparaît avant le plafond
 CPU.
+
+## 16. Audit aller/retour d'une requête : pourquoi l'authentification charge (2026-11-12, branche `d-perfaudit`)
+
+Audit **lecture seule** (aucune modification de code) répondant à la question :
+« un client authentifié devrait coûter **moins** cher (moins de réécritures,
+attente amont pipelinable) — pourquoi coûte-t-il **plus** ? ». Tracé du chemin
+complet, mesures à 200 et 350 q/s `mixed` authentifiés (30 s, 2 destinations,
+sonde `dig` avant chaque palier), phase de repos en comparaison.
+Rapport complet, protocole et sources : `tmp/perfaudit_report.md` (données
+brutes `tmp/perfaudit/results/`). Comparaison non authentifiée par référence à
+§13 (aucune source non authentifiée commandable sans modification d'état).
+
+### 16.1 Le verdict d'une question n'attend rien ; celui d'une réponse attend l'ACK nft (par lot)
+
+- **Question** : verdict `NF_ACCEPT` posé juste après l'écriture IPC
+  (`src/worker_questions.moon:453-478`) — ni l'amont, ni nft ; seule l'écriture
+  IPC peut dormir (5 × 20 ms sur tube plein, `src/ipc.moon:27,114-130`),
+  **jamais observé** en mesure (0 warn, 0 `nanosleep` échantillonné à 20 Hz).
+- **Réponse** : le verdict attend l'ACK nft **une fois par lot NFQUEUE**
+  (`flush_deferred`, `src/worker_responses.moon:446-461` →
+  `nft_queue.wait_ack`, `src/nft_queue.moon:210-248`, budget 150 ms). Exception
+  : verdict **immédiat** pour les réponses refusées
+  (`src/worker_responses.moon:1291`) et `need_ack` faux pour `dnsonly`/`skip_nft`
+  (`:803`).
+- **Point clé** : pendant `wait_ack`, le worker ne surveille **que** le tube ACK
+  et `on_wait` ne draine **que** le tube question (`:455`) : **le socket netlink
+  des réponses n'est pas lu** — mesuré **9-23 %** du temps des workers réponses
+  (`ppoll(nfds=1)` vs `ppoll(nfds=3)` de la boucle principale, échantillonnage
+  20 Hz, `tmp/perfaudit/results/*_sys.txt`).
+
+### 16.2 Mesures (authentifié, 30 s chacun)
+
+| palier | perte | RTT p50/p99 | `response_entry` p50/p99 | prof. max q14/q15 | resp¹ / dns¹ / nft (utime+stime) |
+|---|---|---|---|---|---|
+| repos | — | — | — | 0 | ≤0,4 % chacun |
+| 200 `mixed` | 0 % | 24,7 / 73 ms | **2 / 37 ms** | 16 / 5 | 63,5 / 39,0 / 50,9 % |
+| 350 `mixed` | 0 % | **474 / 873 ms** | **337 / 648 ms** | **210 / 140** | 105,3 / 73,3 / 64,5 % |
+
+¹ somme des deux workers. Sources : `tmp/perfaudit/results/*_extract.txt`,
+`*_decomp.txt`, `*_analyse.txt`. `ack_wait_us` : non nul sur 38,7 % des lignes
+à 200 (p90 9 ms), sur 2,8 % à 350 (max 151 9 ms = le timeout de 150 ms, 1
+occurrence) : **à 350 l'attente d'ACK n'est plus le goulot de latence, la file
+noyau l'est** (`response_entry` = file + RTT résolveur, identique pour les deux
+règles et les deux destinations → file noyau). `/proc/stat` à 350 :
+user 57,5 / sys 26,6 / **idle 11,3** / sirq 3,3 % (même signature que §15.4) ;
+`ksoftirqd` ≤ 0,17 % ; `qdrop` = `udrop` = **0** partout ; context switches :
+volontaires ≈250/s à 200 → involontaires ≈300/s à 350 (préemption, CPU
+ininterrompu).
+
+### 16.3 Ce qui change avec l'authentification (les chiffres qui tranchent)
+
+- **×1,70-1,71 paquets dans le chemin réponses** (Δcompteurs nft
+  `nft_r/nft_q` = 10207/6001 et 17958/10507) : le second avis duplique chaque
+  question `r_utilisateurs` (`src/worker_questions.moon:108-121,473-476`).
+- **Toutes les réponses du validateur (B) tombent sur UNE file** : à 350,
+  Δ`id_sequence` q14 = 12 715 = 5 250 A (`10.35.4.1`) + 7 465 B ≈ 7 434 lignes
+  `r_utilisateurs` → **70,6 % sur `resp-q14`** (reproduit §15.2). La réponse A
+  est en outre **parquée sans verdict** jusqu'à B ou 80 ms
+  (`src/worker_responses.moon:1314-1322`) : elle occupe alors son emplacement
+  dans la file noyau pendant l'aller-retour amont.
+- **16-20 insertions nft par réponse Tailscale** (8 A × `ip4`+`mac4`,
+  `src/response_inject.moon:106-131`), **1 syscall `write()` par élément**
+  (`src/nft_queue.moon:108-121`) : worker `nft` **50,9-64,5 %** contre 5-12 % en
+  §13 — et **delta de taille de sets = 0** (mêmes éléments réinsérés à chaque
+  réponse pour rafraîchir leur timeout, comptes avant/après identiques) : le
+  CPU nft est du rafraîchissement, pas de l'insertion neuve.
+- **CPU par requête ≈ 7,5-8,3 ms** (resp+dns+nft+events+mac-lrn) contre
+  **≈3,4 ms** en non authentifié (§13.3) : **×2 par requête**. Le coût **par
+  paquet** resp est en revanche le même (1,78-1,89 ms ici vs 1,63-1,71 en §13.3)
+  : « moins de paquets à réécrire » est donc une fausse piste — il y en a
+  **davantage**, et c'est le nft additionnel qui double la facture.
+
+### 16.4 Réponse à la question du pipeline
+
+Le pipeline question→amont **existe** (verdict immédiat, processus/queues
+distincts) : l'attente du résolveur n'est pas dans le chemin critique. Il ne
+« libère » pas le chemin réponses parce que (a) le verdict réponse est
+synchrone sur l'ACK nft et **suspend la lecture netlink** pendant l'attente,
+(b) le second avis immobilise A (sans verdict) pendant un second aller-retour
+dont les réponses tombent sur une file unique, (c) chaque worker est mono-thread
+par file hachée et la boucle lot (≤64) est sérialisée : traitement intégral →
+`wait_ack` → verdicts, sans recouvrement (`src/nfq_loop.moon:206-227`). Entre
+200 et 350 q/s, ρ sur la file chaude atteint 1 : file debout ≈200-350 paquets
+↔ `response_entry` 337 ms (mesuré), machine pourtant à 11 % d'idle.
+
+### 16.5 Pistes de correctif (proposées, non implémentées)
+
+Classement et détails (fichier:ligne, gain, risque) : `tmp/perfaudit_report.md`
+§5.3. Ordre recommandé : (1) arbitrage config du second avis (−40 à −70 % CPU
+resp), (2) drainer le netlink **pendant** `wait_ack` (borne `MAX_BATCH_PKTS`
+inchangée ; préserver l'invariant « pas de verdict avant ACK »), (3) cache
+d'upsert côté `worker_nft` (20-30 % du CPU nft), (5) dispersion des IP
+validateurs (file chaude), (4/7) écritures events/learn/nft coalescées,
+(8) `jit.profile` avant toute optimisation CPU résiduelle.
+
+**Non fait / douteux** : `perf` absent de la cible (rien installé) ; `wchan`
+vide et `stack` non symbolisés (kallsyms absent) — remplacés par
+`/proc/<pid>/syscall` ; paliers > 350 non lancés ; aucune capture L2 ;
+`chain_strip` non déterminable sans config ; le démontage de la file pendant
+les 10 dernières secondes du palier 350 (capacité +10 % à entrée constante)
+reste inexpliqué (échauffement JIT ou résolveur) faute d'instrumentation.
