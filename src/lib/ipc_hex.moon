@@ -33,17 +33,37 @@ to_hex = (s) ->
   return "" unless s and #s > 0
   (s\gsub ".", HEX_BYTE)
 
+-- Valeur hexadécimale d'un octet de code (nil si ce n'est pas un caractère
+-- hexadécimal) : décodage par paires sans `sub`+`tonumber`+`string.char`
+-- intermédiaires (cf. docs/agents/perf.md §18 : le décodage pèse ~50 % du
+-- coût du tube question→réponse mesuré par le banc `make bench-hotpath`).
+HEX_VAL = {}
+for i = 0, 9
+  HEX_VAL[string.byte("0") + i] = i
+for i = 0, 5
+  HEX_VAL[string.byte("a") + i] = 10 + i
+  HEX_VAL[string.byte("A") + i] = 10 + i
+
 --- Décode une chaîne hexadécimale en octets, avec validation.
+-- Ordre des erreurs inchangé : longueur impaire d'abord, puis caractère non
+-- hexadécimal (l'ancienne version validait par un motif avant de décoder).
 -- @tparam string h Chaîne hexadécimale
 -- @treturn string|nil Octets décodés
 -- @treturn string|nil Code d'erreur ("hex_odd_length", "hex_invalid_chars")
 from_hex = (h) ->
   return "", nil if not h or #h == 0
-  return nil, "hex_odd_length"   if (#h % 2) != 0
-  return nil, "hex_invalid_chars" unless h\match "^[0-9a-fA-F]+$"
+  n = #h
+  return nil, "hex_odd_length"   if (n % 2) != 0
   out = {}
-  for i = 1, #h, 2
-    out[#out + 1] = string.char tonumber(h\sub(i, i + 1), 16)
+  j = 1
+  i = 1
+  while i <= n
+    hi = HEX_VAL[h\byte(i)]
+    lo = HEX_VAL[h\byte(i + 1)]
+    return nil, "hex_invalid_chars" unless hi and lo
+    out[j] = string.char(hi * 16 + lo)
+    j += 1
+    i += 2
   table.concat(out), nil
 
 --- Découpe une ligne IPC sur le séparateur "|", champs vides préservés.

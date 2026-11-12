@@ -22,20 +22,35 @@ to_hex = function(s)
   end
   return (s:gsub(".", HEX_BYTE))
 end
+local HEX_VAL = { }
+for i = 0, 9 do
+  HEX_VAL[string.byte("0") + i] = i
+end
+for i = 0, 5 do
+  HEX_VAL[string.byte("a") + i] = 10 + i
+  HEX_VAL[string.byte("A") + i] = 10 + i
+end
 local from_hex
 from_hex = function(h)
   if not h or #h == 0 then
     return "", nil
   end
-  if (#h % 2) ~= 0 then
+  local n = #h
+  if (n % 2) ~= 0 then
     return nil, "hex_odd_length"
   end
-  if not (h:match("^[0-9a-fA-F]+$")) then
-    return nil, "hex_invalid_chars"
-  end
   local out = { }
-  for i = 1, #h, 2 do
-    out[#out + 1] = string.char(tonumber(h:sub(i, i + 1), 16))
+  local j = 1
+  local i = 1
+  while i <= n do
+    local hi = HEX_VAL[h:byte(i)]
+    local lo = HEX_VAL[h:byte(i + 1)]
+    if not (hi and lo) then
+      return nil, "hex_invalid_chars"
+    end
+    out[j] = string.char(hi * 16 + lo)
+    j = j + 1
+    i = i + 2
   end
   return table.concat(out), nil
 end
