@@ -433,5 +433,14 @@ return {
   run = run,
   process_line = process_line,
   note_verdict = note_verdict,
-  flush_verdicts = flush_verdicts
+  flush_verdicts = flush_verdicts,
+  current_hour = current_hour,
+  create_signal_fd = create_signal_fd,
+  read_chunk = read_chunk,
+  flush_to_file = flush_to_file,
+  compress_old = compress_old,
+  free_pct_on = free_pct_on,
+  file_age_hours = file_age_hours,
+  cleanup_old = cleanup_old,
+  verdict_key = verdict_key
 }
