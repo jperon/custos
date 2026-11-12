@@ -3135,3 +3135,34 @@ commit par bug ; les tests `pending` correspondants sont activés.
 **Vérification (2026-11-12).** `nix develop --command bash -c "make all &&
 make check && make test"` : **3032 succès / 0 échec / 0 erreur / 0 pending**
 (tests JS 12/12 ; `make check` OK), sortie dans `tmp/test.log`.
+
+### Campagne multi-sources multi-worker (branche d-bench4)
+
+Aucune modification de code : campagne de mesure après le correctif `d-mfix`
+(`perf.md` §12). Résultats complets, protocole et limites dans
+**`docs/agents/perf.md` §13** ; harnais `tmp/bench4/`, rapport
+`tmp/bench4_report.md`.
+
+- **Multi-source IPv6 impossible** : la règle `ip6 daddr fe80::/10 accept`
+  (`nft-rules/dns-filter-bridge.nft:177`) précède les règles DNS NFQUEUE
+  (`:204-205`) ; une question vers la link-local du résolveur contourne le
+  filtre et seule sa réponse est mise en file
+  (`action=response_orphan_dropped`). Aucune IPv6 globale du résolveur
+  n'écoute sur :53. Repli : les neuf adresses IPv4 du même résolveur
+  (`10.35.{1..8,99}.1`) changent le couple d'adresses haché ; cartographie par
+  Δ`id_sequence` (deux files couvertes).
+- **Mesures** (client `servus` **non authentifié**, `mixed` = 70 %
+  `r_refus_a_priori` + 30 % `r_ouverture_complete`, donc sans second avis ni
+  injection nft) : 2 files → 0 % de perte jusqu'à 600 q/s `mixed` et 500 `up`,
+  24,1 % à 700 / 800 ; témoin 1 file au même profil : 0 % à 500 mais p50
+  207,6 ms, 22,8 % de perte dès 600. Gain du multi-worker : ~+20 % de débit et
+  p50 ÷19 à 500.
+- **Nouveau goulot** : `user_dropped` sur les seules files réponses
+  (`queue_dropped` = 0, workers à 46-49 % d'un vCPU, profondeur 258-279) — le
+  tampon netlink des réponses sature sur les rafales du résolveur —, sur une
+  machine à 90-95 % occupée dont ~1 cœur est consommé par le worker DoH
+  (§12.5, toujours présent).
+
+**Vérification (2026-11-12, branche d-bench4).** `nix develop --command bash -c
+"make all && make check && make test"` : **3040 succès / 0 échec / 0 erreur /
+3 pending** (sortie `tmp/test.log`). Aucun fichier de `src/` modifié.
