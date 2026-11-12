@@ -17,17 +17,61 @@
 
 PROTO_UDP = 17
 
---- Choisit dans `resolvers` une IP de la même famille que le paquet client.
--- Détection par présence de ':' (IPv6) dans la chaîne.
+-- Sélecteurs mémoïsés par liste de résolveurs (identité de table) : le
+-- hot-path de duplication appelle get_picker à chaque question, sans allouer.
+_pickers = setmetatable {}, __mode: "k"
+EMPTY = {}
+
+--- Sépare les IP UDP de `resolvers` par famille (une fois par liste).
+-- Les URLs DoH `https://…` ne sont pas des destinations UDP et sont exclues :
+-- elles contiennent ':' et seraient sinon prises pour des IPv6.
+-- @tparam table resolvers Liste d'IP (chaînes), v4 et v6 mélangées.
+-- @treturn table { v4: {...}, v6: {...} }
+udp_lists = (resolvers) ->
+  lists = { v4: {}, v6: {} }
+  for ip in *(resolvers or {})
+    continue unless type(ip) == "string"
+    continue if ip\find "://", 1, true
+    if ip\find ":", 1, true
+      lists.v6[#lists.v6 + 1] = ip
+    else
+      lists.v4[#lists.v4 + 1] = ip
+  lists
+
+--- Crée un sélecteur précalculé (listes par famille figées à la construction).
+-- `pick(version, dns_id, sport)` renvoie l'IP de la bonne famille d'index
+-- `(dns_id + sport) % n + 1` : répartition déterministe par question, sans
+-- allocation ni recherche dans la liste à chaque paquet.
+-- @tparam table resolvers Liste d'IP (v4/v6 mélangées, URLs DoH ignorées).
+-- @treturn function pick(version, dns_id, sport) → string|nil
+new_picker = (resolvers) ->
+  lists = udp_lists resolvers
+  (version, dns_id, sport) ->
+    list = if version == 6 then lists.v6 else lists.v4
+    n = #list
+    return nil if n == 0
+    list[((dns_id or 0) + (sport or 0)) % n + 1]
+
+--- Sélecteur mémoïsé pour une liste donnée (cache faible, clé = la table).
+-- @tparam table|nil resolvers Liste d'IP (v4/v6 mélangées, URLs DoH ignorées).
+-- @treturn function Sélecteur `pick(version, dns_id, sport)`.
+get_picker = (resolvers) ->
+  resolvers = EMPTY unless resolvers
+  p = _pickers[resolvers]
+  return p if p
+  p = new_picker resolvers
+  _pickers[resolvers] = p
+  p
+
+--- Choisit la première IP UDP de la même famille que le paquet client.
+-- Sert uniquement à vérifier qu'une famille est routable au démarrage ; le
+-- choix par paquet (réparti sur toute la famille) passe par `get_picker`.
 -- @tparam table  resolvers Liste d'IP (chaînes), v4 et v6 mélangées.
 -- @tparam number version   Version IP du paquet client (4 ou 6).
--- @treturn string|nil Première IP de la bonne famille, ou nil.
+-- @treturn string|nil Première IP UDP de la bonne famille, ou nil.
 pick_resolver = (resolvers, version) ->
-  want_v6 = version == 6
-  for ip in *(resolvers or {})
-    is_v6 = ip\find(":", 1, true) and true or false
-    return ip if is_v6 == want_v6
-  nil
+  pick = get_picker resolvers
+  pick version, 0, 0
 
 --- Construit le paquet IP dupliqué (UDP uniquement) vers `validator_ip`.
 -- @tparam table   ip       En-tête IP parsé de la question (ipparse l3).
@@ -96,4 +140,4 @@ build_query = (ip, l4, query_raw) ->
   }
   "#{ip_pkt}"
 
-{ :pick_resolver, :build_udp, :build_query }
+{ :pick_resolver, :new_picker, :get_picker, :build_udp, :build_query }

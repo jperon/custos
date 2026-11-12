@@ -134,7 +134,7 @@ describe "worker_questions", ->
       domain_from_url: -> nil
     }
     package.loaded["bridge_raw"] = {}
-    package.loaded["dup_query"] = { pick_resolver: -> nil }
+    package.loaded["dup_query"] = { pick_resolver: -> nil, get_picker: -> -> nil }
     package.loaded["raw_send"] = { routable: -> false }
     package.loaded["metrics"] = {
       init: ->
