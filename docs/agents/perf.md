@@ -622,8 +622,8 @@ Deux écarts avec la campagne §7.1, tous deux constatés dans `logread` :
   au lieu de 40 % Tailscale autorisé par `r_utilisateurs` (8 RR + second avis +
   injection nft). Le coût nft mesuré s'en ressent : 0,7 % d'un vCPU à 40 q/s
   (§12.2) contre 50 % à 200 q/s dans §2.
-- **Le worker DoH tourne à ~100 % d'un vCPU au repos** (§12.5), ce qui retire un
-  cœur sur quatre à la mesure.
+- **Le worker DoH tournait à ~100 % d'un vCPU au repos** (§12.5, corrigé depuis
+  par `d-dohspin`), ce qui retirait un cœur sur quatre à la mesure.
 
 Les chiffres de §12.2 ne sont donc **pas comparables** à la référence
 « 1 worker, file 4 » (300 `mixed` 0 %, 400 9,9 %, 500 35,9 %).
@@ -739,6 +739,22 @@ active sans syscall bloquant). Conséquence pour la mesure : un cœur sur quatre
 est indisponible en permanence. Ce n'est **pas** la cause du blocage §12.3 (le
 worker questions est en `nanosleep`, pas affamé), mais cela abaisse le plafond
 réel de la machine.
+
+**Cause et correctif (branche `d-dohspin`, 2026-11-12).** Le mécanisme est
+maintenant identifié : `lib.socket.socket_select` remplissait `fd_set` avec la
+bibliothèque `bit` de LuaJIT (32 bits) alors que le masque est fait de `long`
+(64 bits sur x86-64), si bien que tout descripteur `>= 32` était surveillé
+**sous l'identité de son alias `fd - 32`**. Le worker DoH hérite des tubes du
+superviseur puis ouvre ses listeners IPv4 et IPv6 : l'un d'eux tombe au-delà
+de 32, et son alias est `stdin`/`stdout` (`/dev/null`, toujours lisible) →
+`select()` rendait aussitôt, `accept` répondait `EAGAIN`, boucle à vide à
+100 % d'un vCPU, sans log, le service restant rendu par le listener sous 32.
+Reproduction locale (descripteurs factices avant `run`) : 271 jiffies utime +
+188 stime en 4 s, `state=R` avant ; 2 jiffies en 5 s, `state=S` après.
+`socket_select` passe désormais par `poll(2)` (`src/lib/socket.moon:470-535`),
+sans masque de bits ni plafond de 1024 ; tests
+`tests/unit/lib/socket_spec.moon:429-464` (échec avant, succès après). Détail :
+`docs/agents/audits.md` § « Worker DoH à ~100 % d'un vCPU au repos ».
 
 ### 12.6 Ce qui reste à mesurer
 
@@ -875,9 +891,11 @@ Aucune modification de `src/`, aucune écriture sur `custos.lan` (lecture seule 
    `r_ouverture_complete` (mesuré : 6359 / 2642 lignes à 300 q/s), et non
    40 % de Tailscale autorisé par `r_utilisateurs` : **ni second avis, ni
    injection nft** (CPU `nft` 5-12 %, contre 50 % à 200 q/s dans §2).
-2. **Le worker DoH consomme toujours ~1 cœur** (anomalie §12.5, non corrigée) :
-   96,8 % d'un vCPU au repos (13 s) et 60-98 % pendant les paliers. Un quart de
-   la machine est donc indisponible en permanence.
+2. **Le worker DoH consommait ~1 cœur** (anomalie §12.5, corrigée depuis par la
+   branche `d-dohspin` : cause `fd >= 32` aliasé, `poll(2)` en remplacement de
+   `select(2)`) : 96,8 % d'un vCPU au repos (13 s) et 60-98 % pendant les
+   paliers. Un quart de la machine était donc indisponible en permanence ; les
+   chiffres de cette campagne restent marqués par cette consommation.
 
 Les chiffres ci-dessous ne sont donc **pas comparables terme à terme** à ceux de
 §7.1 (profil authentifié avec injection nft) : ils mesurent la montée en charge
@@ -1016,8 +1034,8 @@ rupture `resp-q4` 78 %, `dns-q1` 77-83 %, `nft` 60-63 % d'un vCPU chacun.
    user 60-63 %, sys 27-31 %, softirq 4 %, idle 5-8 %) : le plafond global est
    bien le CPU agrégé des 4 cœurs, mais **aucun worker n'est saturé** — c'est la
    différence avec §7.1/§10, où `resp-q4` à 78 % était le goulot.
-3. **Le worker DoH est le premier consommateur** : 0,6 à 1,0 cœur en continu
-   (§12.5, toujours présent). Sans lui, ~25 % de capacité en plus.
+3. **Le worker DoH était le premier consommateur** : 0,6 à 1,0 cœur en continu
+   (§12.5, corrigé depuis par `d-dohspin`). Sans lui, ~25 % de capacité en plus.
 
 En résumé : le multi-worker a supprimé la sérialisation par worker de §7.1, mais
 le plafond est désormais (a) le tampon netlink des réponses, qui jette les
@@ -1040,7 +1058,8 @@ par question) réparti sur 4 cœurs dont un est mangé par DoH.
 - Le diag à 600 `mixed` (14 s) et celui à 800 `up` (12 s, avec `top` et
   échantillonnage d'états) sont des diagnostics, pas des paliers de 30 s ; leurs
   chiffres ne figurent pas dans le tableau §13.3.
-- Le worker DoH (~1 cœur) et plusieurs `logread -f` résiduels (six observés,
+- Le worker DoH (~1 cœur, anomalie §12.5 depuis corrigée par `d-dohspin`) et
+  plusieurs `logread -f` résiduels (six observés,
   sessions tierces, non tués : accès lecture seule) gonflent la consommation
   mesurée.
 - Aucun redémarrage, aucune reprise n'a été nécessaire : la sonde unique après

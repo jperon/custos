@@ -3166,3 +3166,63 @@ Aucune modification de code : campagne de mesure après le correctif `d-mfix`
 **Vérification (2026-11-12, branche d-bench4).** `nix develop --command bash -c
 "make all && make check && make test"` : **3040 succès / 0 échec / 0 erreur /
 3 pending** (sortie `tmp/test.log`). Aucun fichier de `src/` modifié.
+
+### Worker DoH à ~100 % d'un vCPU au repos (branche d-dohspin)
+
+Symptôme (pré-prod, `perf.md` §12.5 et §13.1) : `custos:doh` en état `R` en
+permanence, 97-99 % d'un vCPU **sans aucune requête DoH**, aucun log d'erreur,
+alors que le service DoH répondait normalement. Aucun `sleep` n'a été ajouté :
+la cause est un descripteur surveillé par le mauvais numéro.
+
+- **Cause racine** (`src/lib/socket.moon`, ancien `socket_select`). Le masque
+  `fd_set` était rempli à la main avec la bibliothèque `bit` de LuaJIT, qui
+  opère sur 32 bits, alors que `struct fd_set` est un tableau de `long` : 8
+  octets sur x86-64, 4 sur OpenWrt 32 bits. `fd_set_set`/`fd_set_isset`
+  utilisaient `fd / 64` et `bit.lshift(1, fd % 64)` ; au-delà de 31, le
+  décalage est ramené modulo 32 et le bit est écrit dans le mot bas. Tout fd
+  `>= 32` était donc surveillé **sous l'identité de son alias `fd - 32`**.
+- **Pourquoi le worker DoH dépasse 32** : le superviseur lui lègue tous les
+  tubes IPC (`question_response` ×2, `mac_learn`, `vlan_learn`, `events`,
+  `nft`, `strip_learn`), les ACK nft (un par worker réponses, un pour DoH), le
+  bus de verdicts du second avis (`src/main.moon`) ; `worker_doh.run` ouvre
+  ensuite le listener IPv4 **puis IPv6** (`src/worker_doh.moon:691-695`) et les
+  ACK. Selon la configuration, le listener IPv6 — ou les deux — tombe à
+  `fd >= 32`.
+- **Pourquoi la boucle ne dort jamais** : l'alias `fd - 32` du listener est
+  souvent `0`/`1` (`stdin`/`stdout`), qui en service pointent sur `/dev/null`,
+  **lisible en permanence**. `select()` rendait donc immédiatement, à chaque
+  tour : `srv\accept!` renvoyait `nil` (EAGAIN), la boucle
+  (`src/worker_doh.moon:740-745`) repartait aussitôt. D'où 100 % de CPU en
+  `R`, sans log (la boucle ne journalise rien sans connexion) et sans casser le
+  service (le listener resté sous 32 était, lui, correctement surveillé).
+
+Reproduction locale (`tmp/repro_doh_fd32.lua` + `tmp/measure_fd32.sh`, non
+versionnés) : 40 descripteurs `/dev/null` ouverts avant `worker_doh.run` →
+listeners sur les fds 44 et 45, alias 12 et 13 (`/dev/null`, toujours
+lisibles). Avant correctif : `state=R`, 271 jiffies utime + 188 stime en 4 s
+≈ **115 % d'un vCPU** (le worker acceptait quand même les connexions). Après
+correctif : `state=S`, 2 jiffies en 5 s ≈ 0,4 %, connexion TCP et handshake TLS
+toujours servis.
+
+**Correctif** (`src/lib/socket.moon:470-535`) : `socket_select` utilise
+`poll(2)` au lieu de `select(2)` — plus de masque de bits, plus de plafond de
+1024 descripteurs, et donc plus d'alias. Sémantique conservée : `POLLHUP` et
+`POLLERR` valent « prêt » en lecture comme en écriture (comme `select(2)`),
+`POLLNVAL` lève `poll() failed: invalid fd <n>`, `EINTR` rend des tables vides,
+`timeout` en secondes est converti en millisecondes (`nil` = infini, `0` =
+rendu immédiat). Les déclarations `struct fd_set`/`select` restent dans le
+`cdef` du module (déclarations globales LuaJIT partagées avec `ffi_defs`, cf.
+`tests/unit/ffi/ffi_defs_spec.moon`), mais ne sont plus utilisées.
+
+**Tests de non-régression** (`tests/unit/lib/socket_spec.moon:429-464`) :
+descripteur dupliqué via `fcntl(F_DUPFD)` à `s1.fd + 32` (alias lisible).
+Avant correctif, les deux tests échouent — `select` signale `watch` prêt alors
+que seul l'alias a des données, et rend immédiatement au lieu d'attendre le
+timeout ; après, `watch` n'est prêt que sur ses propres données et l'attente
+dure bien ~150 ms (mesure murale `CLOCK_MONOTONIC`, `os.clock` ne comptant que
+le temps CPU).
+
+**Vérification (2026-11-12, branche d-dohspin).** `nix develop --command bash -c
+"make all && make check && make test"` : **3045 succès / 0 échec / 0 erreur /
+0 pending** (sortie `tmp/test.log`). Les `tests/**/*_spec.lua` générés sont
+ignorés par git (`.gitignore:38`) : seul le `.moon` du spec est versionné.

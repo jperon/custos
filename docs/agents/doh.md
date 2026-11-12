@@ -378,5 +378,37 @@ segmentation L2.
 `from_nets` (sous-réseaux IP) reste utilisable pour les règles devant s'appliquer
 aux deux workers sans dépendre du VLAN.
 
+### Veille du worker DoH : `poll(2)` au lieu de `select(2)`
+
+`worker_doh.run` attend les connexions dans une boucle
+`while true` → `reap_one` → `socket.select all_servers, nil, 0.1` →
+`srv\accept!` (`src/worker_doh.moon:740-774`). Cette boucle ne consomme rien au
+repos **à condition** que la couche de scrutation surveille réellement les bons
+descripteurs.
+
+Défaut (branche `d-dohspin`) : `lib.socket.socket_select` remplissait le masque
+`fd_set` avec la bibliothèque `bit` de LuaJIT, qui est en 32 bits, alors que
+`struct fd_set` est un tableau de `long` (8 octets sur x86-64). Tout
+descripteur `>= 32` était donc surveillé sous l'identité de son alias
+`fd - 32`. Le worker DoH hérite de tous les tubes du superviseur
+(`src/main.moon`) puis ouvre son listener IPv4 et son listener IPv6 : selon la
+configuration, l'un des deux tombe à `fd >= 32`, et son alias est souvent
+`stdin`/`stdout` (`/dev/null`, lisible en permanence). `select()` rendait alors
+immédiatement à chaque tour, `accept` répondait `EAGAIN`, et le worker
+consommait ~100 % d'un vCPU en état `R`, sans aucun log — tout en continuant à
+servir le DoH par le listener resté sous 32 (mesures et reproduction :
+`docs/agents/perf.md` §12.5, `docs/agents/audits.md` § « Worker DoH à ~100 %
+d'un vCPU au repos »).
+
+Correctif : `socket_select` s'appuie désormais sur `poll(2)`
+(`src/lib/socket.moon:470-535`), sans masque de bits ni plafond de 1024
+descripteurs. Sémantique conservée pour les appelants (`worker_doh`,
+`auth/server.moon`, `auth/sni_peek.moon`) : `POLLHUP`/`POLLERR` valent
+« prêt » dans les deux sens, `POLLNVAL` lève une erreur, `EINTR` rend des
+tables vides, `timeout` reste en secondes (`nil` = infini). Tests de
+non-régression dans `tests/unit/lib/socket_spec.moon:429-464` (descripteur
+dupliqué à `s1.fd + 32`, alias lisible : plus de réveil immédiat, plus de
+fausse disponibilité).
+
 ---
 
