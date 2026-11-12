@@ -3021,34 +3021,63 @@ de `worker_tls` sont simulées en unitaire, le backend crypto natif (wolfssl /
 mbedtls / openssl) n'étant pas disponible dans le runner ; l'extraction réelle
 reste couverte par le groupe G14 de `make test-e2e`.
 
-**Bugs constatés, non corrigés (hors périmètre de la campagne) :**
+**Bugs constatés par la campagne, corrigés ensuite (branche `d-bugs3`)** —
+détail des correctifs et des tests dans la sous-section
+« Trois bugs révélés par la couverture : corrections (branche d-bugs3) » :
 
-- **`worker_events.flush_to_file` crée les TSV en mode 0000.**
-  `src/worker_events.moon:229` et `:235` passent `FILE_MODE` (nombre Lua) à
+- **`worker_events.flush_to_file` créait les TSV en mode 0000.**
+  `src/worker_events.moon:231` et `:237` passaient `FILE_MODE` (nombre Lua) à
   `libc.open(path, flags, ...)`, déclaré variadique (`src/ffi_defs.moon:23`).
-  LuaJIT transmet un nombre en vararg comme `double` ; le noyau lit un
+  LuaJIT transmet un nombre en vararg comme `double` ; le noyau lisait un
   `mode_t` indéfini dans les registres entiers. Vérifié hors tests :
   `ffi.C.open(p, flags, 420)` crée un fichier `----------` (0000), alors que
   `ffi.C.open(p, flags, ffi.cast("int", 420))` crée `-rw-r--r--` (0644). Les
-  fichiers `events-*.tsv` sont donc illisibles (sauf root). Test
-  `tests/unit/worker_events_core_spec.moon` marqué `pending`.
-- **`worker_arp_sniffer.extract_tlla` ignore une option TLLA finale.**
-  `src/worker_arp_sniffer.moon:101` exige `len >= opt_start + 8` alors qu'une
-  option de 8 octets à l'offset `opt_start` finit à `opt_start + 7` ; et
-  `:109` rejette `offset + opt_len > len` alors que le dernier octet est à
+  fichiers `events-*.tsv` étaient donc illisibles (sauf root).
+- **`worker_arp_sniffer.extract_tlla` ignorait une option TLLA finale.**
+  `src/worker_arp_sniffer.moon:102` exigeait `len >= opt_start + 8` alors
+  qu'une option de 8 octets à l'offset `opt_start` finit à `opt_start + 7` ;
+  et `:111` rejetait `offset + opt_len > len` alors que le dernier octet est à
   `offset + opt_len - 1`. Une NA minimale (14 + 40 + 24 + 8 = 86 octets)
-  n'a donc jamais son TLLA lu : `process_ipv6` retombe sur la MAC source
-  Ethernet, au lieu de la MAC annoncée. Test pending dans
-  `worker_arp_sniffer_bugs_spec.moon`.
-- **`worker_arp_sniffer.run` initialise `pollfd` en 1-based.**
-  `src/worker_arp_sniffer.moon:410-413` alloue `struct pollfd[#fds]` (indices
-  0..#fds-1) puis écrit `pfds[i]` pour `i = 1..#fds` (boucle `ipairs`).
-  Avec une interface : `pfds[0]` (lu par `poll`, ligne 425) n'est jamais
-  initialisé (fd 0 = stdin) et `pfds[1]` est écrit hors bornes. Vérifié : le
-  processus de test se termine anormalement après trois appels à `run()` avec
-  un socket simulé ; les tests de boucle sont donc marqués pending dans
-  `worker_arp_sniffer_bugs_spec.moon`.
+  n'avait donc jamais son TLLA lu : `process_ipv6` retombait sur la MAC source
+  Ethernet, au lieu de la MAC annoncée.
+- **`worker_arp_sniffer.run` initialisait `pollfd` en 1-based.**
+  `src/worker_arp_sniffer.moon:412-415` alloue `struct pollfd[#fds]` (indices
+  0..#fds-1) puis écrivait `pfds[i]` pour `i = 1..#fds` (boucle `ipairs`).
+  Avec une interface : `pfds[0]` (lu par `poll`, ligne 424) n'était jamais
+  initialisé (fd 0 = stdin) et `pfds[1]` était écrit hors bornes.
 
 **Vérification.** `nix develop --command bash -c "make all && make check &&
 make test"` : **3018 succès / 0 échec / 0 erreur / 3 pending** (référence
 avant campagne : 2854 / 0) ; sortie complète dans `tmp/test.log`.
+
+### Trois bugs révélés par la couverture : corrections (branche d-bugs3)
+
+Les trois bugs laissés `pending` par la campagne d-covw sont corrigés, un
+commit par bug ; les tests `pending` correspondants sont activés.
+
+1. **Arguments variadiques FFI (`open`, `fcntl`).** `flush_to_file` caste
+   désormais le mode en `ffi.cast("int", …)` (`src/worker_events.moon:231` et
+   `:237`). Un audit de tous les appels variadiques de `src/` recevant un
+   number Lua a aussi corrigé `src/lib/os_constants.moon:77,86,88` (sonde
+   `open` avec `0600`), `src/filter/conditions/to_domainlist.moon:110`
+   (`open` O_RDONLY, mode ignoré sans O_CREAT) et `src/bench/load.moon:77`
+   (`fcntl` F_GETFL). `src/lib/filelock.moon` et
+   `src/doh/upstream_doh_curl.moon` étaient déjà corrects (casts
+   `unsigned int` / `long` / `const char *`). Test activé : « crée des
+   fichiers TSV lisibles » (`tests/unit/worker_events_core_spec.moon`), qui
+   échouait en `Permission denied` avant le correctif.
+2. **Option TLLA terminant exactement la trame.** Le garde initial ne demande
+   plus que les deux octets d'en-tête d'option (`src/worker_arp_sniffer.moon:102`)
+   et le rejet d'option tronquée compare le dernier octet à `len`
+   (`:111`, `offset + opt_len - 1 > len`). Test activé dans
+   `tests/unit/worker_arp_sniffer_bugs_spec.moon` (trame de 86 octets).
+3. **Tableau `pollfd` 0-based dans `run()`.** La boucle écrit
+   `pfds[i - 1].fd/.events` (`src/worker_arp_sniffer.moon:414-415`). Test de
+   régression dans `worker_arp_sniffer_bugs_spec.moon` : `poll` simulé
+   inspecte `pfds[0]` (fd du socket, `POLLIN`) puis sort de la boucle infinie
+   par erreur. Règle ajoutée dans `.agents/skills/moonscript/SKILL.md`
+   (« Tableaux FFI : indices 0-based »).
+
+**Vérification (2026-11-12).** `nix develop --command bash -c "make all &&
+make check && make test"` : **3032 succès / 0 échec / 0 erreur / 0 pending**
+(tests JS 12/12 ; `make check` OK), sortie dans `tmp/test.log`.
