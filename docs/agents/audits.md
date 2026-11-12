@@ -1558,7 +1558,9 @@ exporte ces symboles.
   bibliothèque 5.6.6 (`LD_LIBRARY_PATH` vers un lien `libwolfssl.so`/`.so.44`
   pointant sur 5.6.6, au prix de 6 échecs px5g dus au mélange d'ABI) : il est
   donc **antérieur** à ce changement et non causé par wolfSSL 5.8.4. Une
-  relance suffit à obtenir un `make test` vert ; non corrigé ici.
+  relance suffit à obtenir un `make test` vert ; non corrigé dans cette passe.
+  Deux sources d'UB dans les specs ont depuis été corrigées : voir
+  § « SIGSEGV intermittent de LuaJIT en fin de suite (branche d-segvdoc) ».
 - **VM e2e (lecture seule, `./libvirt/homelab.sh ssh custos`).** La VM
   `homelab-custos` a `libwolfssl5.9.1.e624513f` (`ls /usr/lib/libwolfssl*`) et
   `grep -c wolfSSL_UseALPN` = 1 : ALPN y est disponible, donc aucune
@@ -2701,9 +2703,14 @@ stats.** Preuves :
   hook luacov (seuls les compteurs de hits diffèrent légèrement, sans effet sur
   un pourcentage de lignes).
 - `Makefile:213` (`coverage`) utilise ce helper (rapport toujours produit par
-  `luacov -c .luacov`). Ce run unique peut encore mourir du même SIGSEGV
+  `luacov -c .luacov`). Ce run unique pouvait encore mourir du même SIGSEGV
   intermittent : pour un chiffre fiable sur toute la suite, utiliser
-  `Makefile:246` (`coverage-split`).
+  `Makefile:246` (`coverage-split`). Depuis `0051ed4` (branche d-segvdoc,
+  § « SIGSEGV intermittent de LuaJIT en fin de suite »), plus aucun SIGSEGV
+  n'a été observé en 20 exécutions : `make coverage` en un seul processus est
+  donc **peut-être** réparé — **à revérifier** par une exécution complète.
+  `coverage-split` reste la référence fiable (`Makefile:246`) et n'est pas
+  retiré.
 - `coverage-split` : un processus Busted par fichier de spec (stats séparées,
   fusionnées par `tools/merge_luacov_stats.lua`, somme des hits par ligne),
   relance des specs qui meurent sans stats (crash intermittent), et passe
@@ -2941,3 +2948,51 @@ quels : `"4-5"` y décrit une mesure passée, pas une configuration à déployer
 "make all && make check && make test"` : **2865 succès / 0 échec / 0 erreur /
 0 pending** (`tmp/test.log`), `check_globals` OK, tests JS 12/12. `make
 test-e2e` non lancé (consigne « pas de ssh »).
+
+### SIGSEGV intermittent de LuaJIT en fin de suite (branche d-segvdoc)
+
+Le fait connu de `d-wolfenv` (§ ci-dessus, `:1552-1563`) : environ une exécution
+sur trois de Busted meurt d'un **SIGSEGV dans `luajit` après la fin des tests**
+(récapitulatif non écrit, aucun test en échec).
+
+- **Cause (partielle).** Les quatre cores d'une campagne de 12 runs ont la même
+  pile : `lj_alloc_free` (`src/lj_alloc.c:1400`, ou `:1372` pour les plus
+  anciens) ← `lj_alloc_f` (`:1483`) ← `gc_sweep` (`src/lj_gc.c:424`) ou
+  `gc_onestep` (`:687`) ← `lj_gc_freeall` (`:613`) ← `main`
+  (`src/luajit.c:599`). Dans un core, l'en-tête d'allocateur (8 octets à
+  `objet-8`) d'un `GCtab` **vivant** de `g->gc.root` est mis à zéro ; dans un
+  autre, les pointeurs `fd`/`bk` d'un free chunk de ~2 Mio sont écrasés par des
+  `TValue`s : les métadonnées de l'allocateur sont corrompues par une écriture
+  hors bornes. Le pointeur d'écriture fautif n'a **pas** été isolé ; deux bugs
+  de test réels, en revanche, l'ont été.
+- **Correctif (`0051ed4`, 2026-11-12).** Deux sources d'UB mémoire dans les
+  specs :
+  1. `tests/unit/socket_spec.moon:139-147` installait un callback LuaJIT
+     (`ffi.cast` d'une fonction Lua) comme handler `SIGALRM` ; un signal tombé
+     pendant l'exécution de la VM réentre dans Lua hors des points sûrs
+     (« bad callback »). Remplacé par le handler C `getpid()`
+     (async-signal-safe) : `select()` renvoie toujours EINTR, le test garde son
+     sens.
+  2. les stubs `nfq_get_payload` de
+     `tests/unit/worker_auth_queue_spec.moon:26,48-49`,
+     `tests/unit/worker_questions_spec.moon:80,107-108`,
+     `tests/unit/worker_reject_forge_spec.moon:77,91-92` et
+     `tests/unit/worker_doh_vlan_spec.moon:49,56-57` rendaient un pointeur vers
+     un cdata `ffi.new` local, collecté dès le retour du stub (use-after-free
+     côté worker). Tampon `payload_buf` ancré au niveau du spec (65536 octets,
+     taille réelle de `nfq_loop`).
+- **Mesure.** Avant : **4 SIGSEGV / 12** exécutions de `make test-unit` (runs
+  1, 3, 8, 10, `tmp/segv/full-before/` de la branche `d-segv`), plus 1 SIGTERM
+  (récapitulatif écrit). Après `0051ed4` : **0 / 20** — 20 runs consécutifs à
+  `2826 successes / 0 failures / 0 errors / 0 pending`
+  (`tmp/segv/after/` de la branche `d-segv`).
+- **Limite.** Le crash avait cessé de se reproduire dès 07:45, avant même le
+  correctif : la corrélation est forte mais ne prouve pas l'unicité de la
+  cause. Le LuaJIT épinglé (`2.1.1774638290` = `fbb36bb`, 2026-03-27) précède
+  plusieurs correctifs mémoire de `v2.1` (jusqu'à `c4b1e2f73`, 2026-11-08) ;
+  passer à `v2.1` HEAD exigerait de reconstruire le jeu de rocks
+  `luajit.withPackages` (suivi recommandé, hors périmètre).
+
+**Vérification (2026-11-12).** `nix develop --command bash -c "make all && make
+check && make test"` : **2865 succès / 0 échec / 0 erreur / 0 pending**
+(`tmp/verify.log`), tests JS 12/12, `make check` OK.

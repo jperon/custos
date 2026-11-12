@@ -16,7 +16,7 @@
 | `make test` | aucun (pas de root) | Compile les specs `tests/unit/**/*_spec.moon` + helpers, puis exécute Busted. Couvre parsing, `filter.*`, `ipc`, `nft_queue`, `dns_ede`, `metrics`, `webui`, `sync`, `doh`, `sip` et les workers. |
 | `make test-unit` | aucun | Sous-ensemble Busted sans dépendances FFI (CI rapide). |
 | `make test-ffi` | wolfssl + libsocket | Tests FFI socket / WolfSSL / intégration TLS. |
-| `make coverage-split` | aucun | Couverture **exacte** ligne-par-ligne (~30 min) : un Busted par spec, stats luacov fusionnées, rapport dans `tmp/coverage/`. `make coverage` (un seul processus, ~25 min) peut encore mourir d'un SIGSEGV LuaJIT intermittent sous le hook luacov ; `make coverage-quick` donne un ordre de grandeur par échantillonnage. |
+| `make coverage-split` | aucun | Couverture **exacte** ligne-par-ligne (~30 min) : un Busted par spec, stats luacov fusionnées, rapport dans `tmp/coverage/`. `make coverage` (un seul processus, ~25 min) pouvait mourir d'un SIGSEGV LuaJIT intermittent sous le hook luacov ; **peut-être réparé** par `0051ed4` (0 SIGSEGV / 20 exécutions) — **à revérifier**, `coverage-split` reste la référence. `make coverage-quick` donne un ordre de grandeur par échantillonnage. |
 | `make check` | aucun | Vérification syntaxique des `.lua` compilés **et** contrôle des lectures de globales non déclarées (`tools/check_globals.sh`). **Bloquante** : `exit 1` si au moins un fichier ne se charge pas (rapport complet affiché) ou si une globale inconnue est lue. |
 | `make bench` | aucun | Micro-bench in-process (ns/op + KB) des hot-paths. Cf. [src/bench/README.md](../src/bench/README.md). |
 | `make bench-load TARGET=host[:port]` | un résolveur DNS joignable | Charge DNS bout-en-bout (QPS, latences p50/p95/p99, pertes). Variables : `DURATION`, `RATE`, `DOMAINS`, `ITERS`, `SAVE_BASELINE`. |
@@ -145,6 +145,11 @@ vain). Aucun test ne doit en dépendre.
 La VM e2e `custos` installe `libwolfssl` par `apk`/`opkg` sans épinglage
 (`libvirt/homelab.sh:404`) : au 2026-11-11 c'est `libwolfssl5.9.1`, qui exporte
 les mêmes symboles ALPN.
+
+## Pièges des specs Busted (FFI)
+
+- **Jamais de handler de signal en fonction Lua** (`ffi.cast` d'une fonction Lua) dans un spec : le signal réentre dans la VM hors des points sûrs (LuaJIT panique « bad callback » ou corrompt son état) ; utiliser une fonction C async-signal-safe (cf. `tests/unit/socket_spec.moon:139-147`).
+- **Un stub qui rend un pointeur** (ex. `nfq_get_payload`) **doit pointer vers un tampon qui survit au retour du stub** (ancré au niveau du spec, pas un `ffi.new` local) : sinon use-after-free dans le code testé (cf. `payload_buf` dans `tests/unit/worker_auth_queue_spec.moon:26`).
 
 ## Pièges OpenWrt
 
