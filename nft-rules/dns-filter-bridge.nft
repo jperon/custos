@@ -201,8 +201,19 @@ table bridge dns-filter-bridge {
     # DNS → NFQUEUE.
     # La table bridge voit TOUT le trafic bridgé, y compris le transit
     # inter-VLAN (client → résolveur tiers).
-    meta l4proto {udp, tcp} th dport 53 log level debug prefix "custos question: " counter queue num {QUEUE_QUESTIONS} comment "DNS questions → NFQUEUE"
-    meta l4proto {udp, tcp} th sport 53 log level debug prefix "custos response: " counter queue num {QUEUE_RESPONSES} comment "DNS responses → NFQUEUE"
+    # Les deux règles ci-dessous sont GÉNÉRÉES par nft_rules.substitute via les
+    # ancres DNS_QUESTIONS_RULES / DNS_RESPONSES_RULES (sans accolades dans ce
+    # commentaire, sinon la substitution les remplacerait aussi) :
+    #   - une seule file → `queue num X` (comportement historique, inchangé) ;
+    #   - une plage      → une règle par famille (IPv4/IPv6) avec
+    #     `queue to jhash <IP client> . <port client> mod N offset <1re file>`,
+    #     c.-à-d. répartition par (IP, port) du client et non par couple
+    #     d'adresses (docs/agents/perf.md §11.1 et §11.5).
+    # Sans listener sur la file, le paquet est droppé : pas de `bypass`, comme
+    # dans la règle littérale précédente (sinon le trafic DNS contournerait le
+    # filtre).
+{DNS_QUESTIONS_RULES}
+{DNS_RESPONSES_RULES}
 
     # ULA IPv6
     ip6 daddr fc00::/7 accept comment "ULA IPv6"

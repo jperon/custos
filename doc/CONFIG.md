@@ -384,11 +384,24 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 > profil s'applique).
 
 **Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
-les paquets par le noyau, **par flux** : `queue num N-M` hache le couple
-d'adresses source/destination (trié, sans les ports) et le protocole, donc tous
-les paquets d'un même flux — et les deux sens d'une même conversation — tombent
-sur la même file (`include/net/netfilter/nf_queue.h`, `hash_v4`/`hash_bridge`).
-`fanout` ne doit **pas** être ajouté : ce flag répartit par CPU, pas par flux.
+les paquets par le noyau sur **un worker par file**. Deux modes selon le nombre
+de files (généré par `nft_rules.dns_queue_rules`, `src/nft_rules.moon:163`) :
+
+- **une seule file** (`"4"`) : la règle historique `queue num 4`, **inchangée** ;
+- **plusieurs files** : une règle **par famille** (IPv4/IPv6) et par sens, du
+  type `queue to jhash <clé> mod N offset <première file>` :
+  - questions : clé `ip saddr . th sport` (resp. `ip6 saddr . th sport`) ;
+  - réponses : clé `ip daddr . th dport` (resp. `ip6 daddr . th dport`) ;
+
+  la clé porte donc sur l'IP **et** le port du CLIENT, et `mod N` / `offset`
+  couvrent exactement les files de la plage. Sélecteurs, `log`, `counter` et
+  `comment` sont ceux de la règle d'origine ; **pas de `bypass`** (un paquet
+  sans worker reste droppé, comme avant). Sans cette clé, l'ancien hachage de
+  `queue num N-M` (couple d'adresses trié, sans les ports,
+  `include/net/netfilter/nf_queue.h`) concentrait toutes les réponses du
+  résolveur validateur sur une seule file (`docs/agents/perf.md` §15.2/§16.3,
+  validations au §11.5).
+- `fanout` ne doit **pas** être ajouté : ce flag répartit par CPU, pas par flux.
 
 Pour les réponses DNS, l'appariement question/réponse et le « second avis » ne
 dépendent pas de cette affinité :
@@ -397,9 +410,11 @@ dépendent pas de cette affinité :
   question→réponse (fan-out) ; chaque worker réponses possède donc la table
   `pending` complète et peut apparier n'importe quelle réponse ;
 - les verdicts du résolveur validateur (second avis) sont diffusés entre workers
-  réponses par un bus dédié (un pipe par worker), car la réponse du validateur
-  et celle du résolveur ont des couples d'adresses différents, donc des files
-  différentes.
+  réponses par un bus dédié (un pipe par worker). Avec la clé (IP, port) du
+  client, la réponse du validateur et celle du résolveur aboutissent chez le
+  **même** worker — le port source du client est préservé par la duplication
+  (`src/dup_query.moon:47`) ; le bus reste le repli si les deux paquets ne
+  coïncident pas.
 
 Coût : `N` processus réponses, `N` copies de la table `pending` et `N` écritures
 par question. Le défaut `"3-4"` fork **deux** workers réponses (profil 2/2
@@ -409,10 +424,13 @@ sans coût de fan-out. Le mode
 [`runtime.lowmem`](#2-section-runtime) ramène toute plage à une seule file.
 
 > **Syntaxe.** `queue num` n'accepte qu'un nombre (`"4"`) ou une plage contiguë
-> croissante (`"14-15"`). Une liste avec virgules (`"4,6"`) est une erreur de
-> syntaxe nft qui ferait échouer l'application du ruleset : pour `responses`,
-> elle est ramenée à sa première file avec l'avertissement
-> `nfqueue_responses_range_not_contiguous`.
+> croissante (`"14-15"`) ; avec plusieurs files, Custos n'émet plus `queue num`
+> mais les règles `jhash` ci-dessus. Une liste avec virgules (`"4,6"`) est une
+> erreur de syntaxe nft : pour `responses`, elle est ramenée à sa première file
+> avec l'avertissement `nfqueue_responses_range_not_contiguous` ; pour
+> `questions`, elle est conservée et le générateur émet un `queue num` par
+> segment contigu (une règle `jhash mod N offset …` ne couvrirait que N files
+> consécutives à partir de la première).
 
 > **Unicité des files.** Chaque numéro de file ne peut appartenir qu'à **un
 > seul rôle** : le noyau livre chaque paquet à un seul des sockets abonnés à une
@@ -426,7 +444,7 @@ sans coût de fan-out. Le mode
 ```moonscript
 nfqueue: {
   questions: "0-1"     -- 2 workers questions
-  responses: "14-15"   -- 2 workers réponses (répartition par flux)
+  responses: "14-15"   -- 2 workers réponses (répartition par (IP, port) client)
   captive:   "20"
   reject:    "10-11"
   auth:      "5"

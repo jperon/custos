@@ -66,7 +66,10 @@ Les numéros de queue sont **configurables** (section `nfqueue` de la config, ou
 UCI : `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_REJECT`,
 `QUEUE_AUTH`, `QUEUE_SNI`, `QUEUE_SIP`). Ils prennent un nombre ou une **plage
 contiguë** (`"14-15"` → un worker par file) ; `queue num` n'accepte pas de liste
-avec virgules. Deux rôles ne peuvent pas partager un numéro de file : au
+avec virgules (pour `responses`, une liste est ramenée à sa première file avec
+un WARN ; pour `questions`, le générateur de règles émet un `queue num` par
+segment contigu — cf. § « Workers DNS multiples »). Deux rôles ne peuvent pas
+partager un numéro de file : au
 chargement, un chevauchement (plages développées) émet une ERROR
 `nfqueue_overlap` et **refuse le démarrage** (`src/config.moon`). Valeurs par
 défaut : questions `0-1`, responses `3-4`, captive `20`, reject `10-11`, auth
@@ -143,11 +146,27 @@ grossit (`response_entry_ms`, cf. [perf.md](../docs/agents/perf.md) §16).
 ### Workers DNS multiples (questions et réponses)
 
 `nfqueue.questions` et `nfqueue.responses` acceptent une plage contiguë
-(`"0-1"`, `"14-15"`) : un worker par file. La répartition est faite par le noyau,
-**par flux** (`queue num N-M` → `nfqueue_hash`, adresses triées + protocole,
-sans les ports), donc tous les paquets d'un même flux arrivent au même worker.
-`fanout` n'est pas utilisé : ce flag répartit par CPU, ce qui casserait cette
-affinité.
+(`"0-1"`, `"14-15"`) : un worker par file. La répartition est faite par le
+noyau et, **depuis la branche `d-qhash` (2026-11-12)**, elle porte sur l'IP
+**et** le port du client :
+
+- **une seule file** : `queue num X`, inchangé ;
+- **plusieurs files** : `nft_rules.dns_queue_rules`
+  (`src/nft_rules.moon:163`) génère, via les ancres `DNS_QUESTIONS_RULES` /
+  `DNS_RESPONSES_RULES` du template (`nft-rules/dns-filter-bridge.nft:215-216`),
+  **une règle par famille** (IPv4/IPv6) :
+  `queue to jhash <IP client> . <port client> mod N offset <première file>`
+  — questions : `ip saddr . th sport`, réponses : `ip daddr . th dport`
+  (resp. `ip6 …`). Le sélecteur de famille est `ip version 4` / `ip6 version 6`
+  (`ether type` ne matche pas les trames VLAN encapsulées ; `meta nfproto` est
+  refusé en famille bridge). Sans `bypass` : un paquet sans worker reste droppé,
+  comme avant. Détail et validations : `docs/agents/perf.md` §11.5.
+
+Sans cette clé, l'ancien hachage (`queue num N-M` → `nfqueue_hash`, adresses
+triées + protocole, sans les ports) concentrait toutes les réponses du
+résolveur validateur sur une seule file (`docs/agents/perf.md` §15.2, §16.3).
+`fanout` n'est pas utilisé : ce flag répartit par CPU, ce qui casserait
+l'affinité de flux.
 
 L'état par processus des workers DNS est rendu compatible par deux fan-outs
 (`main.moon`) :
@@ -159,13 +178,18 @@ L'état par processus des workers DNS est rendu compatible par deux fan-outs
    n'importe quelle file trouve sa transaction. À un seul worker, un seul pipe
    est créé : comportement identique à avant.
 2. **Verdicts du second avis** : bus `so_verdict_<i>` (un pipe par worker,
-   l. 335-344), chaque worker n'écrivant qu'aux autres. Nécessaire parce que la
-   réponse d'origine (client ↔ résolveur) et celle du validateur (client ↔
-   validateur) ont des couples d'adresses différents, donc des files
-   différentes. Le worker qui reçoit le verdict d'un autre le mémorise ou
-   débloque immédiatement la réponse parquée (`drain_verdict_bus`) ; le pipe du
-   bus est ajouté au `poll` de `nfq_loop` (`extra_rfds`) pour un réveil immédiat
-   sans attendre le budget de 80 ms.
+   l. 335-344), chaque worker n'écrivant qu'aux autres. Il était nécessaire
+   parce que la réponse d'origine (client ↔ résolveur) et celle du validateur
+   (client ↔ validateur) ont des couples d'adresses différents, donc des files
+   différentes sous l'ancien hachage. Depuis `d-qhash`, les deux réponses ont
+   la même clé `(daddr = client, dport = port client)` — la question dupliquée
+   conserve le port source du client (`src/dup_query.moon:47`) — et arrivent
+   donc chez le même worker ; **le bus reste en place comme repli** (fragments,
+   reconfiguration en cours de vie, retour à `queue num`). Le worker qui reçoit
+   le verdict d'un autre le mémorise ou débloque immédiatement la réponse
+   parquée (`drain_verdict_bus`) ; le pipe du bus est ajouté au `poll` de
+   `nfq_loop` (`extra_rfds`) pour un réveil immédiat sans attendre le budget de
+   80 ms.
 
 Sans `so_verdict` (un seul worker réponses), les deux mécanismes sont inertes :
 aucun fd, aucune écriture supplémentaire. Le superviseur fork, nomme
@@ -221,8 +245,8 @@ incrémentale (`try_add_pending`) plutôt que recalculé par `pairs` à chaque t
 
 | Queue | Worker | Règle nft (table `bridge`) | Verdict | Injection |
 |-------|--------|----------------------------|---------|-----------|
-| `QUEUE_QUESTIONS` | `worker_questions` | `th dport 53 queue to N` | `NF_ACCEPT` (fail-closed sur erreur) | Aucune ; transaction dans question_response + learn |
-| `QUEUE_RESPONSES` | `worker_responses` | `th sport 53 queue to N` | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
+| `QUEUE_QUESTIONS` | `worker_questions` | une file : `th dport 53 … queue to N` ; plage : `th dport 53 ip[6] version … counter queue to jhash ip[6] saddr . th sport mod N offset <1re file>` (une règle par famille, cf. § « Workers DNS multiples ») | `NF_ACCEPT` (fail-closed sur erreur) | Aucune ; transaction dans question_response + learn |
+| `QUEUE_RESPONSES` | `worker_responses` | une file : `th sport 53 … queue to N` ; plage : `th sport 53 ip[6] version … counter queue to jhash ip[6] daddr . th dport mod N offset <1re file>` (une règle par famille) | `NF_ACCEPT` ± payload patché | DNS TTL + EDE `Custos vigilat`, ou NXDOMAIN+EDE `Filtered` |
 | `QUEUE_CAPTIVE` | `worker_captive` | `tcp dport 80 … syn queue to N` | `NF_DROP` | 3 frames Ethernet via AF_PACKET (SYN-ACK, HTTP 302, FIN-ACK) |
 | `QUEUE_AUTH` | `worker_auth_queue` | trafic port 33443 | `NF_ACCEPT` | Aucune ; mac+ip dans `learn` → `mac_learner` |
 | `QUEUE_SNI` | `worker_tls` | `tcp/udp dport 443 queue to N bypass` (opt. ; **avant** `cv_action_vmap` si `placement=integral`, **après** si `residual`) | `NF_ACCEPT`; refus strict = `NF_ACCEPT` + `REJECT_MARK` puis `QUEUE_REJECT` | Paire client→dest dans `ip*_allowed`/`mac*_allowed` via pipe `nft` ; rejet réseau forgé par `worker_reject` |

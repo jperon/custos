@@ -818,9 +818,12 @@ From a text file (`{lists_dir}/user/admins.txt`):
   design (share-nothing architecture). libnfq does support out-of-order verdicts
   (each verdict references its packet by `packet_id`), but intra-queue parallelism
   would require shared-state synchronisation in workers that maintain flow context
-  (`pending` table, TCP reassembly). Horizontal scaling via multiple queue
-  numbers (`QUEUE_QUESTIONS="0,1,2"`) with nftables hash distribution
-  (`queue num 0-2`) is the correct approach.
+  (`pending` table, TCP reassembly). Horizontal scaling via a range of queue
+  numbers (`QUEUE_QUESTIONS="0-1"`) is the correct approach: for a range, the
+  ruleset emits `queue to jhash <client IP> . <client port> mod N offset <first
+  queue>` (one rule per address family) instead of `queue num 0-1`, so packets
+  spread by client (IP, port) rather than by address pair — see
+  `docs/agents/perf.md` §11.5. A single queue keeps `queue num X` unchanged.
 - **MAC spoofing**: `mac4_allowed`/`mac6_allowed` rely on the MAC address
   reported by `nfq_get_packet_hw`. On a bridge, this is the L2 source MAC
   and can be spoofed by a LAN client.
@@ -842,7 +845,10 @@ The single file `nft-rules/dns-filter-bridge.nft` is a **ruleset for bridge mode
   `QUEUE_QUESTIONS`, `QUEUE_RESPONSES`, `QUEUE_CAPTIVE`, `QUEUE_AUTH`,
   `QUEUE_SNI`, `QUEUE_SIP`, `QUEUE_REJECT`). Defaults: questions `0-1`,
   responses `4`, captive `20`, reject `10-11`, auth `5`, sni `6`, sip `12`.
-  Ranges like `"0,2,5-7"` spawn one worker per queue number.
+  Ranges like `"0,2,5-7"` spawn one worker per queue number, and the DNS rules
+  are generated accordingly by `nft_rules.dns_queue_rules`: a contiguous range
+  becomes `queue to jhash … mod N offset <first>` (one rule per family), an
+  explicit list one `queue num` rule per contiguous segment.
 - LuaJIT decides ACCEPT, REFUSED, or DNSONLY; populates `ip4_allowed`/`ip6_allowed` on success
 - Clients in `authenticated_ips` bypass TCP/80 interception (QUEUE_CAPTIVE)
 - All forwarded traffic matching a set entry → ACCEPT; rest → DROP/REJECT
