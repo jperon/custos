@@ -1471,7 +1471,7 @@ déploiement depuis cette branche).
   la latence d'entrée), `ack_wait_us` (inchangé), et l'absence de
   `deferred_flush_error` / `nft_ack_timeout`.
 
-### 16.6 Répartition des validateurs sur toutes les IP (branche `d-valspread`)
+### 16.7 Répartition des validateurs sur toutes les IP (branche `d-valspread`)
 
 Correctif du goulot n° 5 de `tmp/perfaudit_report.md` §5.3 (« toutes les
 réponses B sur une seule file ») : `pick_resolver` renvoyait toujours la
