@@ -9,6 +9,7 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, log_debug, level_enabled = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.log_debug, _obj_0.level_enabled
 end
+local bit = require("bit")
 local AF_BRIDGE = 7
 local NFQNL_COPY_PACKET = 2
 local NF_DROP = 0
@@ -121,11 +122,18 @@ run_queue = function(queue_num, callback, opts)
   local idle_ms = opts and opts.idle_ms
   local on_idle = opts and opts.on_idle
   local on_batch_end = opts and opts.on_batch_end
+  local extra_rfds = (opts and opts.extra_rfds) or { }
+  local on_extra_ready = opts and opts.on_extra_ready
+  local n_extra = #extra_rfds
   local pfd = nil
-  if idle_ms and idle_ms > 0 then
-    pfd = ffi.new("struct pollfd[1]")
+  if (idle_ms and idle_ms > 0) or n_extra > 0 then
+    pfd = ffi.new("struct pollfd[?]", 1 + n_extra)
     pfd[0].fd = fd
     pfd[0].events = 1
+    for i = 1, n_extra do
+      pfd[i].fd = extra_rfds[i]
+      pfd[i].events = 1
+    end
   end
   local pfd_drain = nil
   if on_batch_end then
@@ -141,7 +149,13 @@ run_queue = function(queue_num, callback, opts)
         if on_idle then
           on_idle()
         end
-        local pr = libc.poll(pfd, 1, idle_ms)
+        local poll_timeout
+        if idle_ms and idle_ms > 0 then
+          poll_timeout = idle_ms
+        else
+          poll_timeout = -1
+        end
+        local pr = libc.poll(pfd, 1 + n_extra, poll_timeout)
         if pr == 0 then
           _continue_0 = true
           break
@@ -159,6 +173,37 @@ run_queue = function(queue_num, callback, opts)
             }
           end)
           break
+        else
+          if n_extra > 0 then
+            local netlink_rev = pfd[0].revents
+            local netlink_ready = bit.band(netlink_rev, 1) ~= 0
+            if not (netlink_ready) then
+              if bit.band(netlink_rev, 0x38) ~= 0 then
+                log_warn(function()
+                  return {
+                    action = "queue_poll_error",
+                    queue = queue_num,
+                    revents = netlink_rev
+                  }
+                end)
+                break
+              end
+              local extra_ready = false
+              for i = 1, n_extra do
+                local rev = pfd[i].revents
+                if rev ~= 0 and bit.band(rev, 1) == 0 then
+                  pfd[i].fd = -1
+                elseif bit.band(rev, 1) ~= 0 then
+                  extra_ready = true
+                end
+              end
+              if extra_ready and on_extra_ready then
+                on_extra_ready()
+              end
+              _continue_0 = true
+              break
+            end
+          end
         end
       end
       if level_enabled("DEBUG") then

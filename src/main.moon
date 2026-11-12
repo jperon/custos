@@ -64,6 +64,16 @@ lowmem = require "lib.lowmem"
 { :plan_optional_workers } = require "lib.worker_plan"
 { :build_filter_data } = require "lib.filter_data"
 
+-- Mode « RAM faible » : décidé AVANT la création des pipes, car il ramène
+-- chaque plage NFQUEUE à une seule file — donc un seul worker réponses et un
+-- seul pipe question→response (cf. lib.lowmem.collapse_nfqueue). On mute
+-- config.nfqueue en place pour que nft_rules (ruleset) ET la boucle de fork des
+-- workers voient la même valeur réduite.
+is_lowmem = lowmem.detect config.runtime
+if is_lowmem
+  collapsed = lowmem.collapse_nfqueue config.nfqueue
+  log_info -> { action: "lowmem_collapse_queues", :collapsed }
+
 -- ── Helpers POSIX ────────────────────────────────────────────────
 
 ffi.cdef [[
@@ -114,15 +124,23 @@ create_pipe = (name) ->
 
   { rfd: fds[0], wfd: fds[1] }
 
---- Crée les trois pipes utilisés par Custos.
--- question_response : transactions DNS question → response.
+--- Crée les pipes IPC.
+-- question_response : transactions DNS question → response. UN PIPE PAR WORKER
+-- RÉPONSES (`nfqueue.responses` = plage) : chaque worker lit le sien et chaque
+-- question est écrite dans TOUS (fan-out). L'appariement question/réponse ne
+-- dépend donc pas de l'affinité de hachage du noyau : une réponse livrée à
+-- n'importe quelle file de la plage trouve sa transaction dans sa table
+-- `pending` locale (cf. docs/agents/perf.md §10.1).
 -- learn : apprentissage IP→MAC question → mac_learner.
 -- events : événements DNS question → worker_events.
 -- nft : serialized dynamic nft insertions.
--- @treturn table {question_response, learn, events}
+-- @treturn table {question_response, question_response_list, learn, events}
 create_pipes = ->
+  qr_count = math.max 1, #lowmem.parse_queues(config.nfqueue.responses)
+  qr_pipes = [create_pipe(if i > 1 then "question_response#{i}" else "question_response") for i = 1, qr_count]
   pipes = {
-    question_response:   create_pipe "question_response"
+    question_response:   qr_pipes[1]
+    question_response_list: qr_pipes
     learn:  create_pipe "mac_learn"
     vlan_learn: create_pipe "vlan_learn"
     events: create_pipe "events"
@@ -187,9 +205,10 @@ load_doh_cfg = ->
 -- @treturn nil
 close_supervisor_fds = (pipes) ->
   if pipes
-    if pipes.question_response
-      libc.close pipes.question_response.rfd if pipes.question_response.rfd
-      libc.close pipes.question_response.wfd if pipes.question_response.wfd
+    -- Un pipe question→response par worker réponses : les fermer tous.
+    for p in *(pipes.question_response_list or { pipes.question_response })
+      libc.close p.rfd if p.rfd
+      libc.close p.wfd if p.wfd
     if pipes.learn
       libc.close pipes.learn.rfd if pipes.learn.rfd
       libc.close pipes.learn.wfd if pipes.learn.wfd
@@ -214,17 +233,15 @@ close_supervisor_fds = (pipes) ->
 supervise = (pipes, sfd) ->
   auth_cfg = load_auth_cfg!
 
-  -- Parse queue lists from config, supporting single numbers and ranges (e.g. "0,2,5-7,10-12")
+  -- Parse queue lists from config, supporting single numbers and ranges.
+  -- ATTENTION : `queue num` (nft) n'accepte qu'un nombre ou une plage contiguë
+  -- ("0-1") ; une liste ("0,2") est une erreur de syntaxe du ruleset. La forme
+  -- liste n'est tolérée que pour l'analyse côté processus (parse_queues).
   parse_queues = lowmem.parse_queues
 
-  -- Mode « RAM faible » : ramener chaque plage de files à une seule queue,
-  -- et désactiver les workers doh et sni (tls) pour réduire l'empreinte mémoire.
-  -- On mute config.nfqueue en place pour que nft_rules (ruleset) ET la boucle
-  -- de fork des workers voient la même valeur réduite.
-  is_lowmem = lowmem.detect config.runtime
-  if is_lowmem
-    collapsed = lowmem.collapse_nfqueue config.nfqueue
-    log_info -> { action: "lowmem_collapse_queues", :collapsed }
+  -- Mode « RAM faible » : décidé au chargement du module (cf. `is_lowmem` plus
+  -- haut), AVANT la création des pipes, car il réduit les plages NFQUEUE —
+  -- donc le nombre de workers réponses et de pipes question→response.
 
   optional = plan_optional_workers config, is_lowmem
 
@@ -307,6 +324,21 @@ supervise = (pipes, sfd) ->
     widx = next_widx
     next_widx += 1
     { rfd: p.rfd, worker_idx: widx }
+
+  -- ── Bus de verdicts « second avis » (un pipe par worker réponses) ──────
+  -- Avec plusieurs workers réponses, la réponse d'origine (A) et celle du
+  -- résolveur validateur (B) ont des couples d'adresses différents : le hachage
+  -- de flux du noyau les envoie à des files différentes (hash_v4 trie
+  -- saddr/daddr, cf. include/net/netfilter/nf_queue.h). Chaque worker diffuse
+  -- donc son verdict B aux autres (fan-out) ; chacun ne lit que son pipe.
+  -- Créé seulement au-delà d'un worker : à 1 worker, aucun fd, aucun coût.
+  so_bus = { rfds: {}, wfds: {} }
+  if #responses_queues > 1
+    for i = 1, #responses_queues
+      p = create_pipe "so_verdict_#{i - 1}"
+      so_bus.rfds[i] = p.rfd
+      so_bus.wfds[i] = p.wfd
+      ack_pipes[#ack_pipes + 1] = p   -- fermés au shutdown avec les autres
 
 
   table.insert workers_without_filter, {
@@ -427,20 +459,29 @@ supervise = (pipes, sfd) ->
   workers_with_filter = {}
 
   -- Multiple workers for responses (parallel response)
-  -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft.
+  -- Chaque worker_responses reçoit un pipe ACK dédié pour la synchronisation nft
+  -- et LIT SON PROPRE pipe question→response (fan-out : chaque question est
+  -- écrite dans tous les pipes par worker_questions).
   -- Moved here to benefit from COW after nft_rules.apply! and filter.load!
   -- Pass rules_metadata to avoid recompiling rules (which would reload domain lists)
   for i, q_num in ipairs responses_queues
     ack_info = alloc_ack_pipe!
+    qr_pipe  = pipes.question_response_list[i]
+    -- Pipes de verdicts des AUTRES workers : un worker n'a pas besoin de
+    -- recevoir son propre verdict (il l'applique déjà en ligne).
+    so_others = {}
+    for j = 1, #so_bus.wfds
+      so_others[#so_others + 1] = so_bus.wfds[j] unless j == i
     table.insert workers_with_filter, {
       name: "resp-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "resp-q#{q_num}",
         (fds) -> require("worker_responses").run q_num, fds, rules_metadata,
-        { question_response_rfd: pipes.question_response.rfd, nft_wfd: pipes.nft.wfd,
+        { question_response_rfd: qr_pipe.rfd, nft_wfd: pipes.nft.wfd,
           ack_rfd: ack_info.rfd, worker_idx: ack_info.worker_idx, events_wfd: pipes.events.wfd,
           strip_learn_wfd: (pipes.strip_learn and pipes.strip_learn.wfd),
-          chain_strip_enabled: (pipes.strip_learn ~= nil) }
+          chain_strip_enabled: (pipes.strip_learn ~= nil)
+          so_rfd: so_bus.rfds[i], so_wfds: (#so_others > 0 and so_others or nil) }
     }
 
   -- NFT worker (needs nft rules to be applied first)
@@ -455,13 +496,16 @@ supervise = (pipes, sfd) ->
   }
 
   -- Multiple workers for questions (parallel question)
+  -- Chaque worker_questions écrit CHAQUE transaction dans TOUS les pipes
+  -- question→response (fan-out) : chaque worker réponses reçoit sa copie.
+  qr_wfds = [p.wfd for p in *pipes.question_response_list]
   for i, q_num in ipairs questions_queues
     table.insert workers_with_filter, {
       name: "dns-q#{q_num}"
       pid: nil
       restart_fn: -> fork_worker "dns-q#{q_num}",
         ((fds) -> require("worker_questions").run q_num, fds.question_response_wfd, fds.learn_wfd, fds.events_wfd, filter_data),
-        { question_response_wfd: pipes.question_response.wfd, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd, filter_data: filter_data }
+        { question_response_wfd: qr_wfds, learn_wfd: pipes.learn.wfd, events_wfd: pipes.events.wfd, filter_data: filter_data }
     }
 
   -- SNI logger for TLS/QUIC (single, optional).
@@ -619,6 +663,7 @@ log_info -> {
   action: "ipc_pipes_created"
   question_response_rfd: pipes.question_response.rfd
   question_response_wfd: pipes.question_response.wfd
+  question_response_workers: #pipes.question_response_list
   learn_rfd: pipes.learn.rfd
   learn_wfd: pipes.learn.wfd
   events_rfd: pipes.events.rfd

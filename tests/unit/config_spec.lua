@@ -351,9 +351,24 @@ describe("config.nfqueue.responses", function()
     assert.is_true(ok, err)
     return calls
   end
-  it("une plage (\"4-5\") est ramenée à sa première file avec un warn", function()
+  it("une plage (\"4-5\") est conservée : un worker par file (fan-out IPC)", function()
     local path = "tmp/config_spec_nfq_multi.moon"
     write_moon(path, [[return { nfqueue: { responses: "4-5" } }]])
+    local holder = { }
+    local calls = capture_warns(function()
+      holder.cfg = reload(path)
+    end)
+    os.remove(path)
+    assert.equals("4-5", holder.cfg.nfqueue.responses)
+    for _index_0 = 1, #calls do
+      local c = calls[_index_0]
+      assert.are_not.equal("nfqueue_responses_single_queue_only", c.action)
+      assert.are_not.equal("nfqueue_responses_range_not_contiguous", c.action)
+    end
+  end)
+  it("une liste non contiguë (\"4,6\") est ramenée à sa première file (nft)", function()
+    local path = "tmp/config_spec_nfq_list.moon"
+    write_moon(path, [[return { nfqueue: { responses: "4,6" } }]])
     local holder = { }
     local calls = capture_warns(function()
       holder.cfg = reload(path)
@@ -363,7 +378,7 @@ describe("config.nfqueue.responses", function()
     local found = false
     for _index_0 = 1, #calls do
       local c = calls[_index_0]
-      if c.action == "nfqueue_responses_single_queue_only" then
+      if c.action == "nfqueue_responses_range_not_contiguous" then
         found = true
       end
     end

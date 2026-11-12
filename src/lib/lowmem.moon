@@ -48,6 +48,21 @@ parse_queues = (str) ->
       table.insert queues, n if n
   queues
 
+--- Vrai si `str` est exploitable telle quelle dans `queue num` par nft :
+-- un nombre seul (`"4"`) ou une plage contiguë croissante (`"4-5"`).
+-- nft n'accepte QUE ces deux formes (`queue to 4-5`) : une liste avec virgules
+-- (`"4,6"`) est une erreur de syntaxe et ferait échouer l'application du
+-- ruleset, donc la distribution des files.
+-- @tparam string|nil str Spécification de files
+-- @treturn boolean
+is_contiguous_range = (str) ->
+  return false unless type(str) == "string"
+  s = str\gsub "%s+", ""
+  return true if s\match "^%d+$"
+  a, b = s\match "^(%d+)%-(%d+)$"
+  return false unless a and b
+  tonumber(a) <= tonumber(b)
+
 --- Détermine si l'on doit fonctionner en mode « RAM faible ».
 -- `runtime_cfg.lowmem` force la décision (`true`/`"on"`, `false`/`"off"`) ;
 -- sinon autodétection selon `runtime_cfg.lowmem_threshold_kb` (défaut 128 Mo).
@@ -76,4 +91,4 @@ collapse_nfqueue = (nfqueue, keys = { "questions", "responses", "captive", "reje
       nfqueue[key] = first
   collapsed
 
-{ :LOWMEM_THRESHOLD_DEFAULT_KB, :read_mem_total_kb, :parse_queues, :detect, :collapse_nfqueue }
+{ :LOWMEM_THRESHOLD_DEFAULT_KB, :read_mem_total_kb, :parse_queues, :is_contiguous_range, :detect, :collapse_nfqueue }

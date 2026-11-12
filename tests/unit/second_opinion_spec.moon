@@ -61,6 +61,48 @@ describe "second_opinion", ->
       got = so.take_verdict "k", 102
       assert.same "block", got.verdict
 
+  describe "encode_verdict / decode_verdict (bus inter-workers)", ->
+    it "round-trip block", ->
+      line = so_mod.encode_verdict "192.0.2.10", 0x1a2b, "Example.COM", { kind: "block" }
+      assert.is_string line
+      rec, err = so_mod.decode_verdict line
+      assert.is_nil err
+      assert.equals "192.0.2.10", rec.client_ip
+      assert.equals 0x1a2b, rec.txid
+      assert.equals "Example.COM", rec.qname
+      assert.equals "block", rec.override.kind
+
+    it "round-trip sinkhole : adresses et ttl préservés", ->
+      line = so_mod.encode_verdict "192.0.2.10", 1, "a.test", {
+        kind: "sinkhole", a: { "\0\0\0\0" }, aaaa: { }, ttl: 42
+      }
+      rec = so_mod.decode_verdict line
+      assert.equals "sinkhole", rec.override.kind
+      assert.same { "\0\0\0\0" }, rec.override.a
+      assert.equals 42, rec.override.ttl
+
+    it "round-trip redirect : cible CNAME et AAAA", ->
+      aaaa = "\32\1\13\184\0\0\0\0\0\0\0\0\0\0\0\1"
+      line = so_mod.encode_verdict "2001:db8::10", 0xffff, "b.test", {
+        kind: "redirect", cname_target: "forcesafesearch.google.com", a: {}, aaaa: { aaaa }, ttl: 60
+      }
+      rec = so_mod.decode_verdict line
+      assert.equals "redirect", rec.override.kind
+      assert.equals "forcesafesearch.google.com", rec.override.cname_target
+      assert.same { aaaa }, rec.override.aaaa
+
+    it "round-trip pass (pas d'adresse)", ->
+      rec = so_mod.decode_verdict so_mod.encode_verdict "192.0.2.1", 2, "c.test", { kind: "pass" }
+      assert.equals "pass", rec.override.kind
+      assert.same {}, rec.override.a
+
+    it "refuse un kind inconnu, un txid hors bornes ou une ligne tronquée", ->
+      assert.is_nil so_mod.encode_verdict "192.0.2.1", 1, "x", { kind: "bogus" }
+      assert.is_nil so_mod.decode_verdict "v1|zzzz|192.0.2.1|0001|0||||"
+      assert.is_nil so_mod.decode_verdict "v1|b|192.0.2.1"
+      assert.is_nil so_mod.decode_verdict "v1|b|192.0.2.1|10000|0||||"   -- txid > 65535
+      assert.is_nil so_mod.decode_verdict "v1|b|192.0.2.1|0001|0||zz||"  -- hex invalide
+
   describe "park / take_parked", ->
     it "parque puis récupère le ctx", ->
       so = so_mod.new!

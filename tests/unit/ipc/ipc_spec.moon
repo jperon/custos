@@ -457,6 +457,36 @@ describe "ipc", ->
       assert.is_not_nil decoded
       assert.is_nil decoded.question_proc_ms
 
+  -- ── 23. fan-out : write_msg vers plusieurs pipes (multi-worker réponses) ──
+  describe "write_msg fan-out (plusieurs workers réponses)", ->
+    it "écrit la même transaction dans TOUS les pipes", ->
+      m_ipc = fresh_ipc!
+      p1    = make_pipe!
+      p2    = make_pipe!
+      now_t = 5000
+
+      ok = m_ipc.write_msg { p1[2], p2[2] }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.is_true ok
+
+      -- Chaque worker réponses reçoit sa copie : la transaction doit être
+      -- appariable dans les deux (l'appariement ne dépend pas de l'affinité).
+      assert.equals 1, (m_ipc.drain_pipe p1[1], (-> now_t), nil)
+      assert.is_true m_ipc.is_pending TXID, "192.168.1.42", PORT, "1.1.1.3", -> now_t + 1
+      assert.equals 1, (m_ipc.drain_pipe p2[1], (-> now_t), nil)
+      assert.is_true m_ipc.is_pending TXID, "192.168.1.42", PORT, "1.1.1.3", -> now_t + 1
+
+      close_pipe p1
+      close_pipe p2
+
+    it "renvoie false si un des pipes refuse l'écriture (fail-closed)", ->
+      m_ipc = fresh_ipc!
+      p     = make_pipe!
+
+      ok = m_ipc.write_msg { p[2], -1 }, TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      assert.is_false ok
+
+      close_pipe p
+
   -- ── 21. write_msg fd invalide → géré sans crash ───────────────────────
   describe "write_msg fd invalide", ->
     it "write_msg sur fd -1 ne crash pas", ->

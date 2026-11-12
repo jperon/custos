@@ -125,6 +125,23 @@ write_with_retry = (pipe_wfd, msg) ->
   log_warn -> { action: "ipc_write_failed_exhausted", fd: pipe_wfd, errno: errno, attempts: IPC_WRITE_RETRY_COUNT }
   false
 
+--- Écrit un message IPC sur un fd, ou sur CHAQUE fd d'une liste (fan-out).
+-- Avec plusieurs workers réponses (plage `nfqueue.responses`), chaque worker
+-- reçoit une copie de CHAQUE transaction : l'appariement question/réponse ne
+-- dépend alors pas de l'affinité de hachage du noyau (la réponse peut être
+-- livrée à n'importe quelle file de la plage). Écriture ≤ PIPE_BUF donc
+-- atomique par destinataire.
+-- @tparam number|table pipe_wfd fd unique, ou liste de fds
+-- @tparam string msg Message encodé
+-- @treturn boolean true si TOUS les destinataires ont reçu la ligne
+write_with_retry_all = (pipe_wfd, msg) ->
+  return write_with_retry pipe_wfd, msg unless type(pipe_wfd) == "table"
+  ok = true
+  for fd in *pipe_wfd
+    res = write_with_retry fd, msg
+    ok = res and ok
+  ok
+
 --- Encode un message IPC.
 -- @tparam number      txid          Transaction DNS
 -- @tparam string      ip_raw        IP source (4 ou 16 octets)
@@ -204,12 +221,12 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
 write_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil, question_proc_ms=nil) ->
   msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, false, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms
   return false unless msg
-  write_with_retry pipe_wfd, msg
+  write_with_retry_all pipe_wfd, msg
 
 write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids=nil, question_proc_ms=nil) ->
   msg = encode_msg txid, ip_raw, src_port, mac_raw, resolver_ip_raw, true, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms
   return false unless msg
-  write_with_retry pipe_wfd, msg
+  write_with_retry_all pipe_wfd, msg
 
 decode_msg = (raw) ->
   return nil, "empty" unless raw and #raw > 0

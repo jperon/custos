@@ -1,5 +1,148 @@
 local concat
 concat = table.concat
+local to_hex, from_hex, split_fields, is_ipv4_str, is_ipv6_str
+do
+  local _obj_0 = require("lib.ipc_hex")
+  to_hex, from_hex, split_fields, is_ipv4_str, is_ipv6_str = _obj_0.to_hex, _obj_0.from_hex, _obj_0.split_fields, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str
+end
+local VERDICT_PREFIX = "v1"
+local MAX_VERDICT_LINE = 2048
+local MAX_VERDICT_ADDRS = 16
+local _KIND_TO_CODE = {
+  block = "b",
+  sinkhole = "s",
+  redirect = "r",
+  pass = "p"
+}
+local _CODE_TO_KIND = {
+  b = "block",
+  s = "sinkhole",
+  r = "redirect",
+  p = "pass"
+}
+local _encode_addrs
+_encode_addrs = function(list)
+  local parts = { }
+  local _list_0 = (list or { })
+  for _index_0 = 1, #_list_0 do
+    local _continue_0 = false
+    repeat
+      local r = _list_0[_index_0]
+      if #parts >= MAX_VERDICT_ADDRS then
+        break
+      end
+      if not (r and (#r == 4 or #r == 16)) then
+        _continue_0 = true
+        break
+      end
+      parts[#parts + 1] = to_hex(r)
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  return concat(parts, ",")
+end
+local _decode_addrs
+_decode_addrs = function(s, want_len)
+  local out = { }
+  if not (s and s ~= "") then
+    return out, nil
+  end
+  for h in s:gmatch("[^,]+") do
+    local raw, err = from_hex(h)
+    if err then
+      return nil, "addr_" .. tostring(err)
+    end
+    if not (#raw == want_len) then
+      return nil, "addr_len"
+    end
+    out[#out + 1] = raw
+  end
+  return out, nil
+end
+local encode_verdict
+encode_verdict = function(client_ip, txid, qname, override)
+  if not (client_ip and override) then
+    return nil
+  end
+  local code = _KIND_TO_CODE[override.kind]
+  if not (code) then
+    return nil
+  end
+  local ttl = tonumber(override.ttl)
+  local line = concat({
+    VERDICT_PREFIX,
+    code,
+    tostring(client_ip),
+    string.format("%04x", tonumber(txid) or 0),
+    tostring(ttl and math.floor(ttl) or -1),
+    to_hex(tostring(qname or "")),
+    to_hex(tostring(override.cname_target or "")),
+    _encode_addrs(override.a),
+    _encode_addrs(override.aaaa)
+  }, "|")
+  if #line > MAX_VERDICT_LINE then
+    return nil
+  end
+  return line .. "\n"
+end
+local decode_verdict
+decode_verdict = function(line)
+  local s = (tostring(line)):gsub("\n+$", "")
+  local parts = split_fields(s)
+  if not (#parts == 9) then
+    return nil, "field_count"
+  end
+  if not (parts[1] == VERDICT_PREFIX) then
+    return nil, "version"
+  end
+  local kind = _CODE_TO_KIND[parts[2]]
+  if not (kind) then
+    return nil, "kind"
+  end
+  local client_ip = parts[3]
+  if not (is_ipv4_str(client_ip) or is_ipv6_str(client_ip)) then
+    return nil, "client_ip"
+  end
+  local txid = tonumber(parts[4], 16)
+  if not (txid and txid >= 0 and txid <= 65535) then
+    return nil, "txid"
+  end
+  local ttl = tonumber(parts[5])
+  if not (ttl) then
+    return nil, "ttl"
+  end
+  local qname, e1 = from_hex(parts[6])
+  if e1 then
+    return nil, "qname_" .. tostring(e1)
+  end
+  local cname, e2 = from_hex(parts[7])
+  if e2 then
+    return nil, "cname_" .. tostring(e2)
+  end
+  local a, e3 = _decode_addrs(parts[8], 4)
+  if e3 then
+    return nil, "a_" .. tostring(e3)
+  end
+  local aaaa, e4 = _decode_addrs(parts[9], 16)
+  if e4 then
+    return nil, "aaaa_" .. tostring(e4)
+  end
+  return {
+    client_ip = client_ip,
+    txid = txid,
+    qname = qname or "",
+    override = {
+      kind = kind,
+      a = a,
+      aaaa = aaaa,
+      ttl = (ttl >= 0 and ttl or nil),
+      cname_target = (cname and cname ~= "") and cname or nil
+    }
+  }, nil
+end
 local new
 new = function(opts)
   if opts == nil then
@@ -112,5 +255,9 @@ new = function(opts)
   }
 end
 return {
-  new = new
+  new = new,
+  encode_verdict = encode_verdict,
+  decode_verdict = decode_verdict,
+  VERDICT_PREFIX = VERDICT_PREFIX,
+  MAX_VERDICT_LINE = MAX_VERDICT_LINE
 }

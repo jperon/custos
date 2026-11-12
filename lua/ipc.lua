@@ -169,6 +169,19 @@ write_with_retry = function(pipe_wfd, msg)
   end)
   return false
 end
+local write_with_retry_all
+write_with_retry_all = function(pipe_wfd, msg)
+  if not (type(pipe_wfd) == "table") then
+    return write_with_retry(pipe_wfd, msg)
+  end
+  local ok = true
+  for _index_0 = 1, #pipe_wfd do
+    local fd = pipe_wfd[_index_0]
+    local res = write_with_retry(fd, msg)
+    ok = res and ok
+  end
+  return ok
+end
 local encode_msg
 encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
   if response_rule_ids == nil then
@@ -274,7 +287,7 @@ write_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
   if not (msg) then
     return false
   end
-  return write_with_retry(pipe_wfd, msg)
+  return write_with_retry_all(pipe_wfd, msg)
 end
 local write_refused_msg
 write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw, reason, benchmark_ms, rule_id, timeout, modifiers, response_rule_ids, question_proc_ms)
@@ -288,7 +301,7 @@ write_refused_msg = function(pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver
   if not (msg) then
     return false
   end
-  return write_with_retry(pipe_wfd, msg)
+  return write_with_retry_all(pipe_wfd, msg)
 end
 local decode_msg
 decode_msg = function(raw)
