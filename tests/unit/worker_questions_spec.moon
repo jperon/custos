@@ -75,6 +75,9 @@ describe "worker_questions", ->
 
   decision = nil
   payload = ""
+  -- Tampon stable (cf. worker_auth_queue_spec) : le pointeur rendu par
+  -- nfq_get_payload doit rester valide après le retour du stub.
+  payload_buf = ffi.new "uint8_t[?]", 65536
   wq = nil
   ev_r = nil
   ev_w = nil
@@ -101,9 +104,8 @@ describe "worker_questions", ->
       libc: ffi.C
       libnfq: {
         nfq_get_payload: (nfad, out) ->
-          buf = ffi.new "uint8_t[?]", #payload
-          ffi.copy buf, payload
-          out[0] = ffi.cast "unsigned char*", buf
+          ffi.copy payload_buf, payload, #payload
+          out[0] = ffi.cast "unsigned char*", payload_buf
           #payload
       }
     }

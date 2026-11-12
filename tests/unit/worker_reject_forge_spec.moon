@@ -72,6 +72,9 @@ describe "worker_reject forge", ->
 
   wr = nil
   payload = ""
+  -- Tampon stable (cf. worker_auth_queue_spec) : le pointeur rendu par
+  -- nfq_get_payload doit rester valide après le retour du stub.
+  payload_buf = ffi.new "uint8_t[?]", 65536
   verdicts = {}
 
   before_each ->
@@ -85,9 +88,8 @@ describe "worker_reject forge", ->
       libnfq: {
         nfq_get_payload: (nfad, out) ->
           return 0 if #payload == 0
-          buf = ffi.new "uint8_t[?]", #payload
-          ffi.copy buf, payload
-          out[0] = ffi.cast "unsigned char*", buf
+          ffi.copy payload_buf, payload, #payload
+          out[0] = ffi.cast "unsigned char*", payload_buf
           #payload
         nfq_set_verdict: (qh, id, verdict, len, ptr) ->
           verdicts[#verdicts + 1] = {

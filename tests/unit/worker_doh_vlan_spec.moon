@@ -44,14 +44,17 @@ package.loaded["nfq_loop"] = {
 
 -- ffi_defs : ffi réel, libc.write capturé, libnfq.nfq_get_payload contrôlable.
 payload_raw = nil
+-- Tampon stable : le pointeur rendu par nfq_get_payload doit rester valide
+-- après le retour du stub (sinon le worker lit un cdata libéré).
+payload_buf = ffi.new "unsigned char[?]", 65536
 package.loaded["ffi_defs"] = {
   ffi: ffi
   libc: { write: (fd, buf, n) -> n }
   libnfq: {
     nfq_get_payload: (nfad, ptr) ->
       return 0 unless payload_raw
-      buf = ffi.new "unsigned char[?]", #payload_raw, payload_raw
-      ptr[0] = ffi.cast "unsigned char*", buf
+      ffi.copy payload_buf, payload_raw, #payload_raw
+      ptr[0] = ffi.cast "unsigned char*", payload_buf
       #payload_raw
   }
 }

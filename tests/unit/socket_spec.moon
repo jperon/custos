@@ -136,11 +136,15 @@ describe "lib.socket socket_select EINTR", ->
     assert.equals 0, #ready
 
   it "retourne {},{} au lieu de planter quand select() est interrompu par SIGALRM", ->
-    -- Installe un handler no-op Lua pour SIGALRM.
+    -- Installe un handler no-op C pour SIGALRM.
     -- SIG_IGN (1) causerait SA_RESTART → pas d'EINTR.
-    -- Un vrai handler Lua → interruption → EINTR → notre fix retourne {},{}.
-    noop_handler = ffi.cast "sig_fn_t*", ->
-    ffi.C.signal SIGALRM, noop_handler
+    -- Un handler LuaJIT (ffi.cast d'une fonction Lua) est proscrit ici : un
+    -- signal peut tomber pendant l'exécution de la VM et réentrer dans Lua
+    -- hors des points sûrs (LuaJIT panique « bad callback » ou corrompt son
+    -- état). getpid() est async-signal-safe, sans effet de bord, et sa
+    -- signature (void (*)(int) à l'appel) est compatible.
+    pcall -> ffi.cdef "int getpid(void);"
+    ffi.C.signal SIGALRM, ffi.cast("sig_fn_t*", ffi.C.getpid)
 
     -- Arme un timer à 100 ms pour interrompre le select() suivant.
     timer = ffi.new "struct itimerval"

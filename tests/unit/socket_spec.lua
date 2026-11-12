@@ -108,8 +108,10 @@ describe("lib.socket socket_select EINTR", function()
     return assert.equals(0, #ready)
   end)
   it("retourne {},{} au lieu de planter quand select() est interrompu par SIGALRM", function()
-    local noop_handler = ffi.cast("sig_fn_t*", function() end)
-    ffi.C.signal(SIGALRM, noop_handler)
+    pcall(function()
+      return ffi.cdef("int getpid(void);")
+    end)
+    ffi.C.signal(SIGALRM, ffi.cast("sig_fn_t*", ffi.C.getpid))
     local timer = ffi.new("struct itimerval")
     timer.it_value.tv_sec = 0
     timer.it_value.tv_usec = 100000
