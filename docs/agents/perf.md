@@ -446,18 +446,26 @@ pas de la capacité totale.
 
 ### 10.1 Répartir réponses et questions sur plusieurs workers — gain ×1,75 à ×2
 
+**Implémenté** (branche `d-multi`, voir §11) : `nfqueue.responses` accepte une
+plage (`"4-5"`), un worker par file, avec fan-out IPC et bus de verdicts.
+
 - Mesure : `resp-q4` (un seul process, file `4`) à 78 % d'un vCPU à 400 q/s ;
-  `dns-q1` à 77-83 % ; `nft` 60-63 %. Le superviseur sait déjà créer plusieurs
-  files de questions (`questions_queues`) et alloue **un pipe ACK par worker
-  réponses** (`main.moon` boucle sur `responses_queues`) : passer à
-  `nfqueue.responses: "4-5"` (2 workers) double la capacité du chemin réponses.
+  `dns-q1` à 77-83 % ; `nft` 60-63 %. Le superviseur crée un worker par file
+  (`questions_queues`/`responses_queues`, `main.moon`) et alloue **un pipe ACK
+  par worker réponses** : passer à `nfqueue.responses: "4-5"` (2 workers)
+  double la capacité du chemin réponses. Avant cette branche, une plage
+  `responses` était ramenée à sa première file par `config.moon` (avertissement
+  `nfqueue_responses_single_queue_only`) parce que la table `pending` est privée
+  à chaque processus ; ce garde-fou a été remplacé par le fan-out IPC.
 - Plafond attendu : `nft` est partagé et à 62 % pour 500 q/s → ≈ 100 % vers
   **800 q/s** ; `resp-q4`×2 et `dns-q1`×2 tiendraient ~1000 q/s. Gain réaliste
   **~700-800 q/s**, soit ×1,75-2 par rapport aux 400 actuels.
 - Coût/risque : configuration + vérification de l'allocation ACK par worker ;
   risque de collision softirq/worker (cf. `tmp/PASSATION.md` §5 : `taskset` des
   workers sur les cœurs les moins chargés en softirq). Aucun changement de
-  sémantique de sécurité.
+  sémantique de sécurité. Coût mémoire : `N` copies de la table `pending`
+  (TTL 5 s) et `N` écritures IPC par question ; `runtime.lowmem` ramène les
+  plages à une seule file.
 
 ### 10.2 Second avis ciblé — gain +40 à +70 % sur le chemin réponses
 
@@ -508,3 +516,77 @@ pas de la capacité totale.
 Ordre recommandé : **10.1** (gain ×1,75-2, sans risque sémantique), puis
 **10.3** (mesure préalable au coup suivant), **10.2** (arbitrage sécurité),
 **10.4**, **10.5**.
+
+## 11. Multi-worker DNS — implémentation (branche `d-multi`)
+
+Mise en œuvre de la piste §10.1 : répartir les questions DNS (file 1) et les
+réponses DNS (file 4) sur **N workers**, par configuration, sans changer le
+comportement à 1 worker.
+
+### 11.1 Ce que le noyau garantit (vérifié dans les sources)
+
+`queue num A-B` (plage) fait répartir par `nfqueue_hash` — et non « premier
+listener disponible » : `nft_queue_eval` appelle `nfqueue_hash(skb, queue,
+queues_total, pf, jhash_initval)` dès que `queues_total > 1` et que le flag
+`fanout` est absent (`net/netfilter/nft_queue.c:36-46`). Le hachage
+(`include/net/netfilter/nf_queue.h:49-125`) est :
+
+- `hash_v4` : `jhash_3words(min(saddr,daddr), max(saddr,daddr), proto)` —
+  **symétrique** (les deux sens d'un flux donnent le même indice) et **sans les
+  ports** ;
+- `hash_v6` : tri des mots d'adresse (même symétrie) ; `hash_bridge` route vers
+  l'un ou l'autre selon l'EtherType (la table `bridge` est notre cas) ;
+- indice final `reciprocal_scale(hash, queues_total)`.
+
+Conséquences : (a) tous les paquets d'un flux — et de son sens retour — vont au
+même worker, donc le réassemblage DNS/TCP est sûr ; (b) le `fanout` du langage
+nft est **par CPU** (`nft_queue.c:37-40`) et casserait cette affinité : ne pas
+l'ajouter ; (c) deux flux de couples d'adresses différents (client↔résolveur et
+client↔validateur) peuvent tomber sur des files différentes — d'où le bus de
+verdicts.
+
+### 11.2 État par processus : ce qui devait être partagé
+
+- `pending` (`ipc.moon`) : table privée au processus. Avec plusieurs workers
+  réponses lisant *le même* pipe, une entrée n'était lue que par un seul : la
+  réponse livrée à un autre worker était jetée (`response_orphan_dropped`).
+  → **fan-out** : un pipe par worker réponses, chaque question écrite dans tous
+  (`ipc.write_with_retry_all`).
+- `mac_clients`/`ip_to_mac` (`worker_responses.moon`) : alimentés par `pending`,
+  donc complets dans chaque worker après le fan-out.
+- `so_state` (second avis) : la réponse A et la réponse B du validateur ont des
+  couples d'adresses différents → files différentes. Le contexte parqué porte
+  des handles NFQUEUE (`qh_ptr`, `pkt_id`) **propres au processus** : impossible
+  de le débloquer depuis un autre worker. → **bus** `so_verdict_<i>` : le worker
+  qui reçoit B diffuse le verdict encodé, celui qui détient A le débloque.
+- `tcp_state`, `deferred`, `nft_queue` (`seq`/`last_acked_seq`), caches
+  (`nxdomain_bad`, `strip_query_cache`) : sûrs (affinité de flux, état par lot,
+  un tube ACK par worker via `worker_idx`).
+- `_retry_budget` : budget de 100 ms/s **par worker** → ×N au global (assumé).
+
+### 11.3 Configuration à déployer (2 workers par file)
+
+```moonscript
+nfqueue: {
+  questions: "0-1"   -- 2 workers questions (défaut)
+  responses: "4-5"   -- 2 workers réponses
+  captive:   "20"    -- inchangé
+  reject:    "10-11" -- inchangé
+}
+```
+
+Le ruleset rend `queue num 0-1` et `queue num 4-5` (`nft_rules.substitute`) ;
+les workers sont nommés `custos:dns-q0`, `custos:dns-q1`, `custos:resp-q4`,
+`custos:resp-q5` et redémarrés indépendamment. Contrôles après déploiement :
+`logread | grep -E "queue_open|question_response_workers|nft_rules_applied"`,
+`nft list ruleset | grep "queue to"`, `/proc/net/netfilter/nfnetlink_queue`
+(deux lignes `peer_portid` distinctes pour les files 4 et 5), et absence de
+`action=response_orphan_dropped`.
+
+### 11.4 Non mesuré ici
+
+Aucun déploiement depuis cette branche (consigne : pas de machine distante).
+Le gain attendu reste celui du §10.1 ; le protocole de re-mesure est celui du
+§7.1 (paliers 300/400/500 `mixed` + `up` 500, repos vérifié), en contrôlant en
+plus `response_orphan_dropped`, `so_verdict_bus_invalid` et l'absence de
+`nft_ack_timeout`.
