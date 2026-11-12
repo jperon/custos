@@ -252,15 +252,15 @@ après `70e67fd` (correctif 1, ACK par lot) et après `c7e21ba` (correctif 2,
 ACK consommé non ré-attendu). CPU = % d'un vCPU sur la fenêtre de mesure.
 Colonne « perte / RTT p50/p99 / CPU resp-q4-nft-dns-q1 ».
 
-| palier | avant (build initiale) | après correctif 1 (`70e67fd`) | après correctif 2 (`c7e21ba`) |
-|---|---|---|---|
-| 200 `mixed` | 0 % ; 22,6/70 ; 44/50/33 | 0 % ; **27/249** ; 44/47/34 | **0 % ; 22,9/68,4** ; 45/48/38 |
-| 250 `mixed` | 0 % ; 28,8/161 ; 53/48/40 | 0 % ; **32/296** ; 55/48/41 | **0 % ; 22,0/68,7** ; 55/45/47 |
-| 300 `mixed` | **2,4 %** ; 47/477 ; 55/42/43 | 0 % ; 84/287 ; 66/64/51 | **0 % ; 37,5/125,6** ; 68/66/59 |
-| 400 `mixed` | non mesuré | **13,1 %** ; 250/467 ; 72/67/62 | **16,7 % ; 271/508** ; 74/65/72 |
-| 500 `mixed` | **58,0 %** ; 326/695 ; 52/51/74 | 40,0 % ; 329/616 ; 68/60/75 | **36,8 % ; 498/881** ; 73/64/82 |
-| 200 `up` | 0 % ; 4,7/8,8 ; 32/10/25 | 0 % ; **5,8/336** ; 33/10/26 | **0 % ; 4,8/18** ; 35/10/26 |
-| 500 `up` | non mesuré | **24,0 %** ; 400/912 ; 51/13/45 | **0 % ; 6,1/42** ; 66/17/49 |
+| palier | avant (build initiale) | après correctif 1 (`70e67fd`) | après correctif 2 (`c7e21ba`) | après correctif 3 (`6d11b2a`) |
+|---|---|---|---|---|
+| 200 `mixed` | 0 % ; 22,6/70 ; 44/50/33 | 0 % ; **27/249** ; 44/47/34 | **0 % ; 22,9/68,4** ; 45/48/38 | n.m. |
+| 250 `mixed` | 0 % ; 28,8/161 ; 53/48/40 | 0 % ; **32/296** ; 55/48/41 | **0 % ; 22,0/68,7** ; 55/45/47 | n.m. |
+| 300 `mixed` | **2,4 %** ; 47/477 ; 55/42/43 | 0 % ; 84/287 ; 66/64/51 | **0 % ; 37,5/125,6** ; 68/66/59 | **0 % ; 36,0/124,7** ; 64/63/59 |
+| 400 `mixed` | non mesuré | **13,1 %** ; 250/467 ; 72/67/62 | 16,7 % ; 271/508 ; 74/65/72 | **9,9 % ; 209/481** ; 78/60/77 |
+| 500 `mixed` | **58,0 %** ; 326/695 ; 52/51/74 | 40,0 % ; 329/616 ; 68/60/75 | 36,8 % ; 498/881 ; 73/64/82 | **35,9 % ; 529/962** ; 72/63/83 |
+| 200 `up` | 0 % ; 4,7/8,8 ; 32/10/25 | 0 % ; **5,8/336** ; 33/10/26 | **0 % ; 4,8/18** ; 35/10/26 | n.m. |
+| 500 `up` | non mesuré | **24,0 %** ; 400/912 ; 51/13/45 | **0 % ; 6,1/42** ; 66/17/49 | **0 % ; 6,2/48,9** ; 66/18/53 |
 
 Critères annoncés au §7.2 :
 
@@ -281,6 +281,33 @@ Verdict :
   (64 %) d'un vCPU sont tous proches de la saturation ; la part d'attente
   d'ACK n'est plus que de 6-7 %. Le prochain levier est donc le coût CPU par
   paquet (§8), en particulier le coût par instruction nft.
+
+### 7.3 Résultat mesuré du regroupement nft (correctif 3, `6d11b2a`)
+
+Re-mesure du 2026-11-12 après déploiement du regroupement (`build_batch` :
+une instruction `add element { … }` par set), paliers 300/400/500 `mixed` +
+`up` 500, 30 s, repos vérifié.
+
+- **Correction : critères tenus.** `batch_failed` = **0**, `single_failed` = **0**,
+  `deferred_flush_error` = 0, `response_nft_ack_timeout` = 0 (aucune occurrence
+  depuis le redéploiement). La syntaxe groupée est donc acceptée par le nft de
+  la cible en production. Les sets sont remplis et **les timeouts par élément
+  sont bien distincts** (`r_utilisateurs_ip4` : `192.200.0.101 timeout 10m1s`,
+  `.102 timeout 10m14s`, `.103 timeout 10m30s`, … pour une même réponse à 8 A).
+- **Perte / latence** : 400 q/s passe de 16,7 % à **9,9 %** de perte
+  (`user_dropped` +3398 → +2018), 500 q/s de 36,8 % à 35,9 % ; 300 q/s reste à
+  0 % (p99 124,7 ms) et `up` 500 à 0 % (p99 48,9 ms).
+- **CPU `nft` : critère NON tenu.** Attendu ≲ 30 % d'un vCPU à 400-500 q/s,
+  mesuré **60 %** (400) et **63 %** (500), contre 65 % et 64 % au correctif 2 :
+  le regroupement ne réduit pas le coût du worker nft (~5 points au mieux,
+  dans le bruit). Interprétation : le coût est **par élément** (parsing de
+  l'expression d'élément + insertion netlink dans le set + gestion du timeout),
+  pas par instruction — regrouper 20 éléments en 3 instructions n'économise que
+  l'en-tête des instructions. Le gain observé à 400 q/s vient de la latence par
+  flush (3 allers-retours noyau au lieu de ~20), pas du CPU.
+- Répartition CPU `nft` mesurée : ~62 % user / 38 % système à 400-500 q/s, ce qui
+  confirme qu'une part significative du coût est côté noyau (insertion des
+  éléments), hors de portée d'un simple regroupement textuel.
 
 ### 7.2 Régression trouvée par la re-mesure : ACK consommé puis ré-attendu 150 ms
 
@@ -323,7 +350,7 @@ Protocole de re-mesure du correctif 2 (réalisé, résultats §7.1) : paliers de
 vérifié avant chaque palier, puis contrôle de `action=response_nft_ack_timeout`
 (0), de `ack_wait_us` (max), du p99 client et de `user_dropped`.
 
-## 8. Goulot suivant après les deux correctifs (mesuré, non corrigé)
+## 8. Goulot suivant après les deux premiers correctifs (mesuré)
 
 Mesures de décomposition faites sur la build `70e67fd` (profil `up` = 100 %
 `vpn.stemarie.dynv6.net`, 1-2 enregistrements, sans doublon validateur ;
@@ -344,9 +371,10 @@ n'est pas possible sans déployer un build instrumenté.
 
 Autres postes mesurés au point de rupture (400 q/s `mixed`) :
 
-- `nft` : 67 % d'un vCPU, pour ~20 instructions d'insertion par réponse qui
+- `nft` : 67 % d'un vCPU, pour ~20 éléments d'insertion par réponse qui
   injecte (8 `ip4` + 8 `mac4` + `mac6` pour une réponse Tailscale), soit
-  **0,22-0,27 ms par instruction**.
+  **0,22-0,27 ms par élément** (le regroupement du §7.3 le confirme : le coût
+  suit le nombre d'éléments, pas le nombre d'instructions).
   **Corrigé après cette mesure** (`perf(nft): regroupe les insertions d'un lot en
   une instruction par set`) : `worker_nft.build_batch` regroupe les éléments
   d'un même set en une instruction `add element <table> <set> { e1, e2, … }`
@@ -363,17 +391,17 @@ Autres postes mesurés au point de rupture (400 q/s `mixed`) :
   Réduire ce coût suppose de changer la politique de validation (config), pas
   le code : hors périmètre.
 
-### 8.1 Re-mesure du regroupement nft (à faire après déploiement)
+### 8.1 Re-mesure du regroupement nft (réalisée — critère CPU non tenu)
 
 1. repos vérifié (profondeur file 4 = 0, `user_dropped` figé), un seul
    générateur, comme `tmp/bench2/runphase3.sh` ;
 2. paliers de 30 s à 300, 400 et 500 q/s `mixed` (+ `up` 500 en contrôle) ;
-3. critères : `nft` doit passer de 64-65 % à ≲ 30 % d'un vCPU à 400-500 q/s
-   (0,22-0,27 ms × ~20 instructions → ~3), `batch_failed` et `single_failed`
-   rester à **0** dans `logread` (sinon la syntaxe groupée échoue), aucun
-   `deferred_flush_error`, et la perte `mixed` doit reculer sous celle mesurée
-   au §7.1 (16,7 % à 400, 36,8 % à 500) — le plafond restant `resp-q4`/`dns-q1`
-   (~1,3-1,7 ms par paquet) ;
+3. critères : `nft` ≲ 30 % d'un vCPU à 400-500 q/s, `batch_failed` et
+   `single_failed` à **0**, pas de `deferred_flush_error`, perte `mixed` en
+   recul. **Résultats (§7.3)** : syntaxe et pertes conformes (0 échec, 16,7 →
+   9,9 % à 400), mais **CPU `nft` inchangé (60-63 %)** : le coût est par élément,
+   pas par instruction ; l'hypothèse « 0,22-0,27 ms par instruction » du §8 est
+   donc à corriger en « par élément » ;
 4. contrôler que les sets se remplissent normalement (`nft list set` juste
    après un palier) et que les timeouts par élément sont respectés (un élément
    doit expirer selon son TTL, pas celui du voisin).
@@ -406,3 +434,77 @@ Autres postes mesurés au point de rupture (400 q/s `mixed`) :
   enregistrements) et `tls` (8 enregistrements) donnent le même CPU/paquet
   (§8), ce qui exclut le parsing comme poste dominant sans l'identifier pour
   autant ; un `jit.profile` embarqué dans un build de mesure serait nécessaire.
+
+## 10. Pistes restantes (chiffrées, classées par gain attendu)
+
+État de référence après les trois correctifs : **0 % de perte jusqu'à 300 q/s**,
+9,9 % à 400, 35,9 % à 500 (`mixed`), `up` 500 à 0 %. Au point de rupture le
+service consomme 218 % (400 q/s) à 229 % (500 q/s) d'un vCPU sur **4 cœurs**,
+donc la machine n'est pas saturée : le plafond vient de la **sérialisation par
+processus** (`resp-q4` 78 %, `dns-q1` 77-83 %, `nft` 60-63 % d'UN cœur chacun),
+pas de la capacité totale.
+
+### 10.1 Répartir réponses et questions sur plusieurs workers — gain ×1,75 à ×2
+
+- Mesure : `resp-q4` (un seul process, file `4`) à 78 % d'un vCPU à 400 q/s ;
+  `dns-q1` à 77-83 % ; `nft` 60-63 %. Le superviseur sait déjà créer plusieurs
+  files de questions (`questions_queues`) et alloue **un pipe ACK par worker
+  réponses** (`main.moon` boucle sur `responses_queues`) : passer à
+  `nfqueue.responses: "4-5"` (2 workers) double la capacité du chemin réponses.
+- Plafond attendu : `nft` est partagé et à 62 % pour 500 q/s → ≈ 100 % vers
+  **800 q/s** ; `resp-q4`×2 et `dns-q1`×2 tiendraient ~1000 q/s. Gain réaliste
+  **~700-800 q/s**, soit ×1,75-2 par rapport aux 400 actuels.
+- Coût/risque : configuration + vérification de l'allocation ACK par worker ;
+  risque de collision softirq/worker (cf. `tmp/PASSATION.md` §5 : `taskset` des
+  workers sur les cœurs les moins chargés en softirq). Aucun changement de
+  sémantique de sécurité.
+
+### 10.2 Second avis ciblé — gain +40 à +70 % sur le chemin réponses
+
+- Mesure : chaque requête autorisée produit **1,7 paquet** dans `resp-q4`
+  (§4.1). À débit client constant, `up` (sans validateur) consomme 33 % d'un
+  vCPU et `tls` (avec validateur) 60 % à 200 q/s : les doublons validateurs
+  **doublent** la charge du worker réponses.
+- Gain : retirer la duplication là où elle est redondante ferait passer
+  `resp-q4` de ~2,4 ms de CPU par requête à ~1,4 ms, soit un plafond de
+  ~420 à ~700 q/s sur ce seul poste (+40 à +70 %).
+- Coût/risque : **décision de politique de filtrage** (config
+  `validate`/`validate_resolvers`), pas du code ; ne pas toucher sans arbitrage
+  sécurité.
+
+### 10.3 Profiler le coût fixe par paquet de `resp-q4` et `dns-q1` — jusqu'à ×2 (théorique)
+
+- Mesure : 1,3-1,4 ms de CPU **par paquet** dans `resp-q4`, indépendant du
+  nombre d'enregistrements (profil `up` 1-2 RR = `tls` 8 RR, §8) ; ~1,7 ms par
+  question dans `dns-q1`. Les primitives mesurables (parsing 4-12 µs, ligne de
+  journal 10 µs, construction d'éléments nft 0,4 µs sur x86) n'expliquent
+  qu'une fraction.
+- Gain : si ce coût fixe était divisé par deux, les plafonds `resp-q4` et
+  `dns-q1` doubleraient (×2, le plus fort potentiel) — mais **non attribué** à
+  ce jour.
+- Coût : build de mesure avec `jit.profile` (ou compteurs par section) sur la
+  cible ; aucun déploiement de production nécessaire. À faire avant 10.1/10.2
+  si l'on veut éviter d'optimiser le mauvais poste.
+
+### 10.4 Coût nft par élément — ≤ 20-30 % du CPU de service
+
+- Mesure : `nft` 60-63 % d'un vCPU à 400-500 q/s pour ~20 éléments par réponse
+  qui injecte, dont ~62 % en temps utilisateur et 38 % en noyau (§7.3). Le
+  regroupement en une instruction par set n'a **pas** réduit ce coût : il est
+  par élément (expression + insertion netlink + timeout), pas par instruction.
+- Pistes : API basse niveau `libnftnl` (contourne le parseur de texte, part
+  inconnue des 62 % user) ; ou réduire le nombre d'éléments par réponse, ce qui
+  touche la sémantique (les sets `mac*` portent le filtrage L2) — **hors
+  périmètre sans arbitrage**.
+- Gain attendu : au mieux 20-30 % du CPU de service, à comparer aux gains
+  ×2 de 10.1/10.3.
+
+### 10.5 Postes mineurs
+
+- `events` 12 % et `mac-lrn` 4-5 % d'un vCPU à 400-500 q/s (écriture d'un
+  événement par transaction DNS + apprentissage ARP/NDP). Optimisables mais
+  sans effet sur le plafond actuel (< 5 %).
+
+Ordre recommandé : **10.1** (gain ×1,75-2, sans risque sémantique), puis
+**10.3** (mesure préalable au coup suivant), **10.2** (arbitrage sécurité),
+**10.4**, **10.5**.
