@@ -174,6 +174,63 @@ plus d'enregistrement de réponse (`ancount=0`, seul l'OPT/EDE est ajouté), une
 REFUSED ne portant pas de réponse. `build_captive_response` garde son profil
 autoritaire (QR=1, AA=1, RA inchangé). Tests : `tests/unit/dns_ede_spec.moon`.
 
+### Nom de confirmation TRR de Firefox (`filter.trr_confirmation`)
+
+Firefox valide son résolveur DoH en interrogeant `network.trr.confirmationNS`
+(défaut `example.com`). Un client non authentifié recevait un **REFUSED** :
+`doh.query.process_query` (`src/doh/query.moon:197-242`) évalue chaque question
+via `filter.decide_meta` (ligne 211) ; aucun nom hors `CAPTIVE_PROBES` ne
+matche, donc `filter.rule.details_of` renvoie `false, "No matching rule
+(default deny)"` (`src/filter/rule.moon:236`) ; `any_blocked` passe à vrai et
+`build_blocked_response` (`src/doh/query.moon:236-242`) forge
+REFUSED+EDE 17 (`src/dns_ede.moon:75-92`). `worker_doh` l'envoie en HTTP 200
+`application/dns-message` (`src/worker_doh.moon:600-610`). Firefox journalise
+alors `TRR_RCODE_FAIL`, considère le résolveur en panne et retombe sur le DNS
+classique. Un client **authentifié** subissait le même refus avec la seule
+configuration par défaut (aucune règle par défaut n'autorise un nom arbitraire,
+seules les sondes captives sont listées) ; dans un déploiement disposant d'une
+règle `allow` large il recevait la résolution amont et l'injection nft normales.
+
+Correctif : liste **dédiée** `TRR_CONFIRMATION` (`src/config.moon:82-94`, défaut
+`{"example.com"}` seul) et une règle par défaut `dnsonly` marquée `trr`
+(`src/config.moon:434-445`). `normalize` remplace la liste des règles marquées
+`trr` par `filter.trr_confirmation` (`src/config.moon:581-597` ; casse basse,
+point final retiré, entrées invalides ignorées avec
+`trr_confirmation_name_invalid`), retire le marqueur, et supprime la règle si la
+liste est vide ; le marqueur ne fuite pas dans les règles compilées.
+
+Sûreté — la liste n'ouvre aucune destination :
+
+- `dnsonly` n'injecte **jamais** d'IP : son `on_response` pose `skip_nft`
+  (`src/filter/actions/dnsonly.moon:21-23`), `filter.rule.apply_on_response`
+  en déduit `inject_nft=false` (`src/filter/rule.moon:314-329`), que
+  `doh.query` transmet (`src/doh/query.moon:329-340`) ; `response_inject.inject`
+  retourne immédiatement sans aucune insertion quand `inject_nft` est faux
+  (`src/response_inject.moon:99`), donc `records_to_add=0` et le fail-closed
+  (`src/doh/query.moon:342-349`) ne peut pas se déclencher. Le plan UDP suit la
+  même décision (`dnsonly` → `skip_nft`, pas d'entrée de set).
+- `to_domains` matche le nom exact ou un suffixe **sur frontière de label**
+  (`src/filter/conditions/to_domain.moon:37-49`) : `www.example.com` est couvert,
+  `notexample.com` et `example.com.evil.net` ne le sont pas (tests).
+- `example.com` est réservé par la RFC 2606 : aucun tiers ne peut y publier de
+  contenu ; la résolution est celle du résolveur amont réel.
+- La règle est indépendante de `captive_portal` et de l'état d'authentification :
+  même décision `dnsonly` pour tous, donc aucune variante `allow` n'est créée.
+- Inchangés : vol DNS du portail captif, qui précède la décision
+  (`src/doh/query.moon:168-182`) et reste prioritaire même si le filtre refuse ;
+  et refus (`default deny`) de tout nom hors `CAPTIVE_PROBES` et hors
+  `filter.trr_confirmation` pour un client non authentifié.
+
+Tests : `tests/unit/filter/trr_confirmation_spec.moon` (liste dédiée, décision
+`dnsonly` anonyme **et** authentifiée, `inject_nft=false`, frontières de labels,
+refus des autres noms, non-régression des sondes captives et du canari DoH,
+surcharge `filter.trr_confirmation`, `false`, `default_rules: {}`),
+`tests/unit/config_spec.moon` (présence et position de la règle par défaut),
+`tests/unit/doh/query_spec.moon` (REFUSED QR=1/RA=1/ancount=0 ; `dnsonly` →
+NOERROR livrée sans injection ni attente d'ACK ; vol captif conservé malgré un
+refus du filtre) et `tests/unit/worker_doh_spec.moon` (REFUSED+EDE servie en
+HTTP 200 `application/dns-message`, QR=1/RA=1).
+
 ### Certificat statique : chaîne complète et expiration
 
 `auth.cert.load_static` (utilisé par le portail et par `worker_doh`) construit

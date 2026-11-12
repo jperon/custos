@@ -79,6 +79,20 @@ CAPTIVE_PROBES = {
   "networkcheck.kde.org"
 }
 
+-- Noms de confirmation du résolveur DoH (TRR) des navigateurs.
+-- Firefox valide son résolveur DoH en résolvant `network.trr.confirmationNS`
+-- (défaut `example.com`) : un refus (REFUSED) lui fait journaliser
+-- TRR_RCODE_FAIL et retomber sur le DNS classique, ce qui contourne le filtre.
+-- Liste DÉDIÉE, volontairement distincte de CAPTIVE_PROBES : elle ne sert qu'à
+-- obtenir une vraie résolution (règle `dnsonly`, donc aucune IP injectée dans
+-- nft) et ne doit ouvrir aucun autre nom. `example.com` est réservé par la
+-- RFC 2606 (jamais enregistrable) : aucun tiers ne peut y placer de contenu.
+-- Surcharge : `filter.trr_confirmation` (liste de noms, ou `false`/`{}` pour
+-- désactiver). Sert aussi le plan UDP : la même décision est partagée.
+TRR_CONFIRMATION = {
+  "example.com"
+}
+
 -- SafeSearch : groupes (moteur → variante « safe ») pour la réécriture CNAME.
 -- Le match `to_domains` couvre chaque domaine ET ses sous-domaines (suffix
 -- match, cf. to_domain.moon) : seuls les domaines enregistrables sont listés
@@ -381,6 +395,11 @@ DEFAULTS = {
     -- NCSI/MSFT, Apple, Google…). false → ces règles ne sont pas injectées
     -- (le canari DoH Firefox reste indépendant). Cf. CAPTIVE_PROBES.
     captive_portal: true
+    -- Noms de confirmation du résolveur DoH Firefox (`network.trr.confirmationNS`).
+    -- Une règle `dnsonly` par défaut porte sur cette liste : résolution amont
+    -- réelle (NOERROR) quel que soit l'état d'authentification, sans aucune
+    -- injection nft. false ou {} retire la règle. Cf. TRR_CONFIRMATION.
+    trr_confirmation: TRR_CONFIRMATION
     -- Active SafeSearch (réécriture CNAME des moteurs vers leur variante
     -- « safe » : Google/YouTube/Bing/DuckDuckGo). Cf. SAFE_SEARCH_GROUPS.
     safe_search: true
@@ -411,6 +430,18 @@ DEFAULTS = {
         description: "Détection de portail captif (sondes OS/navigateurs : NCSI/MSFT, Apple, Google…)"
         actions: {"dnsonly"}
         conditions: { to_domains: CAPTIVE_PROBES }
+      }
+      {
+        -- trr: marqueur interne (retiré par normalize) ; la liste est
+        -- remplacée par filter.trr_confirmation à la normalisation.
+        -- `dnsonly` : Firefox n'a besoin que de la réponse DNS pour valider son
+        -- résolveur DoH ; aucune IP n'est injectée dans nft, donc la liste
+        -- n'ouvre aucune destination. Indépendant de filter.captive_portal et
+        -- de l'authentification (le nom doit résoudre dans tous les cas).
+        trr: true
+        description: "Confirmation du résolveur DoH Firefox (TRR) : résolution seule"
+        actions: {"dnsonly"}
+        conditions: { to_domains: TRR_CONFIRMATION }
       }
     }
     dest_whitelist: {}
@@ -472,6 +503,43 @@ config_warn = (fields) ->
   else
     io.stderr\write "config: #{fields.action}\n"
 
+--- Vrai si `name` est un nom DNS utilisable comme entrée de liste.
+-- Casse basse, sans point final, labels non vides et bornés (RFC 1035).
+-- @tparam string|nil name Nom candidat.
+-- @treturn boolean
+valid_list_name = (name) ->
+  return false unless type(name) == "string"
+  return false if #name == 0 or #name > 253
+  return false if name\match "^%." or name\match "%.%."
+  for label in name\gmatch "[^%.]+"
+    return false if #label > 63
+    return false unless label\match "^[%w_%-]+$"
+  true
+
+--- Normalise `filter.trr_confirmation` (noms de confirmation TRR).
+-- `nil` → défaut (`TRR_CONFIRMATION`), `false` → liste vide (règles retirées).
+-- Accepte une chaîne seule ou une liste ; casse basse, point final retiré,
+-- doublons éliminés, entrées invalides ignorées avec un avertissement.
+-- @tparam any value Valeur configurée.
+-- @treturn table Liste de noms normalisés (possiblement vide).
+normalize_trr_confirmation = (value) ->
+  return {} if value == false
+  entries = if type(value) == "string" then { value } else value
+  unless type(entries) == "table"
+    config_warn { action: "trr_confirmation_invalid", type: type value } unless value == nil
+    return clone TRR_CONFIRMATION
+  out = {}
+  seen = {}
+  for entry in *entries
+    name = if type(entry) == "string" then (entry\lower!)\gsub "%.+$", "" else nil
+    if name and valid_list_name name
+      unless seen[name]
+        out[#out + 1] = name
+        seen[name] = true
+    else
+      config_warn { action: "trr_confirmation_name_invalid", name: tostring entry }
+  out
+
 normalize = (cfg) ->
   cfg.runtime = cfg.runtime or {}
   cfg.nfqueue = cfg.nfqueue or {}
@@ -510,11 +578,21 @@ normalize = (cfg) ->
     cfg.filter.captive_portal = DEFAULTS.filter.captive_portal
   else
     cfg.filter.captive_portal = coerce_boolean cfg.filter.captive_portal
+  -- Liste dédiée au nom de confirmation TRR (cf. TRR_CONFIRMATION) : elle
+  -- remplace la liste des règles marquées `trr` (marqueur retiré). Une liste
+  -- vide retire ces règles ; aucune autre règle n'est créée à partir d'elle.
+  cfg.filter.trr_confirmation = normalize_trr_confirmation cfg.filter.trr_confirmation
+  trr_names = cfg.filter.trr_confirmation
   filtered = {}
   for _, r in ipairs cfg.filter.default_rules
     if r.captive
       r.captive = nil
       continue unless cfg.filter.captive_portal
+    if r.trr
+      r.trr = nil
+      continue if #trr_names == 0
+      r.conditions = r.conditions or {}
+      r.conditions.to_domains = trr_names
     filtered[#filtered + 1] = r
   cfg.filter.default_rules = filtered
   -- SafeSearch : génère les règles cname (réécriture vers les variantes safe).

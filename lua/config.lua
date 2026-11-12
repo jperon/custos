@@ -12,6 +12,9 @@ local CAPTIVE_PROBES = {
   "connectivity-check.ubuntu.com",
   "networkcheck.kde.org"
 }
+local TRR_CONFIRMATION = {
+  "example.com"
+}
 local YOUTUBE_TARGETS = {
   strict = "restrict.youtube.com",
   moderate = "restrictmoderate.youtube.com"
@@ -430,6 +433,7 @@ local DEFAULTS = {
     custom_lists_dir = nil,
     allow_localnets = false,
     captive_portal = true,
+    trr_confirmation = TRR_CONFIRMATION,
     safe_search = true,
     youtube_restrict = "moderate",
     nets = { },
@@ -468,6 +472,16 @@ local DEFAULTS = {
         },
         conditions = {
           to_domains = CAPTIVE_PROBES
+        }
+      },
+      {
+        trr = true,
+        description = "Confirmation du résolveur DoH Firefox (TRR) : résolution seule",
+        actions = {
+          "dnsonly"
+        },
+        conditions = {
+          to_domains = TRR_CONFIRMATION
         }
       }
     },
@@ -550,6 +564,73 @@ config_warn = function(fields)
     return io.stderr:write("config: " .. tostring(fields.action) .. "\n")
   end
 end
+local valid_list_name
+valid_list_name = function(name)
+  if not (type(name) == "string") then
+    return false
+  end
+  if #name == 0 or #name > 253 then
+    return false
+  end
+  if name:match("^%." or name:match("%.%.")) then
+    return false
+  end
+  for label in name:gmatch("[^%.]+") do
+    if #label > 63 then
+      return false
+    end
+    if not (label:match("^[%w_%-]+$")) then
+      return false
+    end
+  end
+  return true
+end
+local normalize_trr_confirmation
+normalize_trr_confirmation = function(value)
+  if value == false then
+    return { }
+  end
+  local entries
+  if type(value) == "string" then
+    entries = {
+      value
+    }
+  else
+    entries = value
+  end
+  if not (type(entries) == "table") then
+    if not (value == nil) then
+      config_warn({
+        action = "trr_confirmation_invalid",
+        type = type(value)
+      })
+    end
+    return clone(TRR_CONFIRMATION)
+  end
+  local out = { }
+  local seen = { }
+  for _index_0 = 1, #entries do
+    local entry = entries[_index_0]
+    local name
+    if type(entry) == "string" then
+      name = (entry:lower()):gsub("%.+$", "")
+    else
+      name = nil
+    end
+    if name and valid_list_name(name) then
+      if not (seen[name]) then
+        out[#out + 1] = name
+        seen[name] = true
+      end
+    else
+      config_warn({
+        action = "trr_confirmation_name_invalid",
+        name = tostring(entry)
+      })
+    end
+  end
+  return out
+end
 local normalize
 normalize = function(cfg)
   cfg.runtime = cfg.runtime or { }
@@ -583,6 +664,8 @@ normalize = function(cfg)
   else
     cfg.filter.captive_portal = coerce_boolean(cfg.filter.captive_portal)
   end
+  cfg.filter.trr_confirmation = normalize_trr_confirmation(cfg.filter.trr_confirmation)
+  local trr_names = cfg.filter.trr_confirmation
   local filtered = { }
   for _, r in ipairs(cfg.filter.default_rules) do
     local _continue_0 = false
@@ -593,6 +676,15 @@ normalize = function(cfg)
           _continue_0 = true
           break
         end
+      end
+      if r.trr then
+        r.trr = nil
+        if #trr_names == 0 then
+          _continue_0 = true
+          break
+        end
+        r.conditions = r.conditions or { }
+        r.conditions.to_domains = trr_names
       end
       filtered[#filtered + 1] = r
       _continue_0 = true
