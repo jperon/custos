@@ -55,6 +55,13 @@ Cas disponibles : `question`, `ipc_drain`, `response`, `so_a`, `so_cycle`,
 pas celui attendu (mauvais code retour, verdict manquant) : une mesure ne doit
 jamais porter sur un autre chemin que celui décrit.
 
+**Machine vivante** : le banc force `config.nft.table` à un nom inexistant —
+`filter.load` appelle `ip_whitelist.init`, qui FLUSH les sets
+`ip*_dest_whitelist` de la table, et avec la vraie table ce flush viderait le
+ruleset d'un hôte où custos tourne. Aucune file NFQUEUE n'est ouverte
+(`run_queue` neutralisé) et `raw_send` est stubé : aucun paquet n'est émis.
+Seules écritures : `./tmp/prof/`.
+
 ## CLI directe
 
 ```sh

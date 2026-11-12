@@ -301,7 +301,11 @@ apply_config = ->
   config.nft or= {}
   config.nft.family  = "bridge"
   config.nft.family6 = "bridge"
-  config.nft.table   = "dns-filter-bridge"
+  -- Table INEXISTANTE : `filter.load` appelle `ip_whitelist.init`, qui exécute
+  -- `flush set <family> <table> ip*_dest_whitelist`. Sur une machine où custos
+  -- tourne, garder la vraie table viderait les sets du ruleset vivant : avec
+  -- une table absente, le flush échoue sans effet (cf. docs/agents/perf.md §18.1).
+  config.nft.table   = "hotpath_bench_no_table"
   config.nft.ip_timeout = "2m"
   config.filter or= {}
   config.filter.allow_localnets = false
