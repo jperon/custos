@@ -3334,3 +3334,58 @@ une tâche ultérieure. Détail, tableaux et recommandation : `perf.md` §15 et
 éprouvé sous afflux de questions sans réponse (il faudrait un profil dédié) :
 l'effet mémoire est extrapolé du chiffrage `doc/CONFIG.md:559-560` et signalé
 comme tel.
+
+### Longueur de la file noyau NFQUEUE (branche d-maxlen)
+
+Suite directe de la campagne `d-tune` (`perf.md` §15.4) : à 500 `mixed` et
+1000 `up`, toute la perte est `queue_dropped` (colonne 6 de
+`/proc/net/netfilter/nfnetlink_queue`), `user_dropped` = 0, et la profondeur
+atteint 1024 — `NFQNL_QMAX_DEFAULT`, la longueur de file noyau que
+libnetfilter_queue laisse quand personne n'appelle `nfq_set_queue_maxlen()`.
+Aucune clé de configuration ne permettait de l'agrandir.
+
+- **Correctif.** Nouveau module `src/lib/nfq_maxlen.moon` (résolution de la
+  valeur, appel FFI, logs INFO/WARN), sur le modèle de `lib.nfq_rcvbuf` :
+  `resolve_maxlen` (`:33-36`) prend `nfqueue.maxlen` en paquets quand c'est un
+  entier > 0, sinon 4096 (défaut) ou 1024 (`runtime.lowmem`) ;
+  `apply_maxlen` (`:55-58`) appelle `nfq_set_queue_maxlen` et rend
+  `{ maxlen, rc, ok }` ; `configure` (`:71-91`) journalise INFO `queue_maxlen`
+  (`queue`, `maxlen`) au succès, WARN `queue_maxlen_failed` (`queue`,
+  `maxlen`, `rc`, `errno`) si le retour est < 0, sans lever ni empêcher la
+  file de démarrer. En test unitaire, l'absence de la fonction dans la libnfq
+  stubbée désactive la fonctionnalité (DEBUG `queue_maxlen_unavailable`),
+  comme pour rcvbuf.
+- **Déclaration FFI.** `src/ffi_defs.moon:252` :
+  `int nfq_set_queue_maxlen(nfq_q_handle *qh, uint32_t queuelen);` dans le bloc
+  « Configuration de la queue ».
+- **Appel.** `src/nfq_loop.moon:117-125` : `nfq_maxlen.configure` juste après
+  `nfq_create_queue` (et `qh_box[0] = qh`), avant `nfq_set_mode`, en passant
+  `config.nfqueue.maxlen` et `lowmem.detect(config.runtime)` — même logique de
+  profil que `nfq_rcvbuf`.
+- **Validation de configuration.** `src/config.moon:621-634` : `tonumber`,
+  conserve un entier > 0, `0`/absent = auto (nil, profil résolu à l'ouverture),
+  et écarte les autres valeurs avec le WARN `nfqueue_maxlen_invalid`
+  (`configured`). Le schéma webui annonce la clé
+  (`src/webui/schema/config_schema.moon:30`, type integer, défaut 0 = auto).
+- **Champ de log.** `maxlen` ajouté aux clés d'identité de l'empreinte de
+  rate-limiting (`src/log.moon`, `RL_IDENTITY_KEYS`) : sans cela
+  `tests/unit/log_fields_spec.moon` échoue. `rc`, `errno` et `queue` y
+  figuraient déjà.
+- **Tests.** `tests/unit/lib/nfq_maxlen_spec.moon` : défaut 4096, lowmem 1024,
+  explicite (y compris textuel et en RAM faible), valeurs invalides (0,
+  négatif, non numérique, non entier) → défaut du profil, appel FFI
+  (arguments et retour), retour négatif (ok=false), API absente (nil, aucun
+  log), INFO avec `queue`/`maxlen`, WARN avec `errno`. 12 cas.
+  `tests/unit/config_spec.moon` : maxlen absent, `0` = auto sans
+  avertissement, entier textuel normalisé, valeurs invalides → nil + WARN.
+- **Documentation.** `doc/CONFIG.md` §3 (ligne du tableau et note « Longueur de
+  la file noyau », exemple de configuration), `docs/agents/perf.md` §15.6
+  (courte note : levier, défauts, mémoire, mesure restant à faire), présente
+  section.
+
+**Non fait.** Aucune mesure de charge après correctif (pas de déploiement, pas
+de ssh) : les paliers 500 `mixed` / 1000 `up` de `perf.md` §15.3 restent à
+rejouer avec `nfqueue.maxlen` > 1024 pour vérifier que `queue_dropped`
+disparaît ; le gain avant le plafond CPU n'est pas chiffré. Aucune vérification
+sur un noyau refusant une longueur > 65535 : le cas est couvert par le stub
+(retour négatif → WARN, file démarrée).

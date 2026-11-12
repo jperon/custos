@@ -337,6 +337,7 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 | `sip` | string | `"12"` | Trafic SIP/VoIP |
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 | `rcvbuf` | integer | auto (4 Mio, 512 Kio en RAM faible) | Taille du tampon de réception netlink de **chaque** socket NFQUEUE, en octets (voir note). |
+| `maxlen` | integer | auto (4096, 1024 en RAM faible) | Longueur de la file **noyau** de chaque NFQUEUE, en paquets (voir note). |
 
 > **Tampon de réception netlink (`nfqueue.rcvbuf`).** libnetfilter_queue crée
 > son socket netlink sans `setsockopt(SO_RCVBUF)` : le défaut noyau
@@ -358,6 +359,27 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 > le WARN `queue_rcvbuf_failed` (avec `errno`) sans empêcher la file de
 > démarrer. `NETLINK_NO_ENOBUFS` n'est **pas** activé : il ferait taire
 > l'erreur ENOBUFS au lieu de la traiter, en masquant la perte.
+
+> **Longueur de la file noyau (`nfqueue.maxlen`).** Indépendamment du tampon
+> netlink ci-dessus, le noyau dimensionne chaque file NFQUEUE : quand elle est
+> pleine, les paquets sont jetés **avant** d'atteindre le socket userspace et
+> `queue_dropped` (colonne 6 de `/proc/net/netfilter/nfnetlink_queue`) augmente
+> — à ne pas confondre avec `queue_user_dropped` (colonne 7, tampon netlink).
+> libnetfilter_queue laisse le défaut `NFQNL_QMAX_DEFAULT` (**1024** paquets) ;
+> la campagne `d-tune` (`docs/agents/perf.md` §15) a mesuré que toute la perte
+> à 500 `mixed` et 1000 `up` venait de cette file pleine. Custos appelle donc
+> `nfq_set_queue_maxlen()` juste après la création de **chaque** file, avec
+> `maxlen` paquets (défaut **4096**, **1024** quand `runtime.lowmem` est
+> actif ; `0` ou une valeur absente/illisible = défaut du profil). Chaque
+> paquet en attente occupe de la mémoire **noyau** (skb + copie du payload) :
+> à ~1,5 Ko par paquet, 4096 emplacements représentent ~6 Mio par file dans le
+> pire cas — c'est le compromis mémoire/latence de la clé. La longueur
+> demandée est journalisée en INFO (`action=queue_maxlen`, champs `queue` et
+> `maxlen`) ; si le noyau refuse (retour < 0), le WARN `queue_maxlen_failed`
+> (avec `rc` et `errno`) est émis et la file démarre quand même avec la valeur
+> par défaut. Une valeur invalide (négative, non entière) est écartée au
+> chargement de la configuration avec le WARN `nfqueue_maxlen_invalid` (le
+> profil s'applique).
 
 **Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
 les paquets par le noyau, **par flux** : `queue num N-M` hache le couple
@@ -408,6 +430,7 @@ nfqueue: {
   sip:       "12"
   doh_vlan:  "13"
   -- rcvbuf: 4194304  -- octets ; absent = auto (4 Mio, 512 Kio en RAM faible)
+  -- maxlen: 4096     -- paquets ; absent = auto (4096, 1024 en RAM faible)
 }
 ```
 

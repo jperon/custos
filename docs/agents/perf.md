@@ -1314,3 +1314,17 @@ campagne.
   lowmem doit tenir la charge, garder 2/2 et ne réduire que `rcvbuf` et
   `pending_max` : c'est la réduction du nombre de workers, pas le tampon, qui
   coûte le débit.
+
+### 15.6 Suite : `nfqueue.maxlen` (branche `d-maxlen`)
+
+Le levier identifié en §15.4 — la longueur de la file **noyau** (1024,
+`NFQNL_QMAX_DEFAULT`) — est désormais exposé par la clé `nfqueue.maxlen`
+(`doc/CONFIG.md` §3). Chaque file appelle `nfq_set_queue_maxlen()` juste après
+sa création (`src/nfq_loop.moon`, module `src/lib/nfq_maxlen.moon`) : défaut
+**4096** paquets, **1024** en mode RAM faible, INFO `queue_maxlen` et WARN
+`queue_maxlen_failed` (sans empêcher le démarrage). Mémoire : chaque paquet en
+attente occupe de la mémoire noyau (skb + payload), ~6 Mio par file à 4096
+emplacements dans le pire cas. **Aucune mesure de charge n'a été rejouée** :
+les paliers 500 `mixed` / 1000 `up` de §15.3 restent à refaire avec une valeur
+supérieure à 1024 pour vérifier que `queue_dropped` disparaît avant le plafond
+CPU.
