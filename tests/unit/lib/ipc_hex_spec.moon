@@ -41,16 +41,19 @@ describe "lib.ipc_hex", ->
       raw = table.concat [ string.char((i * 7) % 256) for i = 1, 300 ]
       assert.equals raw, (from_hex to_hex raw)
 
-    -- Le cache de conversion (perf §18) ne doit changer ni la sortie ni le
-    -- nombre de substitutions rendu par `string.gsub`.
-    it "rend la même sortie et le même compte sur un appel répété (cache)", ->
+    -- Le cache de conversion (perf §18) ne doit changer ni la sortie ni
+    -- l'ARITÉ : `to_hex` rend exactement une valeur, comme avant le cache.
+    -- Une deuxième valeur casserait `nft_queue.build_line`, qui place
+    -- `to_hex corr` en dernier champ d'un constructeur de table : elle y
+    -- ajouterait un 10e champ, `worker_nft.parse_line` exigeant 9 champs
+    -- rejetterait TOUTES les insertions nft (régression e2e T03/T74, puis
+    -- absence de SYN → plus de log `sni_captured`, T121-T124b).
+    it "rend exactement une valeur, y compris sur un hit du cache", ->
       s = "\1\2\3"
-      hex, count = to_hex s
-      assert.equals "010203", hex
-      assert.equals 3, count
-      hex2, count2 = to_hex s
-      assert.equals "010203", hex2
-      assert.equals 3, count2
+      assert.equals 1, select "#", to_hex s
+      assert.equals "010203", to_hex s
+      -- Second appel : hit du cache, même arité.
+      assert.equals 1, select "#", to_hex s
 
     it "reste exact après le débordement du cache (entrées multiples)", ->
       for i = 1, 20

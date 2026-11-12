@@ -28,7 +28,7 @@ to_hex = function(s)
   end
   local hit = _hex_enc_cache[s]
   if hit then
-    return hit, #s
+    return hit
   end
   local out = (s:gsub(".", HEX_BYTE))
   if #s <= CACHE_MAX_INPUT then
@@ -39,7 +39,7 @@ to_hex = function(s)
     _hex_enc_cache[s] = out
     _hex_enc_n = _hex_enc_n + 1
   end
-  return out, #s
+  return out
 end
 local HEX_VAL = { }
 for i = 0, 9 do

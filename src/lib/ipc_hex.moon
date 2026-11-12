@@ -45,13 +45,17 @@ _hex_dec_n     = 0
 --- Encode une chaîne d'octets en hexadécimal minuscule.
 -- @tparam string s Chaîne d'octets
 -- @treturn string Représentation hexadécimale ("" si vide)
--- @treturn number Nombre de substitutions (identique à `string.gsub`)
 to_hex = (s) ->
   return "" unless s and #s > 0
   hit = _hex_enc_cache[s]
-  -- `gsub` rend (chaîne, nombre de substitutions) : sur un hit on reproduit
-  -- les deux valeurs (chaque octet = une substitution → #s).
-  return hit, #s if hit
+  -- Contrat : UNE seule valeur, comme le `(s\gsub ...)` parenthésé d'avant le
+  -- cache. `nft_queue.build_line` place `to_hex corr` en DERNIER champ d'un
+  -- constructeur de table : une deuxième valeur y ajouterait un 10e champ, et
+  -- `worker_nft.parse_line` (exactement 9 champs) rejetterait alors TOUTES les
+  -- insertions nft avec `field_count` (régression e2e T03/T74 : sets vides, puis
+  -- SYN bloqué vers 10.42.0.50 d'où l'absence de logs SNI T121-T124b). Le
+  -- compte de substitutions n'a aucun appelant : ne pas le rendre.
+  return hit if hit
   out = (s\gsub ".", HEX_BYTE)
   if #s <= CACHE_MAX_INPUT
     if _hex_enc_n >= CACHE_MAX_ENTRIES
@@ -59,7 +63,7 @@ to_hex = (s) ->
       _hex_enc_n = 0
     _hex_enc_cache[s] = out
     _hex_enc_n += 1
-  out, #s
+  out
 
 -- Valeur hexadécimale d'un octet de code (nil si ce n'est pas un caractère
 -- hexadécimal) : décodage par paires sans `sub`+`tonumber`+`string.char`
