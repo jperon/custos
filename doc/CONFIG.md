@@ -893,6 +893,7 @@ Section principale : définit les règles de filtrage DNS, les listes et la logi
 | `custom_lists_dir` | string | `nil` | Dossier **source** des `.txt` scannés par l'updater (non lu par le filtre ; les `.bin` produits vont sous `{domainlists_dir}/custom/`) |
 | `allow_localnets` | bool | `false` | Si `true`, injecte automatiquement les réseaux locaux en whitelist nft |
 | `captive_portal` | bool | `true` | Active les règles par défaut de détection de portail captif (sondes NCSI/MSFT, Apple, Google…). `false` → ces règles ne sont pas injectées (cf. § Règles par défaut) |
+| `trr_confirmation` | array \| string \| false | `{"example.com"}` | Noms de confirmation du résolveur DoH Firefox (`network.trr.confirmationNS`) : une règle `dnsonly` par défaut les résout réellement, quel que soit l'état d'authentification, sans injecter d'IP dans nft. `false` ou `{}` retire la règle. Aucun autre nom n'est ouvert (cf. § Règles par défaut) |
 | `safe_search` | bool | `true` | Active SafeSearch : réécriture CNAME des moteurs de recherche vers leur variante « safe » (Google→`forcesafesearch.google.com`, YouTube, Bing→`strict.bing.com`, DuckDuckGo→`safe.duckduckgo.com`). `false` → aucune réécriture (cf. § SafeSearch) |
 | `youtube_restrict` | string | `"moderate"` | Mode YouTube Restricted : `"strict"` (`restrict.youtube.com`), `"moderate"` (`restrictmoderate.youtube.com`) ou `false` (YouTube non réécrit). Sans effet si `safe_search` est `false` |
 | `dest_whitelist` | array | `{}` | IPs/CIDRs de destination toujours autorisées (bypass filtrage) |
@@ -1166,6 +1167,15 @@ externe) et donc fonctionnelles dès l'installation :
    réussisse (pas de portail).
 3. `dnsonly` sur le même ensemble — résolution DNS seule pour les clients non
    authentifiés (la sonde HTTP est interceptée et redirigée vers le portail).
+4. `dnsonly` sur `filter.trr_confirmation` (défaut `example.com` seul) — nom de
+   confirmation du résolveur DoH (TRR) de Firefox. Firefox valide son résolveur
+   DoH en résolvant ce nom : une réponse `REFUSED` lui fait journaliser
+   `TRR_RCODE_FAIL` et retomber sur le DNS classique (contournement du filtre).
+   La résolution réelle est donc autorisée quel que soit l'état
+   d'authentification. `dnsonly` n'injecte **aucune** IP dans nft : la liste ne
+   donne accès à aucune destination, et la condition `to_domains` ne matche que
+   le nom et ses sous-domaines (`www.example.com`), pas `notexample.com`.
+   `example.com` est réservé par la RFC 2606 (jamais enregistrable).
 
 L'ensemble des sondes couvre **NCSI/MSFT** (`msftconnecttest.com`, `msftncsi.com`
 — le match par suffixe couvre `dns.msftncsi.com`, `www.msftncsi.com`,
@@ -1176,9 +1186,11 @@ Ubuntu et KDE.
 
 Pour **désactiver toutes** les règles par défaut : `filter: { default_rules: {} }`.
 Pour **désactiver uniquement** la détection de portail captif (sondes NCSI/MSFT,
-Apple, Google… — règles 2 et 3) tout en conservant le canari DoH :
-`filter: { captive_portal: false }`. Pour **étendre**, ajouter ses propres règles
-dans `filter.rules` (appliquées ensuite).
+Apple, Google… — règles 2 et 3) tout en conservant le canari DoH : `filter: {
+captive_portal: false }`. La règle de confirmation TRR (règle 4) est indépendante
+de `captive_portal` ; elle se règle par `filter.trr_confirmation` (`false` ou
+`{}` pour la retirer, une liste pour changer les noms). Pour **étendre**, ajouter
+ses propres règles dans `filter.rules` (appliquées ensuite).
 
 #### SafeSearch (`filter.safe_search`, `filter.youtube_restrict`)
 

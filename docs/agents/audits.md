@@ -2528,3 +2528,61 @@ l'ordre ; sondes en lecture uniquement (`curl -k --http2`, `openssl s_client`).
 **Vérification (2026-11-12, branche d-doh2).** `nix develop --command bash -c
 "make all && make check && make test"` : **2747 succès / 0 échec / 0 erreur**
 (unitaires) et 12/12 tests JS. `make test-e2e` non exécuté dans cette passe.
+
+### Nom de confirmation TRR de Firefox (branche d-trr)
+
+- **Constat.** Firefox valide son résolveur DoH en interrogeant
+  `network.trr.confirmationNS` (défaut `example.com`). Pour un client non
+  authentifié, `doh.query.process_query` (`src/doh/query.moon:197-242`) évalue
+  la question via `filter.decide_meta` (ligne 211) ; aucun nom hors
+  `CAPTIVE_PROBES` ne matche, donc `filter.rule.details_of` renvoie
+  `false, "No matching rule (default deny)"` (`src/filter/rule.moon:236`).
+  `any_blocked` passe à vrai et `build_blocked_response`
+  (`src/doh/query.moon:236-242`) forge une REFUSED+EDE 17
+  (`src/dns_ede.moon:75-92`), que `worker_doh` sert en HTTP 200
+  `application/dns-message` (`src/worker_doh.moon:600-610`). Firefox journalise
+  `TRR_RCODE_FAIL`, conclut que le résolveur est en panne et retombe sur le DNS
+  classique. Avec la seule configuration par défaut, un client **authentifié**
+  recevait le même refus (aucune règle par défaut n'autorise un nom arbitraire) ;
+  dans un déploiement avec règle `allow` large, il recevait la résolution amont
+  et l'injection nft normales.
+- **Correctif.** Liste **dédiée** `TRR_CONFIRMATION` (`src/config.moon:82-94`,
+  défaut `{"example.com"}`) et une règle par défaut `dnsonly` marquée `trr`
+  (`src/config.moon:434-445`). `normalize` normalise la surcharge
+  `filter.trr_confirmation` (casse basse, point final retiré, doublons et
+  entrées invalides ignorés avec `trr_confirmation_name_invalid`, type invalide
+  → défaut avec `trr_confirmation_invalid`), remplace la liste des règles
+  marquées `trr`, retire le marqueur et supprime la règle si la liste est vide
+  (`src/config.moon:581-597`). La règle est indépendante de
+  `filter.captive_portal` et de l'authentification : même décision `dnsonly`
+  pour tous, donc aucune variante `allow`.
+- **Sûreté — aucun nom ni accès ouvert.** `dnsonly` pose `skip_nft`
+  (`src/filter/actions/dnsonly.moon:21-23`), `filter.rule.apply_on_response`
+  calcule `inject_nft=false` (`src/filter/rule.moon:314-329`), `doh.query` le
+  transmet (`src/doh/query.moon:329-340`) et `response_inject.inject` retourne
+  immédiatement sans insertion quand `inject_nft` est faux
+  (`src/response_inject.moon:99`) : `records_to_add=0`, donc le fail-closed
+  (`src/doh/query.moon:342-349`) ne se déclenche pas. Le plan UDP suit la même
+  décision (pas d'entrée de set nft). `to_domains` matche le nom exact ou un
+  suffixe sur **frontière de label** (`src/filter/conditions/to_domain.moon:37-49`) :
+  `www.example.com` est couvert, `notexample.com` et `example.com.evil.net` non.
+  `example.com` est réservé par la RFC 2606 (aucun tiers ne peut y publier).
+  Inchangés : le vol DNS du portail captif, qui précède la décision
+  (`src/doh/query.moon:168-182`) et reste prioritaire même si le filtre refuse ;
+  et le refus `default deny` de tout nom hors des deux listes pour un client non
+  authentifié.
+- **Tests.** `tests/unit/filter/trr_confirmation_spec.moon` (liste dédiée,
+  `dnsonly` anonyme **et** authentifié, `inject_nft=false`, frontières de
+  labels, refus des autres noms, non-régression des sondes captives et du
+  canari DoH, surcharge, `false`, entrées invalides, `default_rules: {}`) ;
+  `tests/unit/config_spec.moon` (règle par défaut en position 4 et comptes) ;
+  `tests/unit/doh/query_spec.moon` (REFUSED QR=1/RA=1/ancount=0 ; `dnsonly` →
+  NOERROR livrée, sans injection ni attente d'ACK ; vol captif conservé malgré
+  un refus du filtre) ; `tests/unit/worker_doh_spec.moon` (REFUSED+EDE servie en
+  HTTP 200 `application/dns-message`, QR=1/RA=1).
+- **Documentation.** `doc/CONFIG.md` (§ `filter.trr_confirmation`, § Règles par
+  défaut, règle 4) et `docs/agents/doh.md` (§ Nom de confirmation TRR).
+- **Vérification (2026-11-12, branche d-trr).** `nix develop --command bash -c
+  "make all && make check && make test"` : **2826 succès / 0 échec / 0 erreur**
+  (unitaires, référence avant : 2812) et 12/12 tests JS. `make test-e2e` non
+  exécuté dans cette passe (provisioning libvirt non sollicité).
