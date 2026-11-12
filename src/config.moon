@@ -291,8 +291,10 @@ DEFAULTS = {
   -- et, si le validateur signale NXDOMAIN (blocage) ou CNAME (réorientation),
   -- spoofe la réponse d'origine. Voir doc/CONFIG.md § second_opinion.
   second_opinion: {
-    -- Liste d'IP, v4 et v6 mélangées : la famille du validateur est choisie
-    -- selon celle du paquet client (présence de ':' → IPv6).
+    -- Liste d'IP, v4 et v6 mélangées : famille choisie selon le paquet client,
+    -- IP d'une famille réparties par question (index (id DNS + port source) % n).
+    -- Plusieurs IP par famille répartissent la charge entre les workers
+    -- réponses : même validateur ou validateurs équivalents (même filtrage).
     -- Activé uniquement pour les règles portant l'action `validate`.
     resolvers: {
       "https://dns-doh-no-youtube-safe-search.dnsforfamily.com/dns-query"  -- DNSforFamily DoH, SafeSearch sans restriction YouTube

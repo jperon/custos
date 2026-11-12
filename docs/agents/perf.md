@@ -1429,3 +1429,26 @@ vide et `stack` non symbolisés (kallsyms absent) — remplacés par
 `chain_strip` non déterminable sans config ; le démontage de la file pendant
 les 10 dernières secondes du palier 350 (capacité +10 % à entrée constante)
 reste inexpliqué (échauffement JIT ou résolveur) faute d'instrumentation.
+
+### 16.6 Répartition des validateurs sur toutes les IP (branche `d-valspread`)
+
+Correctif du goulot n° 5 de `tmp/perfaudit_report.md` §5.3 (« toutes les
+réponses B sur une seule file ») : `pick_resolver` renvoyait toujours la
+**première** IP de la famille, alors que la config par défaut en liste 3 en
+IPv4 et 3 en IPv6. `dup_query.get_picker` (`src/dup_query.moon`) précalcule
+désormais les listes UDP par famille et choisit par question l'index
+`(id DNS + port source client) % n` ; `worker_questions.maybe_duplicate`
+l'applique au moment de dupliquer. Aucune allocation ni `find` par paquet
+(sélecteur mémoïsé par liste, cache à clés faibles).
+
+La corrélation ne suppose pas « la première » IP : `second_opinion.is_validator`
+reconnaît **toute** IP de `resolvers` (`src/second_opinion.moon:132-143`),
+ensemble alimenté par `collect_all_resolvers` (`src/worker_responses.moon:1370-1380`)
+et consulté tel quel (`:1093`). `worker_tls` et les modules DoH n'appellent pas
+`dup_query.pick_resolver` (seul `cname.pick_resolver_ip` choisit l'amont DoH,
+sans rapport) : comportement inchangé.
+
+Effet attendu : les réponses B se répartissent entre les files des workers
+réponses au lieu de saturer une seule file chaude (70,6 % sur `resp-q14`,
+§16.3). **Non mesuré** sur la cible (pas de déploiement depuis cette branche).
+

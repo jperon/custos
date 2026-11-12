@@ -3468,3 +3468,38 @@ données brutes `tmp/perfaudit/results/`.
   coalescées ; `nfq_set_queue_maxlen` ; `jit.profile` avant optimisation CPU.
 - **Documentation** : `perf.md` §16 (nouvelle section datée). Aucune ligne
   ajoutée à `AGENTS.md`.
+
+### Répartition des questions dupliquées sur tous les validateurs (branche d-valspread)
+
+- **Défaut** : `dup_query.pick_resolver` (`src/dup_query.moon:25-30` avant
+  correctif) renvoyait toujours la **première** IP de la bonne famille, alors
+  que la config par défaut (`src/config.moon`, `second_opinion.resolvers`) en
+  liste 3 en IPv4 et 3 en IPv6. Toutes les réponses du validateur (B) ont donc
+  le même couple d'adresses et tombent sur **une seule** file réponses (70,6 %
+  sur `resp-q14`, `perf.md` §16.3).
+- **Correctif** : `udp_lists` sépare les IP UDP par famille en excluant les URLs
+  DoH `https://` ; `new_picker` fige ces listes et rend
+  `pick(version, dns_id, sport)` = index `(dns_id + sport) % n + 1` ;
+  `get_picker` mémoïse un sélecteur par liste (clé = identité de table, cache
+  faible) pour ne rien allouer ni rechercher par paquet. `pick_resolver` reste
+  « première IP UDP de la famille » (sonde de routabilité au démarrage,
+  `worker_questions.arm_resolvers`, `worker_responses` l. 1428) ;
+  `maybe_duplicate` utilise le sélecteur avec l'id DNS de la question et le port
+  source client (`src/worker_questions.moon:108-123`).
+- **Écart constaté, corrigé au passage** : l'URL DoH contient `:`, donc
+  l'ancienne détection « présence de ':' → IPv6 » la prenait pour une IPv6 et
+  `pick_resolver(…, 6)` la renvoyait en premier ; `raw_send.routable` échouant
+  sur une URL, la famille IPv6 n'était **jamais armée** avec la config par
+  défaut (URL en tête de liste). Les URLs sont désormais exclues du choix UDP.
+- **Corrélation inchangée** : `second_opinion.is_validator` accepte toute IP de
+  `resolvers` (`src/second_opinion.moon:132-143`), ensemble construit depuis
+  `collect_all_resolvers` (`src/worker_responses.moon:1370-1380`) et consulté
+  l. 1093 ; aucune hypothèse « la première IP ». `worker_tls`/DoH n'appellent
+  pas `pick_resolver` (seul `cname.pick_resolver_ip` choisit l'amont DoH).
+- **Tests** : `tests/unit/dup_query_spec.moon` (répartition sur n, famille,
+  URLs ignorées, déterminisme, une seule adresse, liste vide, famille absente).
+- **Doc** : commentaire au-dessus de `second_opinion.resolvers`
+  (`src/config.moon`), tableau `resolvers` de `doc/CONFIG.md` §7bis, hint du
+  schéma webui (`src/webui/schema/config_schema.moon:48`), `perf.md` §16.6.
+  Aucune ligne ajoutée à `AGENTS.md`.
+
