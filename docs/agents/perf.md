@@ -344,18 +344,39 @@ n'est pas possible sans déployer un build instrumenté.
 
 Autres postes mesurés au point de rupture (400 q/s `mixed`) :
 
-- `nft` : 67 % d'un vCPU, pour ~20 lignes d'insertion par réponse qui injecte
-  (8 `ip4` + 8 `mac4` + `mac6` pour une réponse Tailscale), soit **0,22-0,27 ms
-  par ligne**. Un regroupement des éléments d'un même set en une seule commande
-  `add element { a, b, … }` (`src/worker_nft.moon`, `flush_batch`) réduirait le
-  nombre d'instructions nft par réponse de ~20 à 2-3 : piste la plus rentable
-  côté nft, non implémentée faute de pouvoir vérifier son gain réel ici.
+- `nft` : 67 % d'un vCPU, pour ~20 instructions d'insertion par réponse qui
+  injecte (8 `ip4` + 8 `mac4` + `mac6` pour une réponse Tailscale), soit
+  **0,22-0,27 ms par instruction**.
+  **Corrigé après cette mesure** (`perf(nft): regroupe les insertions d'un lot en
+  une instruction par set`) : `worker_nft.build_batch` regroupe les éléments
+  d'un même set en une instruction `add element <table> <set> { e1, e2, … }`
+  (timeout par élément conservé), soit 2-3 instructions par réponse au lieu de
+  ~20, avec repli élément par élément si le lot groupé est rejeté. Syntaxe
+  validée avec nft 1.1.6 dans un espace de noms réseau isolé (sets concaténés
+  `ip4`/`ip6`/`mac4`/`mac6`, sets simples `auth_*`/`sip`, timeouts par élément
+  conservés). Gain non mesuré sur la cible (pas de déploiement depuis cette
+  tâche) : protocole de re-mesure au §8.1.
 - `dns-q1` : 62 % d'un vCPU à 400 q/s, soit ~1,7 ms par question, du même ordre
   que `resp-q4` et non décomposé non plus.
 - second avis : ×1,7 paquet par requête dans `resp-q4` (§4.1), mesuré comme
   doublant sa charge CPU à débit client constant (`up` 33 % vs `tls` 60 %).
   Réduire ce coût suppose de changer la politique de validation (config), pas
   le code : hors périmètre.
+
+### 8.1 Re-mesure du regroupement nft (à faire après déploiement)
+
+1. repos vérifié (profondeur file 4 = 0, `user_dropped` figé), un seul
+   générateur, comme `tmp/bench2/runphase3.sh` ;
+2. paliers de 30 s à 300, 400 et 500 q/s `mixed` (+ `up` 500 en contrôle) ;
+3. critères : `nft` doit passer de 64-65 % à ≲ 30 % d'un vCPU à 400-500 q/s
+   (0,22-0,27 ms × ~20 instructions → ~3), `batch_failed` et `single_failed`
+   rester à **0** dans `logread` (sinon la syntaxe groupée échoue), aucun
+   `deferred_flush_error`, et la perte `mixed` doit reculer sous celle mesurée
+   au §7.1 (16,7 % à 400, 36,8 % à 500) — le plafond restant `resp-q4`/`dns-q1`
+   (~1,3-1,7 ms par paquet) ;
+4. contrôler que les sets se remplissent normalement (`nft list set` juste
+   après un palier) et que les timeouts par élément sont respectés (un élément
+   doit expirer selon son TTL, pas celui du voisin).
 
 ## 9. Ce qui n'a pas pu être prouvé
 

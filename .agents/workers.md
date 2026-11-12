@@ -97,6 +97,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 
 - **In :** pipe `nft` (commandes d'insertion sérialisées de tous les producteurs : responses, tls, sip, doh).
 - **Out :** exécute les transactions nftables, puis écrit sur le `ack_<i>` du worker producteur concerné un ACK de taille fixe (8 octets, `uint64` natif) portant le plus grand `seq` appliqué pour ce worker dans le flush. Un seul ACK par `(flush × worker)`.
+- **Regroupement :** `build_batch` regroupe les éléments en attente par set et émet **une instruction `add element <table> <set> { e1, e2, … }`** (timeout par élément dans la liste) au lieu d'une instruction par élément — le coût nft est dominé par le nombre d'instructions (docs/agents/perf.md §8). Si le lot groupé est rejeté (un élément invalide suffit), repli élément par élément : les éléments valides sont quand même appliqués, comportement historique préservé.
 - **Rôle :** sérialise les écritures nft (évite les transactions concurrentes) et garantit la présence de l'élément dans le set avant que le producteur rende son verdict.
 
 ## worker_events (`src/worker_events.moon`)
