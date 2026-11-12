@@ -31,7 +31,7 @@ clients_cfg = config.clients or {}
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
 { :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
-{ :run_queue, :NF_ACCEPT, :NF_DROP, :MAX_BATCH_PKTS } = require "nfq_loop"
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :MAX_BATCH_PKTS, :packet_age_ms } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled, :get_last_write_us } = require "log"
 { :tsv_field } = require "lib.tsv"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :strip_https_rr, :strip_dns_rr, :add_ede_modified, :clear_ad_bit, :patch_modified_dns } = require "dns_ede"
@@ -546,6 +546,20 @@ plan_retry_tries = (used_ms, budget_ms, wait_ms, tries) ->
   n = math.floor remaining / wait_ms
   if n < tries then n else tries
 
+--- Vrai si un retry d'appariement IPC peut encore aboutir (fonction pure).
+-- Une réponse plus vieille que `pending_ttl` ne peut plus être appariée : la
+-- transaction, écrite dans le tube AVANT que la question ne parte en amont, a
+-- été drainée (ou purgée) depuis longtemps. Sauter le retry évite jusqu'à
+-- `count × sleep_ms` de sommeil par réponse orpheline (100 ms par défaut),
+-- coût qui n'a aucune chance d'aboutir (cf. docs/agents/perf.md §17.9).
+-- @tparam number|nil age_ms Âge noyau de la réponse (nil = inconnu)
+-- @tparam number|nil ttl_s  Durée de vie d'une entrée pending (s)
+-- @treturn boolean true si le retry reste utile
+retry_worthwhile = (age_ms, ttl_s) ->
+  return true unless age_ms
+  return true unless ttl_s and ttl_s > 0
+  age_ms <= ttl_s * 1000
+
 --- Retry d'appariement IPC (réponse arrivée avant la lecture de la question).
 -- Coût borné par `RETRY_BUDGET_MS` par seconde (cf. ci-dessus) : au-delà, le
 -- retry est SAUTÉ (aucun nanosleep) et la réponse est traitée comme orpheline.
@@ -1054,6 +1068,10 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   bench_after_payload_ms = nil
   bench_after_parse_ms = nil
   bench_after_match_ms = nil
+  -- Âge noyau de la réponse (nil si le noyau n'horodate pas) : sert uniquement
+  -- à sauter un retry d'appariement sans espoir. Une réponse n'est JAMAIS
+  -- délestée sur l'âge : si une entrée pending existe, elle est servable.
+  response_age_ms = if IPC_RETRY_ENABLED then packet_age_ms nfad else nil
 
   -- ── Drain pipe IPC ───────────────────────────────────────────
   -- Absorbe tous les tokens disponibles de question avant de traiter ce paquet.
@@ -1153,7 +1171,12 @@ handle_response = (qh_ptr, nfad, pkt_id) ->
   ipc_retry_wait_ms = 0
   retry_budget_skipped = false
   unless entry
-    entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match txid, dst_ip, client_port, resolver_ip, ts
+    -- Réponse plus vieille que pending_ttl : le token IPC de la question a été
+    -- écrit avant que celle-ci ne parte en amont, donc il a déjà été drainé (ou
+    -- l'entrée a expiré). Les sommeils du retry ne peuvent plus apparier ;
+    -- sauter ce coût garde l'appariement des vieilles orphelines bon marché.
+    if retry_worthwhile response_age_ms, pending_ttl
+      entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match txid, dst_ip, client_port, resolver_ip, ts
     if entry
       log_info -> {
         action: "response_matched_after_retry"
@@ -1517,7 +1540,7 @@ _set_finalize_impl = (fn) ->
   :record_chain_targets, :maybe_dynamic_strip, :purge_strip_query_cache,
   :update_mac_clients, :purge_mac_clients, :ip_to_mac,
   :current_benchmark_us, :take_last_ack_wait_us,
-  :plan_retry_tries, :retry_pending_match, :_retry_budget, :_set_pipe_rfd,
+  :plan_retry_tries, :retry_pending_match, :retry_worthwhile, :_retry_budget, :_set_pipe_rfd,
   :build_orphan_fields,
   :settle, :flush_deferred, :deferred_count, :_set_defer_deps, :_reset_deferred,
   :finalize_a, :broadcast_verdict, :drain_verdict_bus, :apply_verdict_record,

@@ -3917,3 +3917,57 @@ partage exact entre réponses orphelines et réponses arrivées après la fenêt
 non instrumenté ; une seule source (servus), pas d'IPv6 temporaire ; `perf`
 absent de la cible ; reproductibilité dépendante du tirage des ports (8 ports :
 25/75 et 50/50 selon le run ; 128 ports : 48-52 %).
+
+### Délestage précoce des questions périmées (branche `d-shed`)
+
+**Constat** : au-delà de ~350 q/s `mixed`, la file réponses atteint
+2 000-4 000 paquets, `response_entry_ms` p99 dépasse `ipc.pending_ttl` (5 s) et
+les réponses sont jetées en `response_orphan_dropped` **après** un traitement
+complet, alors que le client a déjà dépassé son timeout DNS (`perf.md`
+§17.6/§17.9).
+
+**Correctif** :
+
+- `src/nfq_loop.moon` : `packet_age_ms(nfad)` lit l'horodatage noyau du paquet
+  (`NFQA_TIMESTAMP` via `nfq_get_timestamp`) et le compare à `CLOCK_REALTIME`
+  (même base que `ktime_get_real`) ; `nil` si l'attribut est absent. Symbole
+  résolu à la construction (`have_packet_timestamp`) pour qu'une
+  libnetfilter_queue ancienne ne tue pas le worker.
+- `src/ffi_defs.moon` : déclaration `nfq_get_timestamp(nfq_data*, struct
+  timeval*)`.
+- `src/worker_questions.moon` : avant toute analyse, si
+  `age_ms > nfqueue.max_age_ms`, verdict **`NF_DROP`** immédiat (jamais ACCEPT),
+  compteur `shed_total`, log INFO rate-limité `question_shed` (`age_ms`,
+  `max_age_ms`, `shed_total`). Aucune écriture IPC, donc aucune entrée
+  `pending` et aucun second avis pour ces paquets.
+- `src/config.moon` : nouvelle clé `nfqueue.max_age_ms`, défaut **1500 ms**
+  (`0` = désactivé), même valeur en RAM faible ; valeur invalide écartée avec
+  `nfqueue_max_age_invalid` et retour au défaut.
+- `src/worker_responses.moon` : une réponse n'est **jamais** jetée sur l'âge ;
+  seul le retry d'appariement (`5 × 20 ms`, budget 100 ms/s) est sauté au-delà
+  de `pending_ttl` (`retry_worthwhile`) — une réponse plus vieille que la TTL
+  ne peut plus être appariée, le token IPC de la question étant écrit avant
+  l'envoi en amont.
+- `src/log.moon` : `question_shed` agrégé par action (fenêtre 10 s) ; champs
+  `age_ms`, `max_age_ms`, `shed_total` classés volatils.
+
+**Vérification de l'horodatage** : en-têtes et source Linux v6.12
+(`nfqnl_build_packet_message`, `skb_tstamp_cond`) : `NFQA_TIMESTAMP` n'est
+émis que si `netstamp_needed_key` est active (socket `SO_TIMESTAMP`), et il
+n'existe pas de flag de configuration dédié. Sonde locale (noyau 6.18.60,
+netns non privilégié, `tmp/tsprobe.lua` jetable) : attribut présent, âge mesuré
+1 200 ms pour un retard de lecture de 1 200 ms ⇒ conversion et horloge justes.
+Sans attribut, `packet_age_ms` rend `nil` : le délestage est simplement inactif
+(chemin sûr).
+
+**Tests** : `tests/unit/worker_questions_spec.moon` (seuil strict, `0` =
+désactivé, âge `nil`, compteur, NF_DROP sans IPC/événement),
+`tests/unit/nfq_loop_age_spec.moon` (conversion, attribut absent, symbole
+absent, horloge reculée), `tests/unit/config_spec.moon`
+(`config.nfqueue.max_age_ms`), `tests/unit/worker_responses_spec.moon`
+(`retry_worthwhile`). Suite complète : `make all && make check && make test`.
+
+**Non fait / douteux** : aucun palier de charge rejoué sur la cible ; le gain
+CPU réel dépend de la présence de `NFQA_TIMESTAMP` sur la cible (aucun
+processus ne l'active peut-être) et n'est donc pas chiffré. Le log
+`question_shed_armed` confirme le seuil actif, pas l'horodatage disponible.

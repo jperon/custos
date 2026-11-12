@@ -35,10 +35,10 @@ do
   local _obj_0 = require("nft_queue")
   add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
-local run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS
+local run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS, packet_age_ms
 do
   local _obj_0 = require("nfq_loop")
-  run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.MAX_BATCH_PKTS
+  run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS, packet_age_ms = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.MAX_BATCH_PKTS, _obj_0.packet_age_ms
 end
 local log_info, log_warn, log_debug, log_allow, log_block, now, set_action_prefix, level_enabled, get_last_write_us
 do
@@ -449,6 +449,16 @@ plan_retry_tries = function(used_ms, budget_ms, wait_ms, tries)
   else
     return tries
   end
+end
+local retry_worthwhile
+retry_worthwhile = function(age_ms, ttl_s)
+  if not (age_ms) then
+    return true
+  end
+  if not (ttl_s and ttl_s > 0) then
+    return true
+  end
+  return age_ms <= ttl_s * 1000
 end
 local retry_pending_match
 retry_pending_match = function(txid, client_ip, client_port, resolver_ip, ts)
@@ -1085,6 +1095,12 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local bench_after_payload_ms = nil
   local bench_after_parse_ms = nil
   local bench_after_match_ms = nil
+  local response_age_ms
+  if IPC_RETRY_ENABLED then
+    response_age_ms = packet_age_ms(nfad)
+  else
+    response_age_ms = nil
+  end
   local ts = now()
   drain_ts = ts
   drain_pipe(pipe_rfd, now, drain_on_msg)
@@ -1158,7 +1174,9 @@ handle_response = function(qh_ptr, nfad, pkt_id)
   local ipc_retry_wait_ms = 0
   local retry_budget_skipped = false
   if not (entry) then
-    entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match(txid, dst_ip, client_port, resolver_ip, ts)
+    if retry_worthwhile(response_age_ms, pending_ttl) then
+      entry, ipc_retry_attempts, ipc_retry_wait_ms, retry_budget_skipped = retry_pending_match(txid, dst_ip, client_port, resolver_ip, ts)
+    end
     if entry then
       log_info(function()
         return {
@@ -1538,6 +1556,7 @@ return {
   take_last_ack_wait_us = take_last_ack_wait_us,
   plan_retry_tries = plan_retry_tries,
   retry_pending_match = retry_pending_match,
+  retry_worthwhile = retry_worthwhile,
   _retry_budget = _retry_budget,
   _set_pipe_rfd = _set_pipe_rfd,
   build_orphan_fields = build_orphan_fields,
