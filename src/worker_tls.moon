@@ -1115,4 +1115,8 @@ run = (queue_num, ev_wfd=nil, filter_data=nil) ->
   :sni_action_for, :validate_sni, :dst_matches_cname, :build_validator_query
   :prune_sni_verdicts, :reset_sni_verdicts, :set_validator_state
   :auth_sessions_file
+  -- Exports de test (couverture unitaire du handler et des helpers) : mêmes
+  -- fonctions, aucun changement de comportement.
+  :handle_sni_packet, :format_mac, :format_ip, :write_sni_event
+  :is_mail_ssl_port, :tls_version_name, :extract_supported_versions
 }
