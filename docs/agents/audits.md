@@ -3816,3 +3816,57 @@ run final est vert.
 **Non fait / douteux** : aucune mesure de charge sur cette branche (pas de
 déploiement) — le gain attendu (N−1 `write()` par réponse) reste à confronter
 au CPU `nft`/`resp` mesuré en §16.2-16.3.
+
+### Profilage du hot path et correctifs CPU (branche `d-prof`)
+
+Réponse à `docs/agents/perf.md` §10.3/§16.5 (« profiler le coût fixe par
+paquet »), faite **entièrement en local** (aucun accès distant, aucun ssh, aucun
+déploiement). Détail chiffré : `tmp/prof_report.md` ; synthèse : `perf.md` §18 ;
+artefacts : `tmp/prof/`.
+
+**Banc ajouté** : `make bench-hotpath` (`src/bench/hotpath.moon` +
+`hotpath_cli.moon`, cible `Makefile`, doc `src/bench/README.md`). Il rejoue en
+boucle, sans NFQUEUE ni réseau, `handle_question`/`handle_response` **réels**
+(callbacks capturés via `nfq_loop.run_queue` neutralisé), filtre réel
+(`filter.load`), transaction IPC réelle (sonde `handle_question`), `nft_queue`
+réel (tube vidé par lot, sans `ack_rfd`), stubs minimaux `libnfq` (payload
+factice, verdicts comptés) et `raw_send` (aucun socket). Six cas : `question`,
+`ipc_drain`, `response`, `so_a`, `so_cycle` (cycle second avis A+B),
+`setup_control`. Protocole : 100 000 iters, minimum de 3 passages et du lot de
+64, allocation avec GC arrêté, profils `jit.profile` (f/l, 10 s par cas),
+`jit.v`/`jit.dump`. Le banc sort en code 1 si le chemin mesuré n'est pas le
+décrit (codes retour + nombre de verdicts). **Sécurité** : `config.nft.table` y
+est forcé à un nom inexistant, sinon `filter.load` → `ip_whitelist.init`
+FLUSH les sets `ip*_dest_whitelist` du ruleset vivant de l'hôte.
+
+**Correctifs appliqués** (un commit chacun, avant/après dans le message, tous
+≥ 5 % mesuré sur le cas visé, témoins inchangés) :
+
+| correctif | fichier:ligne | gain | commit |
+|---|---|---|---|
+| `to_hex` par table 256 entrées au lieu d'une closure + `string.format`/octet | `src/lib/ipc_hex.moon:25-27,49-62` | question −24 %, response −30 %, so_cycle −34 % | `b3d44d0` |
+| `from_hex` par table de nibbles (ni `sub`, ni `tonumber`, ni motif) | `src/lib/ipc_hex.moon:68-73,81-104` | ipc_drain −21 % | `552be16` |
+| suffixes de domaine sans allocation (rejet O(1) par le dernier octet + `find` littéral) | `src/filter/conditions/to_domain.moon:39,50-51,56-63` | question −25 % | `9013d37` |
+| pas de re-parse de la réponse si aucun callback ne l'a réécrite | `src/worker_responses.moon:767-776` | response −11 %, so_cycle −10 % | `e84ee03` |
+| cache borné (8 entrées, purge en bloc) des conversions hex | `src/lib/ipc_hex.moon:29-43,56-61,98-103` | ipc_drain −38 %, so_cycle −27 %, response −15 % | `b2331c8` |
+
+Effet cumulé (x86-64 local) : question 51,2 → 26,2 µs/paquet (−49 %),
+response 55,6 → 30,1 (−46 %), cycle second avis 220,6 → 94,7 µs (−57 %),
+`ipc_drain` 14,1 → 5,9 (−58 %) ; allocation −16 % (`response`), −19 %
+(`so_cycle`), −28 % (`ipc_drain`). Les parts du profil sont transposables à
+l'A55, pas les µs absolus (rapport ~25×).
+
+**Tests** : `tests/unit/lib/ipc_hex_spec.moon` (+6 : équivalence sur les
+256 octets, arité `gsub`, débordement du cache, erreurs jamais mises en cache),
+`tests/unit/filter/conditions_spec.moon` (+8 : équivalence des suffixes).
+
+**Non fait / douteux** : aucun correctif appliqué sur les postes restants — tous
+sous le seuil de 5 % mesuré (`is_valid_timeout` 3,8-4,2 %, `build_line` 2-3 %,
+`parse_answers` 2-3 %, closures de `strip_rrtypes` 2-4 %) ou hors portée :
+`parse_rr`/`labels` (40-50 % de `so_a`) et `sp`/`su`/`checksum` sont dans le
+sous-module **moontastik non modifiable** (`Makefile:63-68`), et l'évaluation
+des règles (`eval`, 10-25 %) touche à la sémantique de filtrage. Le GC reste à
+29-47 % des échantillons : la suite logique est une campagne « allocation par
+paquet » (11,2 Ko/paquet sur `response`), hors périmètre des correctifs locaux.
+**`make test-e2e` non lancé** dans cette branche (à faire avant fusion) ; aucune
+mesure sur la cible aarch64.

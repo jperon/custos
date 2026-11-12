@@ -1712,3 +1712,140 @@ coûtait N appels système avant l'unique `wait_ack` du lot.
   déploiement) ; gain attendu = N−1 appels système par réponse, à confronter
   au CPU `nft`/`resp` de §16.3 lors d'une re-mesure à 200/350 q/s authentifiés.
 
+## 18. Profilage du hot path (2026-11-12, branche `d-prof`)
+
+Réponse à la piste §10.3 / §16.5 (8) : « il faudrait un profileur dans le
+worker (`jit.profile`) ». Fait **entièrement en local** (aucun accès distant,
+aucun déploiement) : un micro-banc rejoue en boucle les handlers **réels** des
+workers sans NFQUEUE ni réseau, ce qui rend possible à la fois la mesure
+`os.clock` et les profils `jit.profile`/`jit.v`/`jit.dump`. Rapport complet
+(chiffres, profils, traces, propositions) : **`tmp/prof_report.md`** ; artefacts
+bruts : `tmp/prof/`.
+
+### 18.1 Le banc : `make bench-hotpath`
+
+`src/bench/hotpath.moon` (+ `hotpath_cli.moon`, cible `Makefile`,
+doc `src/bench/README.md`). Il appelle `handle_question` et `handle_response`
+tels que les installent `worker_questions.run` / `worker_responses.run`
+(`nfq_loop.run_queue` neutralisé pour les capturer), avec le filtre réel
+(`filter.load`), la transaction IPC réelle (produite par une sonde
+`handle_question`), `nft_queue` réel (tube vidé après chaque lot, sans
+`ack_rfd` donc sans attente d'ACK — l'attente n'est pas du CPU) et des stubs
+minimaux : `libnfq` (payload factice, verdicts comptés), `raw_send` (aucun
+socket, aucun paquet émis).
+
+**Sécurité sur machine vivante** : le banc force `config.nft.table` à un nom
+inexistant (`src/bench/hotpath.moon`, `apply_config`) parce que `filter.load`
+exécute `ip_whitelist.init`, qui **FLUSH** les sets `ip*_dest_whitelist` de la
+table courante — avec la vraie table, lancer le banc sur un hôte où custos
+tourne viderait ces deux sets. Aucun autre effet de bord réseau : `run_queue`
+neutralisé (aucune file NFQUEUE ouverte), `raw_send` stubé (aucun paquet émis),
+sorties limitées à `./tmp/prof/`.
+
+Six cas : `question` (dont la duplication validateur), `ipc_drain` (coût
+complet du tube question→réponse : écriture + lecture + décodage + insertion
+`pending`), `response` (sans second avis, 1 A), `so_a` (parquage seul),
+`so_cycle` (A + réponse validateur B, 8 A, 16 insertions nft), `setup_control`
+(préparation seule, à déduire des cas réponse).
+
+Protocole : échauffement 5 000, **100 000 itérations** par cas, `HP_REPEAT=3`
+passages dont le minimum retenu (la machine est partagée : le total varie de
+±30 %, le minimum de lot de ±10 %), lots de64 (= `MAX_BATCH_PKTS`),
+allocation mesurée avec `collectgarbage("stop")`. Le banc **sort en code 1** si
+le chemin mesuré n'est pas le décrit (codes retour ou nombre de verdicts) :
+aucune mesure ne porte sur un autre chemin.
+
+### 18.2 Coût par paquet (x86-64 local, µs, min de 3 passages)
+
+| cas | avant correctifs | après | gain |
+|---|---|---|---|
+| question | 51,2 / 51,9 | **26,2 / 26,7** | −49 % |
+| ipc_drain | 14,1 / 13,9 | **5,9 / 8,7** | −48 % (minimum de lot −64 %) |
+| response | 55,6 / 52,5 | **30,1 / 29,3** | −46 % |
+| so_a | 29,0 / 32,1 | 33,8 / 23,0 | −15 % au minimum de lot |
+| so_cycle | 110,3 / 116,3 | **47,4 / 47,5** | −56 % (cycle second avis 220,6 → **94,7 µs**) |
+| setup_control | 1,3 / 2,5 | 1,4 / 1,4 | témoin inchangé |
+
+Allocation (GC arrêté) : `response` 13 387 → 11 223 o/paquet, `so_cycle`
+40 465 → 32 889 o/itération, `ipc_drain` 2 634 → 1 906 o/paquet.
+
+Ces chiffres sont en **x86-64** : ils ne se transposent pas en absolu sur
+l'A55 (rapport ~25×), seules les **parts** (profils ci-dessous) sont
+transposables. Ils servent à arbitrer « où optimiser », pas à prédire le
+plafond de §7/§15.
+
+### 18.3 Profil (`jit.profile`, 10 s par cas) — avant correctifs
+
+Postes dominants (extraits de `tmp/prof/profile_f_before.txt` et
+`profile_l.txt`, détail complet dans `tmp/prof_report.md` §3) :
+
+| cas | postes ≥ 5 % des échantillons |
+|---|---|
+| question | `eval` 25,4 % (moteur de règles), `ipc_hex.lua:19` 14,1 % (`to_hex`), `sp` 5,8 % (pack → duplication), `su` 5,3 %, `cond` 4,8 % |
+| ipc_drain | **`from_hex` 48,5 %**, `decode_msg` 12,4 %, `now_fn` 9,5 %, `set_pending` 7,0 %, `split_fields` 6,0 % |
+| response | **`ipc_hex.lua:19` 21,7 %**, `finalize_a` 10,2 %, `step` 7,7 %, `labels` 7,4 %, `strip_https_rr` 5,0 % |
+| so_a | `parse_rr` 29,3 %, `step` 18,1 %, `parse_questions` 8,8 %, `labels` 6,1 % |
+| so_cycle | **`ipc_hex.lua:19` 35,6 %**, `build_line` 8,5 %, `parse_rr` 6,1 %, `to_hex` 4,0 % |
+| états VM | `G` (GC) 17-48 %, `C` (code C/FFI) 9-35 %, `I` (interprété) 18-32 %, `N` (compilé) 9-49 % |
+
+En mode ligne : `to_domain.lua:56` (la `sub` de suffixe) 14,2 % de `question`,
+`ipc_hex.lua:20` 12,2/23,3/36,7 % (question/response/so_cycle),
+`ipc_hex.lua:36` (`string.char tonumber(sub)`) 29,6 % de `ipc_drain`.
+
+### 18.4 Traces avortées (`jit.v` + `jit.dump`, 20 000 iters)
+
+`tmp/prof/jitv_final.txt` (212 traces démarrées, **885 aborts**),
+`tmp/prof/jitdump_final.txt`, agrégats `tmp/prof/aborts_final*.txt`. Raisons
+(hors sites du banc) : `leaving loop in root trace` 183, `inner loop in root
+trace` 178, `NYI: bytecode UCLO` 163, `blacklisted` 96, `NYI: bytecode FNEW`
+63, `loop unroll limit reached` 18, `NYI: return to lower frame` 15. Sites
+dominants : `rule.lua:307/310` (boucle des règles), `worker_responses.lua:739`
+(boucle `pairs` de `finalize_a`), `ipc.lua:472` (`make_key`, `string.format`),
+`nft_queue.lua:169/176/181` (`flush`), `dns_ede.lua:274-431` (closures de
+`strip_rrtypes`), `log.lua:676` (`clock_gettime`). **Avant** les correctifs,
+`ipc_hex.lua:21 -- NYI: bytecode FNEW` (25×) et `ipc_hex.lua:19 -- NYI: return
+to lower frame` figuraient en tête : la closure de `to_hex` empêchait toute
+compilation de ce segment — disparus après le correctif. Liste complète des
+sites + raisons : `tmp/prof_report.md` §4.
+
+### 18.5 Correctifs appliqués (gain mesuré ≥ 5 %, un commit par correctif)
+
+| Correctif | Fichier:ligne | Gain mesuré | Commit |
+|---|---|---|---|
+| `to_hex` par table 256 entrées au lieu d'une closure + `string.format`/octet | `src/lib/ipc_hex.moon:25-27,49-62` | question −24 %, response −30 %, so_cycle −34 % | `b3d44d0` |
+| `from_hex` par table de nibbles au lieu de `sub`+`tonumber`+motif | `src/lib/ipc_hex.moon:68-73,81-104` | ipc_drain −21 % | `552be16` |
+| suffixes de domaine sans allocation (rejet O(1) par le dernier octet + `find` littéral) | `src/filter/conditions/to_domain.moon:39,50-51,56-63` | question −25 % | `9013d37` |
+| pas de re-parse de la réponse si aucun callback ne l'a réécrite | `src/worker_responses.moon:767-776` | response −11 %, so_cycle −10 % | `e84ee03` |
+| cache borné (8 entrées, purge en bloc) des deux conversions hex | `src/lib/ipc_hex.moon:29-43,56-61,98-103` | ipc_drain −38 %, so_cycle −27 %, response −15 %, question −6 % | `b2331c8` |
+
+Chaque commit porte son avant/après ; tests d'équivalence ajoutés
+(`tests/unit/lib/ipc_hex_spec.moon` : sortie identique sur les 256 octets,
+arité `gsub`, débordement du cache ; `tests/unit/filter/conditions_spec.moon` :
+8 cas d'équivalence des suffixes).
+
+### 18.6 Correctifs proposés, non appliqués
+
+Aucun des postes restants n'atteint 5 % de façon sûre et isolée, ou est hors
+portée (détail chiffré : `tmp/prof_report.md` §5.2) : `is_valid_timeout` à
+chaque ligne nft (3,8-4,2 %), `build_line` en concaténation directe (2-3 %),
+`parse_answers` qui construit9 champs par RR (2-3 %), les closures de
+`strip_rrtypes` (2-4 %), `user_for_mac`/`read_cached` (sous-estimé par le
+profil : biais d'échantillonnage mur), le moteur d'évaluation des règles
+(`eval` 10-25 % : sémantique de filtrage, trop risqué), `sp`/`su`/`checksum`
+(5-8 % de `question`) et **`parse_rr`/`labels` (40-50 % de `so_a`, ~15 % de
+`response`) — sous-module moontastik non modifiable ici** (`Makefile:63-68`).
+Le GC reste à 29-47 % des échantillons : la piste principale résiduelle est de
+diviser l'allocation par paquet (11,2 Ko sur `response`), ce qui demande une
+campagne dédiée et non un correctif local.
+
+### 18.7 Reste à faire
+
+- `make test-e2e` avant fusion (les4 correctifs sont des calculs purs couverts
+  en unitaire, mais la Definition of Done l'exige) ;
+- re-mesurer sur la cible aarch64, où les parts ci-dessus (et non les µs) sont
+  transposables — idéalement en déployant le banc lui-même (`make bench-hotpath`
+  tourne sans NFQUEUE ni réseau ; le flush `ip_whitelist` est neutralisé par la
+  table forcée en inexistant, cf. §18.1) ;
+- campagne « allocation par paquet » (§18.6) si le coût CPU par paquet reste le
+  plafond après le multi-worker §11 et le second avis ciblé §10.2.
+
