@@ -640,6 +640,25 @@ make_c = function(sz)
     end
   end
 end
+local make_c_write
+make_c_write = function(sz)
+  return function(buf, n, v)
+    local len = #v
+    if len >= sz then
+      for k = 1, sz do
+        buf[n + k] = string.byte(v, k)
+      end
+    else
+      for k = 1, len do
+        buf[n + k] = string.byte(v, k)
+      end
+      for k = len + 1, sz do
+        buf[n + k] = 0
+      end
+    end
+    return n + sz
+  end
+end
 local pack_op
 pack_op = function(opt, count, le)
   local _exp_0 = opt
@@ -674,10 +693,18 @@ pack_op = function(opt, count, le)
       emit = make_double(le)
     }
   elseif "c" == _exp_0 then
-    return {
-      consume = true,
-      emit = make_c(count or 1)
-    }
+    local c_size = count or 1
+    if c_size <= 64 then
+      return {
+        consume = true,
+        write = make_c_write(c_size)
+      }
+    else
+      return {
+        consume = true,
+        emit = make_c(c_size)
+      }
+    end
   elseif "s" == _exp_0 then
     return {
       consume = true,
@@ -747,10 +774,11 @@ compile_pack = function(fmt)
   return plan
 end
 local pack
-pack = function(fmt, a1, a2, a3, a4, a5, a6, a7, a8, ...)
+pack = function(fmt, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, ...)
   local plan = _pack_cache[fmt] or compile_pack(fmt)
+  local count = plan.count
   local args = nil
-  if plan.count > 8 then
+  if count > 16 then
     args = {
       a1,
       a2,
@@ -760,8 +788,34 @@ pack = function(fmt, a1, a2, a3, a4, a5, a6, a7, a8, ...)
       a6,
       a7,
       a8,
+      a9,
+      a10,
+      a11,
+      a12,
+      a13,
+      a14,
+      a15,
+      a16,
       ...
     }
+  elseif count > 8 then
+    args = _args
+    args[1] = a1
+    args[2] = a2
+    args[3] = a3
+    args[4] = a4
+    args[5] = a5
+    args[6] = a6
+    args[7] = a7
+    args[8] = a8
+    args[9] = a9
+    args[10] = a10
+    args[11] = a11
+    args[12] = a12
+    args[13] = a13
+    args[14] = a14
+    args[15] = a15
+    args[16] = a16
   else
     args = _args
     args[1] = a1

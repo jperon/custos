@@ -44,6 +44,34 @@ if is_fallback then
     return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
   end)
 end
+test("pack_compat: >H c4 ends with a buffer write", function()
+  local got = pack(">H c4", 0x0102, "ab")
+  local expected = from_hex("010261620000")
+  return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
+end)
+test("pack_compat: >H s2 c4 mixes emit and buffer write", function()
+  local got = pack(">H s2 c4", 1, "xy", "ab")
+  local expected = from_hex("00010002787961620000")
+  return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
+end)
+test("pack_compat: c64/c65/c80 identical full and padded", function()
+  local _list_0 = {
+    1,
+    2,
+    63,
+    64,
+    65,
+    80
+  }
+  for _index_0 = 1, #_list_0 do
+    local sz = _list_0[_index_0]
+    local full = string.rep("A", sz)
+    local got = pack(">c" .. tostring(sz), full)
+    assert(got == full, "c" .. tostring(sz) .. " full input: got " .. tostring(#got) .. " bytes, expected " .. tostring(sz))
+    local pad = pack(">c" .. tostring(sz), "A")
+    assert(pad == "A" .. string.rep("\0", sz - 1), "c" .. tostring(sz) .. " padded: got " .. tostring(#pad) .. " bytes, expected " .. tostring(sz))
+  end
+end)
 test("pack_compat: z", function()
   local got = pack("z", "hello")
   local expected = from_hex("68656c6c6f00")
@@ -69,6 +97,17 @@ end
 test("pack_compat: >B x10 more than 8 args", function()
   local got = pack(">B B B B B B B B B B", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
   local expected = from_hex("0102030405060708090a")
+  return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
+end)
+test("pack_compat: 16 args fill the shared array", function()
+  local got = pack(">B B B B B B B B B B B B B B B B", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+  local expected = from_hex("0102030405060708090a0b0c0d0e0f10")
+  return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
+end)
+test("pack_compat: more than 16 args uses the vararg path", function()
+  local fmt = ">B " .. string.rep("B ", 16)
+  local got = pack(fmt, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+  local expected = from_hex("0102030405060708090a0b0c0d0e0f1011")
   return assert(got == expected, "got: " .. tostring(got) .. "\nexp: " .. tostring(expected))
 end)
 test("pack_compat: >H x H", function()

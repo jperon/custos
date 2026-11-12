@@ -48,4 +48,43 @@ test("checksum6 stable across payload lengths (frozen values)", function()
   assert(checksum6(src, dst, 17, "hello world!!") == 61820, "checksum6 (13 bytes) changed")
   return assert(checksum6(src, dst, 17, "xyz") == 45564, "checksum6 (3 bytes, odd) changed")
 end)
+local ref_checksum
+ref_checksum = function(s)
+  if #s % 2 == 1 then
+    s = s .. "\0"
+  end
+  local cksm = 0
+  for i = 1, #s, 2 do
+    local a, b = string.byte(s, i, i + 1)
+    cksm = cksm + (a * 256 + b)
+  end
+  while true do
+    local carry = math.floor(cksm / 0x10000)
+    if carry == 0 then
+      break
+    end
+    cksm = (cksm % 0x10000) + carry
+  end
+  return 0xFFFF - (cksm % 0x10000)
+end
+local _pattern_parts = { }
+for i = 0, 255 do
+  _pattern_parts[#_pattern_parts + 1] = string.char(i)
+end
+local PATTERN = table.concat(_pattern_parts)
+test("checksum matches the RFC 1071 reference on rotated buffers", function()
+  for len = 1, 67 do
+    local rot = (len * 7) % 256 + 1
+    local buf = (PATTERN .. PATTERN):sub(rot, rot + len - 1)
+    local got, want = checksum(buf), ref_checksum(buf)
+    assert(got == want, "checksum len=" .. tostring(len) .. ": got " .. tostring(got) .. ", reference " .. tostring(want))
+  end
+  local big = (string.rep(PATTERN, 16)):sub(1, 4000)
+  return assert(checksum(big) == ref_checksum(big), "checksum on 4000-byte buffer changed")
+end)
+test("checksum of a DNS-over-UDP payload is stable (frozen value)", function()
+  local payload = string.char(0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01)
+  assert(checksum(payload) == ref_checksum(payload), "DNS payload checksum changed")
+  return assert(checksum(payload) == 0x9ddc, "DNS payload checksum frozen value changed")
+end)
 return util.summary("l3/checksum")

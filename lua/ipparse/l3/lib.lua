@@ -1,8 +1,7 @@
-local sp, su
-do
-  local _obj_0 = require("ipparse.lib.pack_compat")
-  sp, su = _obj_0.pack, _obj_0.unpack
-end
+local sp
+sp = require("ipparse.lib.pack_compat").pack
+local byte
+byte = string.byte
 local band, bor, bnot, lshift, rshift
 do
   local _obj_0 = require("ipparse.lib.bit_compat")
@@ -10,12 +9,15 @@ do
 end
 local checksum
 checksum = function(self)
+  local len = #self
+  local even = len - band(len, 1)
   local cksm = 0
-  if band(#self, 1) == 1 then
-    self = self .. "\0"
+  for i = 1, even, 2 do
+    local a, b = byte(self, i, i + 1)
+    cksm = cksm + (a * 256 + b)
   end
-  for i = 1, #self, 2 do
-    cksm = cksm + su(">H", self, i)
+  if even < len then
+    cksm = cksm + (byte(self, len) * 256)
   end
   while true do
     local carry = rshift(cksm, 16)
