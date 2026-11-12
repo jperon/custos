@@ -1515,3 +1515,50 @@ les sets vidés/supprimés hors du worker (`authenticated_*`,
 (`cache_key_of`, `UNCACHEABLE_KINDS`/`UNCACHEABLE_SETS`). Motivation,
 inventaire fichier:ligne et écart de scénario : `docs/agents/audits.md`
 § « Exclusions du cache » (même section `d-nftcache`).
+
+### 16.8 Coalescence des écritures du pipe nft côté producteurs (branche `d-nftwrite`)
+
+Implémentation de la piste (4) de §16.5 (« écritures events/learn/nft
+coalescées »), volet **pipe nft** uniquement. Constat de §16.3 : chaque
+`add_ip4/add_ip6/add_mac4/add_mac6` faisait un `write()` par élément
+(`src/nft_queue.moon`, ancienne version) — une réponse DNS à N enregistrements
+coûtait N appels système avant l'unique `wait_ack` du lot.
+
+- **Producteur** (`src/nft_queue.moon`) : `enqueue` (`:221`) n'écrit plus ; il
+  accumule la ligne dans `pending_lines` (table + `table.concat`, jamais `..=`
+  en boucle) avec son `seq` (`pending_seqs`, `:66-68`). `flush` (`:154`) écrit
+  le lot en **un `write()` par tranche ≤ `PIPE_BUF_ATOMIC` = 4096 o**
+  (`:26`) : plusieurs workers écrivent dans le même pipe, une tranche ≤
+  `PIPE_BUF` reste atomique. Une tranche pleine est vidée dès qu'une ligne
+  supplémentaire la ferait dépasser (`:229`).
+- **Flush avant toute attente** : `get_last_seq` (`:258`), `wait_ack` (`:283`)
+  et `send_barrier` (`:242`) vident le tampon avant de rendre le seq /
+  d'attendre / d'écrire la barrière. `worker_sip`, dont les insertions
+  `allow_sip_peer` ne sont suivies d'aucun ACK, vide en fin de paquet
+  (`flush_nft`, `:311`), sinon la dernière insertion d'une session resterait
+  tamponnée jusqu'au paquet suivant.
+- **Seq exact** : `last_enqueued_seq` n'est posé qu'après une écriture réussie,
+  au seq de la **dernière ligne effectivement écrite** de la tranche. Si une
+  tranche échoue (EAGAIN épuisé, EIO), les lignes restantes sont abandonnées
+  (`nft_queue_flush_failed`) et `get_last_seq` rend le seq de la tranche
+  précédente (ou `nil` si rien n'a été écrit) : `wait_ack` n'attend jamais
+  l'ACK d'une ligne absente du pipe. Retry EAGAIN/partial inchangé
+  (`write_data`, `:125`).
+- **Appelants vérifiés** (flush effectif) : `worker_responses._flush_batch`
+  (`src/worker_responses.moon:448-459`, `get_last_seq` → `wait_ack`) et
+  `settle` (`:509-525`, hors lot) ; `doh/query.inject_nft_and_wait`
+  (`src/doh/query.moon:77-78`, sous verrou ACK) ; `worker_sip.allow_mac_ip`
+  (`src/worker_sip.moon:132-137`) et flush de fin de paquet (`:319-321`).
+  `worker_questions` n'utilise pas `nft_queue` (aucun flush à y placer).
+- **Mort supprimé au passage** : `add_auth_mac/add_auth_ip4/add_auth_ip6`
+  n'avaient aucun appelant et `worker_nft.validate_item` refuse les kinds
+  `auth_*` (ligne rejetée `tuple` avant le cache) — fonctions et exports
+  retirés.
+- **Tests** : `tests/unit/nft_queue_spec.moon` (+6 specs, 42 au fichier) : lot
+  de N lignes = 1 `write`, découpage ≤ 4096 o, flush avant `wait_ack` (l'ACK
+  n'arrive que si le lot est écrit), seq exact sur échec partiel/total, flush
+  avant barrière.
+- **Non mesuré** : aucune campagne de charge sur cette branche (pas de
+  déploiement) ; gain attendu = N−1 appels système par réponse, à confronter
+  au CPU `nft`/`resp` de §16.3 lors d'une re-mesure à 200/350 q/s authentifiés.
+

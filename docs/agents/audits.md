@@ -3615,8 +3615,9 @@ côté `worker_nft` (50-65 % d'un vCPU avant le correctif). Rapport détaillé :
     et **`refresh_nft`** (`src/auth/nft_auth_sets.moon:59-63`) : exécutés par
     le processus AUTH avec son propre contexte nft, sur les sets `_auth_*` /
     `authenticated_*` ; or les kinds `auth_*` du pipe (`add_auth_mac/ip4/ip6`,
-    `src/nft_queue.moon:173-175`) **n'ont aucun appelant** → `worker_nft`
-    n'insère jamais dans ces sets aujourd'hui.
+    `src/nft_queue.moon:173-175` à l'époque) **n'ont aucun appelant** →
+    `worker_nft` n'insère jamais dans ces sets aujourd'hui. Ces fonctions ont
+    depuis été supprimées (cf. § « Coalescence des écritures du pipe nft »).
   - **`delete rule`** sur la chaîne `forward` (`src/nft_extra_rules.moon:86,192`)
     : règles de chaîne, pas des sets → sans objet.
   - **Redémarrage** : mort de `worker_nft` → refork du superviseur
@@ -3693,8 +3694,9 @@ cache → client non authentifié jusqu'à 5 s » **ne peut pas se produire
 aujourd'hui** :
 
 - `add_auth_mac` / `add_auth_ip4` / `add_auth_ip6`
-  (`src/nft_queue.moon:173-175`) **n'ont aucun appelant** dans `src/`
-  (définitions et export seuls) ;
+  (`src/nft_queue.moon:173-175` à l'époque, supprimées depuis : cf.
+  § « Coalescence des écritures du pipe nft ») **n'avaient aucun appelant**
+  dans `src/` (définitions et export seuls) ;
 - même si une ligne était enfilée, `validate_item`
   (`src/worker_nft.moon:39-54`) ne reconnaît que
   `ip4/ip6/mac4/mac6/sip4/sip6` : une ligne `auth_*` est refusée (`tuple`)
@@ -3703,9 +3705,10 @@ aujourd'hui** :
   (aucun kind ne les nomme).
 
 Le correctif est donc **défensif** : il rend inopérant le défaut de cohérence
-le jour où les kinds `auth_*` seraient effectivement routés par le pipe (les
-fonctions d'export et `element_spec` les prenant en charge existent déjà,
-`src/nft_queue.moon:305-309`).
+le jour où les kinds `auth_*` seraient effectivement routés par le pipe
+(`element_spec` continue de les prendre en charge ; les fonctions d'export
+`add_auth_*` ont depuis été supprimées, cf. § « Coalescence des écritures du
+pipe nft »).
 
 **Tests** : `tests/unit/worker_nft_spec.moon`, describe `exclusions`
 (`:632-675`, 5 specs ; 51 specs au fichier au lieu de 46) : ligne `auth_ip4`
@@ -3719,3 +3722,97 @@ Suite complète `nix develop --command bash -c "make all && make check &&
 make test"` : **3108 succès / 0 échec / 0 erreur** (3103 avant la branche
 + 5 nouveaux ; sortie `tmp/test.log`). Aucune ligne ajoutée à `AGENTS.md` ;
 `make test-e2e` non lancé (homelab libvirt non provisionné pour cette tâche).
+
+### Coalescence des écritures du pipe nft (branche `d-nftwrite`)
+
+Piste n° 4 de `perf.md` §16.5 (volet pipe nft) : un `write()` par élément
+inséré (`add_ip4/add_ip6/add_mac4/add_mac6/add_sip4/add_sip6`) coûtait N appels
+système par réponse DNS à N enregistrements avant l'unique `wait_ack` du lot.
+
+**Code** — `src/nft_queue.moon` :
+
+- `enqueue` (:221) tamponne la ligne construite dans `pending_lines` (table,
+  `table.concat` au flush — jamais `..=`) avec son `seq` dans `pending_seqs`
+  (:66-68) ; retour = « ligne acceptée dans le tampon » (false si pas de tube,
+  tuple incomplet, ou ligne > `PIPE_BUF_SAFE` = 512 o, comme avant).
+- `flush` (:154) écrit le tampon en tranches de **≤ `PIPE_BUF_ATOMIC` = 4096 o**
+  (:26), plusieurs producteurs partageant le même pipe : une tranche ≤
+  `PIPE_BUF` est atomique. Si l'ajout d'une ligne dépasserait la borne, `enqueue`
+  vide d'abord la tranche courante (:229).
+- Flush **avant toute attente** : `get_last_seq` (:258) — c'est lui qui rend le
+  seq du lot —, `wait_ack` (:283, avant même le retour anticipé
+  `last_acked_seq >= target`) et `send_barrier` (:242, avant la barrière et son
+  ACK). Sans cela, on attendrait l'ACK d'une ligne jamais écrite
+  (interblocage → timeout 150 ms systématique).
+- **Seq exact** : `last_enqueued_seq` n'est posé qu'après une écriture réussie,
+  au seq de la dernière ligne de la tranche (`flush` :171). En cas d'échec
+  d'une tranche (EAGAIN épuisé, EIO), les lignes restantes sont abandonnées
+  (`nft_queue_flush_failed`) et le seq rendu reste celui de la dernière ligne
+  **réellement écrite** — ou `nil` si rien n'est parti. Retry EAGAIN / écriture
+  partielle inchangé (`write_data`, :125, mêmes 3 tentatives à 10 ms).
+- `flush` est exporté (:406) pour le flush explicite de `worker_sip`.
+
+**Appelants vérifiés** (grep `add_ip4|add_ip6|add_mac4|add_mac6|add_sip4|add_sip6|wait_ack|send_barrier`
+dans `src/`) :
+
+| Appelant | Insertions | Point de flush |
+|---|---|---|
+| `worker_responses.moon:448-459` (`_flush_batch`) | `inject` via `inject_opts` (:690-691), sondes captives (:796-797) | `get_last_seq` puis `wait_ack` du lot |
+| `worker_responses.moon:509-525` (`settle`, hors lot) | idem | `get_last_seq` puis `wait_ack` |
+| `doh/query.moon:77-78` (`inject_nft_and_wait`, sous verrou ACK) | `inject_opts` (:300-301, :338-339) | `get_last_seq` puis `wait_ack` |
+| `worker_sip.moon:132-137` (`allow_mac_ip`) | `add_mac4/6` | `get_last_seq` puis `wait_ack` |
+| `worker_sip.moon:319-321` (`handle_packet`, wrapper) | `add_sip4/6` fire-and-forget (:151-153) | `flush_nft` (:311) en fin de paquet |
+
+`worker_questions.moon` n'importe pas `nft_queue` (il n'écrit que le pipe IPC
+question→response) : aucun flush à y placer. `send_barrier` n'a aucun appelant
+en production (seulement les specs) ; il flushe quand même pour rester sûr.
+
+**Code mort supprimé** : `add_auth_mac` / `add_auth_ip4` / `add_auth_ip6`
+(anciennes `src/nft_queue.moon:173-175`) — aucun appelant (grep `src/`,
+`sync/`, `filter/`, `tools/` : définitions et export seuls), et
+`worker_nft.validate_item` (`src/worker_nft.moon:39-54`) ne reconnaît que
+`ip4/ip6/mac4/mac6/sip4/sip6` : une ligne `auth_*` était rejetée (`tuple`) par
+`parse_line` avant le cache. Fonctions **et** exports retirés ; `get_set_name`
+et `element_spec` continuent d'accepter les kinds `auth_*` (garde-fou, cf.
+`UNCACHEABLE_KINDS`, `src/worker_nft.moon:215-219`). Commentaire de
+`worker_nft` mis à jour en conséquence. Les deux mentions historiques de la
+section `d-nftcache` (ci-dessus, § « Cache d'upsert » et § « Exclusions ») sont
+annotées comme périmées sur ce point.
+
+**Tests** — `tests/unit/nft_queue_spec.moon` (42 specs, +6) :
+
+- un lot de N=3 lignes ne fait **aucune** écriture avant sa clôture, puis
+  **une seule** (`get_last_seq`) contenant les 3 lignes et finissant par le seq
+  rendu ;
+- découpage : 40 lignes de ~114 o → au moins 2 écritures, **chacune ≤ 4096 o**,
+  les 40 lignes présentes, seq 40 rendu ;
+- flush **avant `wait_ack`** : le stub d'écriture émet l'ACK ; `wait_ack(2)`
+  réussit du premier coup (il échouerait en timeout si le tampon n'était pas
+  vidé) ;
+- seq exact sur échec : 2ᵉ tranche en EIO → `get_last_seq` rend un seq
+  intermédiaire (0 < seq < 40) ; échec total → `nil` ;
+- flush avant `send_barrier` : 2 écritures (lot puis barrière), seq 2 rendu.
+- Specs EAGAIN/EIO existantes adaptées au tampon (le retour d'`add_ip4` ne
+  reflète plus l'écriture ; le constat d'échec est au `get_last_seq`).
+
+Échec TDD constaté avant le correctif : `36 successes / 6 failures`
+(`tmp/tdd-red.log`), puis `42 successes / 0 failure` en isolation
+(`tmp/tdd-green.log`). Suite complète
+`nix develop --command bash -c "make all && make check && make test"` :
+**3133 succès / 0 échec / 0 erreur** (`tmp/test3.log` ; 3127 avant la branche,
+`tmp/test-baseline.log`). À noter : `tests/unit/ipc/ipc_spec.lua:1054-1072`
+(mesure mémoire au `collectgarbage`, sans rapport avec ces fichiers) est
+apparu instable pendant la campagne (2 runs sur 5 avec un delta négatif, y
+compris hors de toute modification de `ipc.moon` ; passe en isolation) — le
+run final est vert.
+
+**Documentation** : `docs/agents/perf.md` §16.8 ; `.agents/workers.md`
+§ worker_nft (puce « In ») ; cette section. Aucune ligne ajoutée à `AGENTS.md`.
+
+**E2E** : `make test-e2e` lancé sur le homelab libvirt déjà provisionné —
+**94 passed / 0 failed** (`tmp/test-e2e.log`), y compris les scénarios nft
+(G0-G18) qui traversent le pipe `nft` réel.
+
+**Non fait / douteux** : aucune mesure de charge sur cette branche (pas de
+déploiement) — le gain attendu (N−1 `write()` par réponse) reste à confronter
+au CPU `nft`/`resp` mesuré en §16.2-16.3.
