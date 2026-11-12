@@ -69,7 +69,7 @@ contiguë** (`"14-15"` → un worker par file) ; `queue num` n'accepte pas de li
 avec virgules. Deux rôles ne peuvent pas partager un numéro de file : au
 chargement, un chevauchement (plages développées) émet une ERROR
 `nfqueue_overlap` et **refuse le démarrage** (`src/config.moon`). Valeurs par
-défaut : questions `0-1`, responses `4`, captive `20`, reject `10-11`, auth
+défaut : questions `0-1`, responses `3-4`, captive `20`, reject `10-11`, auth
 `5`, sni `6`, sip `12`. Les workers `tls`, `sip` et `doh` ne sont forkés que si
 leur clé respective est définie / activée.
 
@@ -153,7 +153,7 @@ L'état par processus des workers DNS est rendu compatible par deux fan-outs
 
 Sans `so_verdict` (un seul worker réponses), les deux mécanismes sont inertes :
 aucun fd, aucune écriture supplémentaire. Le superviseur fork, nomme
-(`custos:resp-q4`, `custos:dns-q1`, …) et redémarre chaque worker indépendamment
+(`custos:resp-q3`, `custos:dns-q1`, …) et redémarre chaque worker indépendamment
 (`worker_died` → refork après 1 s), et `SIGHUP` reforke tous les `dns-q*` /
 `resp-q*` pour rafraîchir les listes en COW.
 

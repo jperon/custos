@@ -297,7 +297,7 @@ local DEFAULTS = {
   },
   nfqueue = {
     questions = "0-1",
-    responses = "4",
+    responses = "3-4",
     captive = "20",
     reject = "10-11",
     auth = "5",
@@ -344,7 +344,7 @@ local DEFAULTS = {
   },
   ipc = {
     pending_ttl = 5,
-    pending_max = 20000,
+    pending_max = 0,
     match_retry = {
       count = 5,
       sleep_ms = 20,

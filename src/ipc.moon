@@ -11,6 +11,7 @@
 
 { :ffi, :libc } = require "ffi_defs"
 config = require "config"
+lowmem = require "lib.lowmem"
 { :log_warn, :log_info } = require "log"
 { :to_hex, :from_hex, :split_fields, :is_valid_timeout,
   :is_ipv4_str, :is_ipv6_str, :is_valid_mac } = require "lib.ipc_hex"
@@ -26,9 +27,9 @@ IPC_READ_CHUNK     = 2048
 IPC_MAX_LINE       = 1024
 IPC_WRITE_RETRY_COUNT = 5
 
--- Borne par défaut de la table `pending` (cf. `ipc.pending_max`). Justification
--- et taille mémoire mesurée : doc/CONFIG.md § 6.
-PENDING_MAX_DEFAULT = 20000
+-- Borne par défaut de la table `pending` résolue par `lib.lowmem` (cf.
+-- `ipc.pending_max`) : 20 000, ou 5 000 en mode RAM faible. Justification et
+-- taille mémoire mesurée : doc/CONFIG.md § 6, docs/agents/perf.md §15.5.
 
 EAGAIN       = 11
 EWOULDBLOCK  = 11
@@ -365,9 +366,8 @@ _pending_size      = 0
 _pending_evictions = 0
 
 _configured_pending_max = tonumber ipc_cfg.pending_max
-_pending_max = PENDING_MAX_DEFAULT
-if _configured_pending_max and _configured_pending_max >= 1
-  _pending_max = math.floor _configured_pending_max
+_pending_max = lowmem.resolve_pending_max _configured_pending_max,
+  lowmem.detect runtime_cfg
 
 make_key = (txid, ip_str, src_port, resolver_ip_str) ->
   string.format "%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str

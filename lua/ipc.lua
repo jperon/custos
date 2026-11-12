@@ -4,6 +4,7 @@ do
   ffi, libc = _obj_0.ffi, _obj_0.libc
 end
 local config = require("config")
+local lowmem = require("lib.lowmem")
 local log_warn, log_info
 do
   local _obj_0 = require("log")
@@ -22,7 +23,6 @@ local IPC_VERSION = "v1"
 local IPC_READ_CHUNK = 2048
 local IPC_MAX_LINE = 1024
 local IPC_WRITE_RETRY_COUNT = 5
-local PENDING_MAX_DEFAULT = 20000
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local timespec_ptr_t = ffi.typeof("timespec_t[1]")
@@ -467,10 +467,7 @@ local _pending_tail = nil
 local _pending_size = 0
 local _pending_evictions = 0
 local _configured_pending_max = tonumber(ipc_cfg.pending_max)
-local _pending_max = PENDING_MAX_DEFAULT
-if _configured_pending_max and _configured_pending_max >= 1 then
-  _pending_max = math.floor(_configured_pending_max)
-end
+local _pending_max = lowmem.resolve_pending_max(_configured_pending_max, lowmem.detect(runtime_cfg))
 local make_key
 make_key = function(txid, ip_str, src_port, resolver_ip_str)
   return string.format("%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str)

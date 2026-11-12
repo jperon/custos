@@ -401,12 +401,43 @@ describe("config.nfqueue.responses", function()
     os.remove(path)
     return assert.equals("4", cfg.nfqueue.responses)
   end)
-  return it("questions: \"0-1\" reste inchangé (contrôle)", function()
+  it("questions: \"0-1\" reste inchangé (contrôle)", function()
     local path = "tmp/config_spec_nfq_questions.moon"
     write_moon(path, [[return { nfqueue: { questions: "0-1" } }]])
     local cfg = reload(path)
     os.remove(path)
     return assert.equals("0-1", cfg.nfqueue.questions)
+  end)
+  it("sans config externe : défaut \"3-4\" (deux workers réponses, file 4 conservée)", function()
+    local cfg = reload(nil)
+    return assert.equals("3-4", cfg.nfqueue.responses)
+  end)
+  return it("le défaut ne partage aucune file avec les autres rôles", function()
+    local cfg = reload(nil)
+    local lm = require("lib.lowmem")
+    local owner = { }
+    local _list_0 = {
+      "questions",
+      "captive",
+      "reject",
+      "auth",
+      "sni",
+      "sip",
+      "doh_vlan"
+    }
+    for _index_0 = 1, #_list_0 do
+      local role = _list_0[_index_0]
+      local _list_1 = lm.parse_queues(cfg.nfqueue[role])
+      for _index_1 = 1, #_list_1 do
+        local q = _list_1[_index_1]
+        owner[q] = role
+      end
+    end
+    local _list_1 = lm.parse_queues(cfg.nfqueue.responses)
+    for _index_0 = 1, #_list_1 do
+      local q = _list_1[_index_0]
+      assert.is_nil(owner[q], "file " .. tostring(q) .. " du défaut réponses aussi utilisée par " .. tostring(owner[q]))
+    end
   end)
 end)
 describe("config.nfqueue.maxlen", function()

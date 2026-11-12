@@ -10,6 +10,13 @@
 
 LOWMEM_THRESHOLD_DEFAULT_KB = 131072  -- 128 Mo
 
+-- Borne de la table `pending` d'un worker réponses (cf. `ipc.pending_max`).
+-- 20 000 ≈ 16 Mo par worker réponses dans le pire cas (afflux de questions sans
+-- réponse, ≈ 0,84 Ko/entrée) ; le profil RAM faible vise ~4 Mo par worker.
+-- Recommandation mesurée : docs/agents/perf.md §15.5.
+PENDING_MAX_DEFAULT = 20000
+LOWMEM_PENDING_MAX  = 5000
+
 --- Lit MemTotal (en kB) depuis /proc/meminfo.
 -- @tparam[opt] string path Chemin du fichier (défaut "/proc/meminfo")
 -- @treturn number kilo-octets de RAM totale (0 si illisible)
@@ -77,6 +84,18 @@ detect = (runtime_cfg = {}, mem_reader = read_mem_total_kb) ->
   mem_kb = mem_reader!
   mem_kb > 0 and mem_kb < threshold
 
+--- Borne de la table `pending` à appliquer selon le profil.
+-- Même logique que `lib.nfq_rcvbuf.resolve_requested` : `configured`
+-- (`ipc.pending_max`) prime quand il est >= 1 ; sinon 20 000, ou 5 000 en mode
+-- RAM faible (0 ou valeur illisible = auto, cf. doc/CONFIG.md § ipc).
+-- @tparam number|string|nil configured Valeur de configuration
+-- @tparam boolean is_lowmem Profil RAM faible actif
+-- @treturn number Borne effective (entrées)
+resolve_pending_max = (configured, is_lowmem) ->
+  v = tonumber configured
+  return math.floor v if v and v >= 1
+  if is_lowmem then LOWMEM_PENDING_MAX else PENDING_MAX_DEFAULT
+
 --- Ramène chaque plage NFQUEUE listée à sa première file (mutation en place).
 -- @tparam table nfqueue Section config.nfqueue (mutée)
 -- @tparam[opt] table keys Clés à réduire (défaut questions/responses/captive/reject)
@@ -91,4 +110,6 @@ collapse_nfqueue = (nfqueue, keys = { "questions", "responses", "captive", "reje
       nfqueue[key] = first
   collapsed
 
-{ :LOWMEM_THRESHOLD_DEFAULT_KB, :read_mem_total_kb, :parse_queues, :is_contiguous_range, :detect, :collapse_nfqueue }
+{ :LOWMEM_THRESHOLD_DEFAULT_KB, :PENDING_MAX_DEFAULT, :LOWMEM_PENDING_MAX,
+  :read_mem_total_kb, :parse_queues, :is_contiguous_range, :detect,
+  :resolve_pending_max, :collapse_nfqueue }

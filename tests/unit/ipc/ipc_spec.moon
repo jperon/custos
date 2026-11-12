@@ -60,6 +60,17 @@ with_pending_max = (max, fn) ->
   cfg.ipc = saved
   error err unless ok
 
+-- ── Helper : installe `ipc` ET `runtime` (profil lowmem) avant `fresh_ipc!` ──
+-- `ipc.lua` résout la borne `pending` au chargement (lowmem.resolve_pending_max).
+with_ipc_profile = (max, runtime, fn) ->
+  cfg = package.loaded["config"]
+  saved_ipc, saved_runtime = cfg.ipc, cfg.runtime
+  cfg.ipc = { pending_ttl: 5, pending_max: max }
+  cfg.runtime = runtime
+  ok, err = pcall fn
+  cfg.ipc, cfg.runtime = saved_ipc, saved_runtime
+  error err unless ok
+
 -- ── Helper : message décodé minimal pour `set_pending` ───────────────────
 make_pending_msg = (txid, port, rule_id) ->
   {
@@ -1025,3 +1036,28 @@ describe "ipc", ->
       -- liste + clé). Les bornes larges évitent la fragilité entre versions.
       assert.is_true per_entry > 64,   "entrée non triviale (#{per_entry} o)"
       assert.is_true per_entry < 4096, "entrée < 4 Ko (#{per_entry} o)"
+
+  -- ── 35. Défaut de `ipc.pending_max` selon le profil (lowmem) ───────────
+  -- Recommandation de la campagne d-tune (docs/agents/perf.md §15.5) :
+  -- 20 000 par défaut, 5 000 en mode RAM faible. Une valeur explicite de
+  -- configuration prime toujours (0 = auto, comme `nfqueue.rcvbuf`).
+  describe "défaut de pending_max selon le profil", ->
+    it "hors RAM faible : 20 000", ->
+      with_ipc_profile nil, { lowmem: false }, ->
+        m_ipc = fresh_ipc!
+        assert.equals 20000, m_ipc.pending_stats!.pending_max
+
+    it "RAM faible : 5 000", ->
+      with_ipc_profile nil, { lowmem: true }, ->
+        m_ipc = fresh_ipc!
+        assert.equals 5000, m_ipc.pending_stats!.pending_max
+
+    it "valeur explicite : elle prime en RAM faible", ->
+      with_ipc_profile 12000, { lowmem: true }, ->
+        m_ipc = fresh_ipc!
+        assert.equals 12000, m_ipc.pending_stats!.pending_max
+
+    it "valeur explicite : elle prime hors RAM faible", ->
+      with_ipc_profile 8000, { lowmem: false }, ->
+        m_ipc = fresh_ipc!
+        assert.equals 8000, m_ipc.pending_stats!.pending_max

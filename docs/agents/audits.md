@@ -3389,3 +3389,50 @@ rejouer avec `nfqueue.maxlen` > 1024 pour vérifier que `queue_dropped`
 disparaît ; le gain avant le plafond CPU n'est pas chiffré. Aucune vérification
 sur un noyau refusant une longueur > 65535 : le cas est couvert par le stub
 (retour négatif → WARN, file démarrée).
+
+### Défauts de charge ajustés d'après la campagne d-tune (branche d-defaults)
+
+Application de la recommandation `perf.md` §15.5 (profil complet 2 workers
+questions / 2 réponses, `rcvbuf` 4 Mio, `pending_max` 20 000 ; profil lowmem
+1/1, `rcvbuf` 512 Kio, `pending_max` 5 000). Aucune mesure nouvelle : les
+valeurs viennent de la campagne `d-tune`.
+
+- **`nfqueue.responses`** : défaut `"4"` → **`"3-4"`** (`src/config.moon:222`),
+  soit deux workers réponses (2/2) ; la file 4 reste la dernière de la plage
+  pour les configurations qui la citent. La file 3 n'était utilisée par aucun
+  autre rôle (`NFQUEUE_ROLES`, `src/config.moon:534-536`) et
+  `find_nfqueue_overlap` (`src/config.moon:544-551`) ne signale aucun conflit ;
+  `is_contiguous_range` (`src/lib/lowmem.moon:65-71`) accepte la plage, donc
+  `normalize` ne la ramène pas à une file. Les templates nft ne codent aucun
+  numéro en dur (`nft-rules/dns-filter-bridge.nft:204-205`, substitution
+  `src/nft_rules.moon:92`). Les configurations E2E pinent explicitement
+  `responses: "4"` (`libvirt/homelab-e2e.moon:12`,
+  `libvirt/homelab-test.moon:11`) : conservées telles quelles (un seul worker,
+  test déterministe) ; la file 4 restant attribuée, elles restent valides.
+- **`ipc.pending_max`** : le défaut passe à **`0` = auto**
+  (`src/config.moon:274`), résolu au chargement d'`ipc.moon`
+  (`src/ipc.moon:369-370`) par `lib.lowmem.resolve_pending_max`
+  (`src/lib/lowmem.moon:87-97`) : **20 000** hors RAM faible, **5 000** quand
+  `runtime.lowmem` est actif ; une valeur explicite ≥ 1 prime toujours
+  (même logique que `nfq_rcvbuf.resolve_requested`,
+  `src/lib/nfq_rcvbuf.moon:42-45`). Schéma webui aligné
+  (`src/webui/schema/config_schema.moon:23,69`).
+- **Docs** : `doc/CONFIG.md` §2 (lowmem), §3 (`nfqueue`) et §6 (`ipc`) ;
+  `.agents/architecture.md:72,156` (défaut et exemple de nom de worker) ;
+  `.agents/workers.md:20,149-151`. `doc/CHEATSHEET.md` ne cite ni la file
+  réponses ni `pending_max` : inchangé. `perf.md` est un journal de mesures
+  daté, laissé intact (il décrit la configuration alors déployée).
+- **Tests** : `tests/unit/config_spec.moon` (défaut `"3-4"`, absence de
+  chevauchement avec les autres rôles), `tests/unit/lib/lowmem_spec.moon`
+  (`resolve_pending_max` : explicite, auto, lowmem, valeur invalide),
+  `tests/unit/ipc/ipc_spec.moon` (borne effective 20 000 / 5 000 et priorité
+  de la valeur explicite dans les deux profils).
+- **Vérification** : `nix develop --command bash -c "make all && make check &&
+  make test"` : **3 070 succès / 0 échec / 0 erreur / 0 pending** (sortie
+  `tmp/test.log`). `make test-e2e` non lancé (consigne de la tâche).
+
+**Non fait.** Aucune mesure de charge sur la cible (pas de déploiement) : le
+gain attendu est celui de `perf.md` §15.3 (0 % de perte jusqu'à 300 q/s
+`mixed` en 2/2 contre 12,6 % en 1/1 dès 400). Les paliers 700/900 `mixed` et
+l'effet de `pending_max` 5 000 sous afflux restent non mesurés (`perf.md`
+§15.5, « reste à faire » de `d-tune`).

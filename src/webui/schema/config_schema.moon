@@ -18,9 +18,9 @@
 
   nfqueue: {
     _label: "Files de paquets (NFQUEUE)"
-    _description: "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1'. Exception : « Réponses DNS » doit désigner une seule file (l'appariement question/réponse est privé à chaque processus worker)."
+    _description: "Avancé — réservé aux experts. Le pare-feu (nftables) remet les paquets à Custos via des « files » Netfilter numérotées ; chaque type de trafic a la sienne. Ne modifiez ces numéros que pour éviter un conflit avec d'autres outils utilisant NFQUEUE sur la même machine. Une plage s'écrit '0-1' : pour les réponses DNS, elle crée un worker par file (plage recommandée : 3-4)."
     questions: { type: "string", label: "Requêtes DNS",        hint: "n° de file, ex: 0-1",   default: "0-1" }
-    responses:  { type: "string", label: "Réponses DNS",        hint: "une seule file, ex: 4", default: "4" }
+    responses:  { type: "string", label: "Réponses DNS",        hint: "n° de file ou plage, ex: 3-4", default: "3-4" }
     captive:    { type: "string", label: "Portail captif",      hint: "n° de file, ex: 20",    default: "20" }
     reject:     { type: "string", label: "Paquets à rejeter",   hint: "n° de file, ex: 10-11", default: "10-11" }
     auth:       { type: "string", label: "Handshakes TLS (auth)", hint: "n° de file, ex: 5",   default: "5" }
@@ -67,7 +67,7 @@
     _label: "Communication interne (IPC)"
     _description: "Avancé. Règle le dialogue entre les processus internes de Custos (corrélation requête/réponse DNS). À n'ajuster qu'en cas de problème de performance diagnostiqué."
     pending_ttl: { type: "integer", label: "Durée de conservation d'une requête en attente (s)", default: 5 }
-    pending_max: { type: "integer", label: "Taille maximale de la table des requêtes en attente", hint: "au-delà, les plus anciennes sont évincées", default: 20000 }
+    pending_max: { type: "integer", label: "Taille maximale de la table des requêtes en attente", hint: "au-delà, les plus anciennes sont évincées ; 0 = auto (20000 ; 5000 en RAM faible)", default: 0 }
     match_retry: {
       _label: "Corrélation requête/réponse"
       count:    { type: "integer", label: "Nombre de tentatives", default: 5 }
