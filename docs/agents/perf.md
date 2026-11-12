@@ -117,7 +117,7 @@ Mesures :
   seul n'aurait pas corrigé le plafond de §3 ; ce n'est donc pas le correctif
   retenu à l'époque.
 - **Depuis la branche `d-rcvbuf`** (2026-11-12), le tampon est réglé
-  explicitement avant `nfq_create_queue` (`src/nfq_loop.moon:73-82`,
+  explicitement avant `nfq_create_queue` (`src/nfq_loop.moon:75-82`,
   `src/lib/nfq_rcvbuf.moon`) : `nfqueue.rcvbuf` (défaut 4 Mio, 512 Kio en RAM
   faible), relecture `getsockopt` et repli `SO_RCVBUFFORCE`. Cette correction
   vise le goulot **distinct** mesuré à 700-800 q/s en §13.5 (rafales du
@@ -1076,7 +1076,7 @@ processus : c'est bien le socket userspace qu'il faut dimensionner.
 ### 14.2 Réglage appliqué
 
 - Nouveau module `src/lib/nfq_rcvbuf.moon`, appelé dans `run_queue` **avant**
-  `nfq_create_queue` (`src/nfq_loop.moon:73-82`) : dès que le handler de file
+  `nfq_create_queue` (`src/nfq_loop.moon:75-82`) : dès que le handler de file
   existe, des paquets peuvent être mis en file, donc le tampon est réglé avant.
 - Clé `nfqueue.rcvbuf` (octets, `doc/CONFIG.md` §3). Absente, nulle ou
   illisible : **4 Mio** (`DEFAULT_RCVBUF`), ou **512 Kio** (`LOWMEM_RCVBUF`)

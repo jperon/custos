@@ -3180,7 +3180,7 @@ les rafales du résolveur débordent.
   `setsockopt(SO_RCVBUF)`, relecture `getsockopt`, repli
   `setsockopt(SO_RCVBUFFORCE)` si la valeur obtenue est bornée par
   `net.core.rmem_max`, logs INFO/WARN), appelé dans `run_queue`
-  (`src/nfq_loop.moon:73-82`) **avant** `nfq_create_queue`. Clé
+  (`src/nfq_loop.moon:75-82`) **avant** `nfq_create_queue`. Clé
   `nfqueue.rcvbuf` (octets) : défaut 4 Mio, 512 Kio en mode `runtime.lowmem` ;
   absente/nulle/illisible = défaut du profil.
 - **`NETLINK_NO_ENOBUFS` non activé** : l'option masquerait la perte au lieu de
