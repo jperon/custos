@@ -41,6 +41,25 @@ describe "lib.ipc_hex", ->
       raw = table.concat [ string.char((i * 7) % 256) for i = 1, 300 ]
       assert.equals raw, (from_hex to_hex raw)
 
+    -- Le cache de conversion (perf §18) ne doit changer ni la sortie ni le
+    -- nombre de substitutions rendu par `string.gsub`.
+    it "rend la même sortie et le même compte sur un appel répété (cache)", ->
+      s = "\1\2\3"
+      hex, count = to_hex s
+      assert.equals "010203", hex
+      assert.equals 3, count
+      hex2, count2 = to_hex s
+      assert.equals "010203", hex2
+      assert.equals 3, count2
+
+    it "reste exact après le débordement du cache (entrées multiples)", ->
+      for i = 1, 20
+        s = string.rep(string.char(i), 4)
+        expected = string.rep(string.format("%02x", i), 4)
+        assert.equals expected, (to_hex s), "entrée #{i}"
+      -- Le premier encodé a été purgé puis réencodé : sortie toujours juste.
+      assert.equals "01010101", (to_hex string.rep("\1", 4))
+
   describe "from_hex", ->
     it "décode l'hexadécimal, majuscules acceptées", ->
       value, err = from_hex "00FF10"
@@ -81,6 +100,23 @@ describe "lib.ipc_hex", ->
     it "décodé puis encodé est identique sur tous les octets", ->
       all = table.concat [ string.char(i) for i = 0, 255 ]
       assert.equals all, (from_hex (to_hex all))
+
+    it "rend la même sortie sur un appel répété (cache) sans erreur", ->
+      value, err = from_hex "616263"
+      assert.equals "abc", value
+      assert.is_nil err
+      value2, err2 = from_hex "616263"
+      assert.equals "abc", value2
+      assert.is_nil err2
+
+    it "reste exact après le débordement du cache et ne met jamais en cache une erreur", ->
+      for i = 1, 20
+        hex = string.format "%02x%02x%02x%02x", i, i, i, i
+        value = from_hex hex
+        assert.equals string.char(i, i, i, i), value, "entrée #{i}"
+      -- Une entrée invalide après des succès : erreur toujours détectée.
+      assert.is_nil (from_hex "zz")
+      assert.equals "abc", (from_hex "616263")
 
   describe "split_fields", ->
     it "découpe sur '|' en préservant les champs vides", ->

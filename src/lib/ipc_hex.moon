@@ -26,12 +26,40 @@ HEX_BYTE = {}
 for i = 0, 255
   HEX_BYTE[string.char(i)] = string.format "%02x", i
 
+-- ── Cache de conversion (borné) ──────────────────────────────────────
+-- Les mêmes valeurs reviennent des dizaines de fois par paquet : chaque
+-- réponse nft encode `rule_id` + corrélateur sur SES 16 lignes (32
+-- conversions), et `rule_id`/raison sont identiques d'un paquet à l'autre.
+-- 8 entrées maximum, purge complète au débordement : mémoire bornée à
+-- 8 entrées × (256 + 512) o, aucune invalidation possible (les deux
+-- fonctions sont pures : même entrée → même sortie). Mesure chiffrée :
+-- docs/agents/perf.md §18.
+CACHE_MAX_ENTRIES = 8
+CACHE_MAX_INPUT   = 256
+
+_hex_enc_cache = {}
+_hex_enc_n     = 0
+_hex_dec_cache = {}
+_hex_dec_n     = 0
+
 --- Encode une chaîne d'octets en hexadécimal minuscule.
 -- @tparam string s Chaîne d'octets
 -- @treturn string Représentation hexadécimale ("" si vide)
+-- @treturn number Nombre de substitutions (identique à `string.gsub`)
 to_hex = (s) ->
   return "" unless s and #s > 0
-  (s\gsub ".", HEX_BYTE)
+  hit = _hex_enc_cache[s]
+  -- `gsub` rend (chaîne, nombre de substitutions) : sur un hit on reproduit
+  -- les deux valeurs (chaque octet = une substitution → #s).
+  return hit, #s if hit
+  out = (s\gsub ".", HEX_BYTE)
+  if #s <= CACHE_MAX_INPUT
+    if _hex_enc_n >= CACHE_MAX_ENTRIES
+      _hex_enc_cache = {}
+      _hex_enc_n = 0
+    _hex_enc_cache[s] = out
+    _hex_enc_n += 1
+  out, #s
 
 -- Valeur hexadécimale d'un octet de code (nil si ce n'est pas un caractère
 -- hexadécimal) : décodage par paires sans `sub`+`tonumber`+`string.char`
@@ -52,6 +80,8 @@ for i = 0, 5
 -- @treturn string|nil Code d'erreur ("hex_odd_length", "hex_invalid_chars")
 from_hex = (h) ->
   return "", nil if not h or #h == 0
+  hit = _hex_dec_cache[h]
+  return hit, nil if hit
   n = #h
   return nil, "hex_odd_length"   if (n % 2) != 0
   out = {}
@@ -64,7 +94,14 @@ from_hex = (h) ->
     out[j] = string.char(hi * 16 + lo)
     j += 1
     i += 2
-  table.concat(out), nil
+  decoded = table.concat(out)
+  if n <= CACHE_MAX_INPUT
+    if _hex_dec_n >= CACHE_MAX_ENTRIES
+      _hex_dec_cache = {}
+      _hex_dec_n = 0
+    _hex_dec_cache[h] = decoded
+    _hex_dec_n += 1
+  decoded, nil
 
 --- Découpe une ligne IPC sur le séparateur "|", champs vides préservés.
 -- @tparam string line Ligne IPC
