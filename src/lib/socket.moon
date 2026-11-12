@@ -48,6 +48,9 @@ pcall ->
       unsigned char  sll_addr[8];
     };
 
+    /* Conservés pour les déclarations globales LuaJIT (ffi_defs déclare les
+       mêmes types ; select(2) n'est plus utilisé, socket_select passe par
+       poll(2) — cf. la fin du fichier). */
     typedef long __fd_mask;
     struct fd_set {
       __fd_mask __fds_bits[16];
@@ -114,20 +117,12 @@ ETH_P_ALL = 0x0003
 -- Get errno
 get_errno = -> ffi.C.__errno_location![0]
 
--- FD_SET helpers
-fd_set_clear = (set) ->
-  for i = 0, 15
-    set.__fds_bits[i] = 0
-
-fd_set_set = (set, fd) ->
-  idx = bit.rshift(fd, 6)
-  off = bit.band(fd, 63)
-  set.__fds_bits[idx] = bit.bor(set.__fds_bits[idx], bit.lshift(1, off))
-
-fd_set_isset = (set, fd) ->
-  idx = bit.rshift(fd, 6)
-  off = bit.band(fd, 63)
-  bit.band(set.__fds_bits[idx], bit.lshift(1, off)) != 0
+-- Bits de revents pour poll(2) (Linux).
+POLLIN   = 0x1
+POLLOUT  = 0x4
+POLLERR  = 0x8
+POLLHUP  = 0x10
+POLLNVAL = 0x20
 
 -- Socket metatable
 socket_mt = {
@@ -473,52 +468,69 @@ socket_mt.__index.close = =>
   true
 
 -- Select
+--- Attend que des sockets soient prêts (équivalent de select(2)).
+-- Implémenté avec poll(2) : `struct fd_set` est fait de mots `long` (4 octets
+-- sur OpenWrt 32 bits, 8 sur x86-64) alors que les opérations de bits de LuaJIT
+-- travaillent sur 32 bits. Un descripteur >= 32 était donc surveillé sous
+-- l'identité de son alias `fd - 32` ; quand cet alias était lisible en
+-- permanence (stdin = /dev/null d'un worker en service), select() rendait
+-- immédiatement à chaque tour et la boucle d'acceptation consommait 100 % d'un
+-- vCPU au repos (worker DoH). poll(2) n'utilise ni masque de bits ni plafond de
+-- 1024 descripteurs, et accepte un timeout nul (rendu immédiat).
+-- @tparam table|nil readfds  Sockets à surveiller en lecture.
+-- @tparam table|nil writefds Sockets à surveiller en écriture.
+-- @tparam number|nil timeout Délai en secondes (nil = attente infinie).
+-- @treturn table Sockets prêts en lecture.
+-- @treturn table Sockets prêts en écriture.
 socket_select = (readfds, writefds, timeout) ->
-  max_fd = 0
-  read_set = ffi.new "struct fd_set"
-  write_set = ffi.new "struct fd_set"
-  fd_set_clear(read_set)
-  fd_set_clear(write_set)
+  n_read  = if readfds then #readfds else 0
+  n_write = if writefds then #writefds else 0
+  n = n_read + n_write
 
+  -- ffi.new refuse un tableau de taille nulle : poll() ignore les entrées
+  -- au-delà de `n`, une entrée factice suffit donc quand `n` vaut 0.
+  pfd = ffi.new "struct pollfd[?]", math.max n, 1
+  i = 0
   if readfds
     for sock in *readfds
-      fd_set_set(read_set, sock.fd)
-      if sock.fd > max_fd
-        max_fd = sock.fd
-
+      pfd[i].fd = sock.fd
+      pfd[i].events = POLLIN
+      i += 1
   if writefds
     for sock in *writefds
-      fd_set_set(write_set, sock.fd)
-      if sock.fd > max_fd
-        max_fd = sock.fd
+      pfd[i].fd = sock.fd
+      pfd[i].events = POLLOUT
+      i += 1
 
-  tv = ffi.new "struct timeval"
-  if timeout
-    sec = math.floor(timeout)
-    usec = math.floor((timeout - sec) * 1000000)
-    tv.tv_sec = sec
-    tv.tv_usec = usec
+  -- poll(2) attend des millisecondes ; nil = attente infinie.
+  timeout_ms = if timeout == nil then -1 else math.max 0, math.floor(timeout * 1000 + 0.5)
 
-  ret = C.select(max_fd + 1, readfds and read_set or nil, writefds and write_set or nil, nil, timeout and tv or nil)
-
+  ret = C.poll pfd, n, timeout_ms
   if ret < 0
     errno = get_errno!
     if errno == 4  -- EINTR : appel interrompu par signal, retourner vide
       return {}, {}
-    error "select() failed: errno="..errno
+    error "poll() failed: errno="..errno
 
   ready_read = {}
   ready_write = {}
 
+  -- POLLHUP/POLLERR comptent comme « prêt » pour les deux sens, comme select(2).
+  i = 0
   if readfds
     for sock in *readfds
-      if fd_set_isset(read_set, sock.fd)
-        table.insert(ready_read, sock)
-
+      revents = pfd[i].revents
+      error "poll() failed: invalid fd #{sock.fd}" if bit.band(revents, POLLNVAL) != 0
+      if bit.band(revents, bit.bor(POLLIN, POLLHUP, POLLERR)) != 0
+        table.insert ready_read, sock
+      i += 1
   if writefds
     for sock in *writefds
-      if fd_set_isset(write_set, sock.fd)
-        table.insert(ready_write, sock)
+      revents = pfd[i].revents
+      error "poll() failed: invalid fd #{sock.fd}" if bit.band(revents, POLLNVAL) != 0
+      if bit.band(revents, bit.bor(POLLOUT, POLLHUP, POLLERR)) != 0
+        table.insert ready_write, sock
+      i += 1
 
   ready_read, ready_write
 

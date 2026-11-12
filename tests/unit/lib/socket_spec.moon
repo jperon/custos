@@ -8,6 +8,15 @@ ffi = require "ffi"
 -- Déclarer socketpair si nécessaire
 pcall -> ffi.cdef "int socketpair(int domain, int type, int protocol, int sv[2]);"
 
+-- Horloge murale monotone (os.clock mesure du temps CPU, pas l'attente de poll).
+--- Millisecondes de temps mural monotone (CLOCK_MONOTONIC).
+-- @treturn number Millisecondes.
+monotonic_ms = ->
+  libc = require("ffi_defs").libc
+  ts = ffi.new "timespec_t"
+  libc.clock_gettime 1, ts   -- CLOCK_MONOTONIC
+  tonumber(ts.tv_sec) * 1000 + tonumber(ts.tv_nsec) / 1e6
+
 -- Helper: crée une paire de sockets connectés (AF_UNIX, SOCK_STREAM)
 -- et les habille avec la metatable du module socket.
 make_pair = (sock_mod) ->
@@ -406,6 +415,54 @@ describe "lib.socket", ->
       assert.are.equal 0, #ready_read
       s1\close!
       s2\close!
+
+  -- ═══════════════════════════════════════════════════════════════════════════
+  -- socket_select avec des descripteurs >= 32 (régression worker DoH 100 % CPU)
+  --
+  -- Le masque fd_set était manipulé avec la bibliothèque `bit` de LuaJIT, qui
+  -- est en 32 bits, alors que `struct fd_set` est fait de `long` (64 bits sur
+  -- x86-64) : un fd >= 32 était surveillé sous l'identité de son alias
+  -- fd - 32. Un alias lisible (stdin = /dev/null en service) faisait rendre
+  -- select() immédiatement à chaque tour → 100 % d'un vCPU au repos.
+  -- ═══════════════════════════════════════════════════════════════════════════
+
+  describe "socket_select avec un descripteur >= 32", ->
+    it "surveille le fd demandé, pas son alias fd-32", ->
+      s1, s2 = make_pair sock
+      -- Duplique s2 (fd >= 32) : `watch` partage le socket de s2 mais porte un
+      -- numéro de descripteur élevé, l'alias fd-32 valant s1.fd.
+      high = tonumber sock.C.fcntl s2.fd, 0, s1.fd + 32
+      assert.are.equal s1.fd + 32, high
+      watch = { fd: high }
+      -- Rend l'alias (s1) lisible : `watch` n'a, lui, rien à lire.
+      s2\send "alias"
+      ready, _ = sock.socket_select {watch}, nil, 0
+      assert.are.equal 0, #ready
+      -- Et une donnée sur le vrai socket dupliqué doit être détectée.
+      s1\send "watch"
+      ready, _ = sock.socket_select {watch}, nil, 0.1
+      assert.are.equal 1, #ready
+      assert.are.equal watch, ready[1]
+      s1\close!
+      s2\close!
+      sock.C.close high
+
+    it "attend le timeout au lieu de boucler quand seul un fd >= 32 est surveillé", ->
+      s1, s2 = make_pair sock
+      high = tonumber sock.C.fcntl s2.fd, 0, s1.fd + 32
+      assert.are.equal s1.fd + 32, high
+      watch = { fd: high }
+      -- L'alias (s1) est lisible en permanence : avant correctif, select()
+      -- rendait aussitôt et la boucle d'acceptation tournait à vide.
+      s2\send "alias"
+      t0 = monotonic_ms!
+      ready, _ = sock.socket_select {watch}, nil, 0.15
+      elapsed = monotonic_ms! - t0
+      assert.are.equal 0, #ready
+      assert.is_true elapsed >= 100
+      s1\close!
+      s2\close!
+      sock.C.close high
 
   -- ═══════════════════════════════════════════════════════════════════════════
   -- accept non-bloquant (EAGAIN)
