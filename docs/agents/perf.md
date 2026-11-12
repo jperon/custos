@@ -531,6 +531,17 @@ Mise en œuvre de la piste §10.1 : répartir les questions DNS (file 1) et les
 réponses DNS (file 4) sur **N workers**, par configuration, sans changer le
 comportement à 1 worker.
 
+> **Note datée (2026-11-12, branche `d-qhash`) — la répartition des plages DNS
+> a changé.** Depuis cette branche, quand `nfqueue.questions` ou
+> `nfqueue.responses` compte **plus d'une** file, les règles DNS ne sont plus
+> `queue num A-B` mais `queue to jhash <IP client> . <port client> mod N offset
+> <première file>`, une règle par famille (IPv4/IPv6) : le hachage porte sur
+> l'IP **et** le port du client, ce qui écarte la concentration mesurée au §15.2
+> et §16.3 (70,6 % des réponses sur une seule file). Le présent §11.1 reste
+> exact pour la sémantique de `queue num A-B` — encore en vigueur pour une file
+> unique et pour les autres rôles (captive, reject, sni, sip, auth). Détail,
+> validations et justifications : **§11.5**.
+
 ### 11.1 Ce que le noyau garantit (vérifié dans les sources)
 
 `queue num A-B` (plage) fait répartir par `nfqueue_hash` — et non « premier
@@ -599,6 +610,145 @@ Le gain attendu reste celui du §10.1 ; le protocole de re-mesure est celui du
 §7.1 (paliers 300/400/500 `mixed` + `up` 500, repos vérifié), en contrôlant en
 plus `response_orphan_dropped`, `so_verdict_bus_invalid` et l'absence de
 `nft_ack_timeout`.
+
+### 11.5 Répartition par (IP, port) du client — branche `d-qhash` (2026-11-12)
+
+**Constat.** Avec `queue num A-B`, le hachage noyau porte sur le couple
+d'adresses symétrique **sans les ports** (§11.1) : les réponses du résolveur
+validateur (second avis) ont le couple (validateur, client) et tombent donc
+toutes sur **une seule** file de la plage — 70,6 % des paquets de réponse sur
+`resp-q14` à 400 q/s (§15.2), reproduit à 350 q/s (§16.3). Deux flux de ports
+différents d'un même client ne se répartissent pas non plus.
+
+**Ce qui change** (les règles DNS sont désormais générées, plus écrites en dur dans le template) :
+
+- `nft-rules/dns-filter-bridge.nft:215-216` : les deux règles littérales sont
+  remplacées par les ancres `DNS_QUESTIONS_RULES` / `DNS_RESPONSES_RULES`.
+  Piège constaté pendant le développement : le **commentaire** du template ne
+  doit pas écrire ces accolades, sinon la substitution les remplace aussi et
+  casse le rendu (corrigé) ;
+- `src/nft_rules.moon:117-132` (table `DNS_RULES` : sélecteurs, clés, familles),
+  `:135-146` (`contiguous_segments`), `:163-186` (`dns_queue_rules`) et
+  `:203-204` (substitution) construisent le bloc.
+
+Rendu pour `questions: "0-1"`, `responses: "14-15"` (quatre règles : deux
+sens × deux familles) :
+
+```text
+meta l4proto {udp, tcp} th dport 53 ip version 4 log level debug prefix "custos question: " counter queue to jhash ip saddr . th sport mod 2 offset 0 comment "DNS questions → NFQUEUE"
+meta l4proto {udp, tcp} th dport 53 ip6 version 6 log level debug prefix "custos question: " counter queue to jhash ip6 saddr . th sport mod 2 offset 0 comment "DNS questions → NFQUEUE"
+meta l4proto {udp, tcp} th sport 53 ip version 4 log level debug prefix "custos response: " counter queue to jhash ip daddr . th dport mod 2 offset 14 comment "DNS responses → NFQUEUE"
+meta l4proto {udp, tcp} th sport 53 ip6 version 6 log level debug prefix "custos response: " counter queue to jhash ip6 daddr . th dport mod 2 offset 14 comment "DNS responses → NFQUEUE"
+```
+
+- **une seule file** → `queue num X` **à l'identique** (branche `#segment == 1`
+  de `dns_queue_rules`) : `nft list` l'affiche `queue to X`, comme avant ;
+- **liste discontinue** (`"0,2"`) → une règle **par segment contigu**
+  (`contiguous_segments`) : un `queue num` par file isolée, car
+  `mod N offset premier` ne couvrirait que `[premier, premier+N-1]` et
+  priverait les autres files de leurs paquets (aucun listener dessus) ;
+- `bypass` **absent** : la règle historique n'en a pas ; avec `bypass`, un
+  paquet sans worker continuerait dans la chaîne et contournerait le filtre
+  DNS. Tous les autres éléments de la règle (sélecteur `meta l4proto {udp, tcp}`
+  + `th dport 53`/`th sport 53`, `log level debug prefix`, `counter`,
+  `comment`) sont conservés à l'identique.
+
+**Validations réalisées** (local, nft **1.1.6** = version de la cible ;
+netns utilisateur via `unshare -Urn`, protocole complet dans
+`tmp/qhash_report.md`) :
+
+1. `nft -c -f` sur le ruleset **rendu en entier** (`tmp/render_rules.lua` →
+   `tmp/rendered_range.nft`, `_single.nft`, `_3.nft`) : **rc = 0** pour
+   `0-1`/`14-15`, `0`/`4` et `0-2`/`14-16`, et `nft -f` réel (application en
+   netns) accepte les trois. Sans `unshare`, `nft -c` échoue sur l'accès
+   netlink (`Operation not permitted`) : c'est le cas « sans root » signalé à
+   l'orchestrateur.
+2. `th sport` / `th dport` **sont acceptés** dans l'expression jhash : pas
+   besoin de séparer les règles `udp`/`tcp`.
+3. Choix du sélecteur de famille — testé sur quatre trames (v4/v6 × taguée/non
+   taguée, injection AF_PACKET dans un pont, compteurs nft) :
+   - `ether type ip` / `ether type ip6` : **ne matchent PAS** les trames VLAN
+     encapsulées (l'ethertype vu est 0x8100), alors que la résolution L4
+     (`th dport 53`) y est correcte → un sélecteur choisi là laisserait tout
+     le trafic VLAN sur une seule règle (ou aucune) ;
+   - `ip version 4` / `ip6 version 6` : chacun couvre **ses deux** trames
+     (taguée et non taguée) et rien de l'autre famille → **retenus** ;
+   - `meta nfproto` : refusé par nft en famille bridge (« only useful in the
+     inet family »).
+4. Sémantique de la clé — règle témoin `meta mark set jhash … mod 2 offset 14`
+   puis compteurs par marque : marques obtenues **14/15** uniquement, variant
+   avec l'IP **et** le port du client (même IP, ports 12345/54321 → marques
+   différentes ; même port, IP .1/.3 → marques différentes), et **stables**
+   pour une même trame tant que le ruleset n'est pas réappliqué. La graine est
+   recalculée à chaque installation de règle : deux applications successives
+   peuvent inverser 14/15, sans incidence sur l'affinité intra-ruleset.
+5. `nft list` normalise l'affichage : `queue num 4` s'affiche `queue to 4`, et
+   `offset 0` est omis (`mod 3` seul pour `questions: "0-2"`) : les files
+   couvertes restent exactement celles de la plage.
+
+**Justifications (vérifiées sur le code, pas supposées)**
+
+1. **A et B tombent sur la même file réponses.** La question dupliquée vers le
+   validateur conserve le port source du client : `src/dup_query.moon:47`
+   (`spt: l4.spt, dpt: l4.dpt`), le commentaire d'en-tête le dit explicitement
+   (`src/dup_query.moon:4-9` : « SEULE l'IP destination est réécrite vers le
+   validateur (src client, ports, txid et payload DNS préservés) »). La réponse
+   A (résolveur→client) et la réponse B (validateur→client) ont donc toutes
+   deux `(daddr = client, dport = port client)` → même clé `ip daddr . th
+   dport` → même worker. **Le bus `so_verdict` reste** : il est le repli si
+   deux paquets d'une même transaction ne coïncident pas (fragments,
+   reconfiguration en cours de vie, retour à `queue num`) —
+   `src/second_opinion.moon:17-23`.
+2. **L'appariement reste garanti quel que soit le worker.** Chaque question est
+   écrite dans **tous** les pipes question→réponse (`ipc.write_with_retry_all`,
+   `src/ipc.moon:171-188`, appel `src/worker_questions.moon:455`) : chaque
+   worker réponses possède la table `pending` (`src/ipc.moon:354`) et peut
+   apparier une réponse (`src/worker_responses.moon:1094`).
+3. **Affinité TCP DNS conservée.** Une connexion TCP DNS a une 5-tuple fixe :
+   même (IP, port) → même clé → même worker pendant toute la connexion, donc
+   l'état `tcp_state` (`src/worker_responses.moon:180`, consommé au `:1045`)
+   reste dans un seul processus. La clé est en plus *plus fine* que l'ancienne :
+   deux connexions TCP du même client se répartissent au lieu d'aller dans la
+   même file.
+4. **Fragments / en-tête L4 illisible** — tranché par un test réel (fragments
+   fabriqués, compteurs nft + observation de la sortie du pont) :
+   - **zone hors périmètre** (le lecteur de payload lit au-delà du paquet) :
+     l'évaluation pose `NFT_BREAK`, la règle entière est sautée et le paquet
+     **retombe dans la suite de la chaîne** — observé sur un fragment de
+     2 octets dont les premiers valent 0x0035 : le sélecteur `th sport 53`
+     matche, la clé `th dport` est hors périmètre, le compteur de la règle
+     s'incrémente mais le paquet ressort (non avalé). C'est déjà le
+     comportement d'aujourd'hui, où c'est le sélecteur lui-même qui échoue de
+     la même façon ;
+   - **zone lisible mais octets « garbage »** (fragment non-premier : les deux
+     premiers octets du payload sont lus comme `th sport`) : aujourd'hui il
+     partait dans la file du flux (hachage par adresses), il part désormais
+     dans la file donnée par la clé (IP, port illisibles). Dans les deux cas
+     le paquet n'est pas un message DNS complet : le worker ne peut ni
+     l'interpréter ni l'apparier.
+   **Aucun filet de repli ajouté** : une règle du type
+   `ip frag-off & 0x1fff != 0 → queue num <première>` sans condition de port
+   capturerait **tous** les fragments UDP/TCP non premiers (le port n'est pas
+   lisible) et les ferait jeter par le worker DNS → elle casserait le trafic
+   fragmenté non DNS qui traverse aujourd'hui la chaîne. Le cas limite
+   (réponse fragmentée dont les octets lus valent 0x0035, non interpretable de
+   toute façon) est donc accepté tel quel.
+
+**Non fait / à revoir** :
+
+- aucun déploiement (consigne : pas de ssh) — le
+  comportement en charge reste à re-mesurer sur la cible avec le protocole
+  §15.3 en contrôlant la répartition par Δ`id_sequence` sur les files de la
+  plage, puis le rendu réel
+  (`nft list chain bridge dns-filter-bridge forward` : quatre règles jhash en
+  plage, deux `queue to N` en fichier unique) ;
+- **commentaires devenus faux** (hors périmètre de cette branche) :
+  `src/second_opinion.moon:17-23` et `src/worker_responses.moon:805-811`
+  expliquent encore que A et B partent vers des files *différentes* sous
+  l'ancien hachage — avec la clé (IP, port) du client elles arrivent chez le
+  même worker ; le bus décrit reste le repli. À corriger lors d'une passe de
+  doc sur ces deux fichiers (le commentaire n'a aucune incidence sur le
+  comportement).
 
 ## 12. Multi-worker mesuré sur custos.lan (2026-11-12) : blocage du fan-out et écart nft/id_sequence
 
