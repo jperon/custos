@@ -3816,3 +3816,104 @@ run final est vert.
 **Non fait / douteux** : aucune mesure de charge sur cette branche (pas de
 déploiement) — le gain attendu (N−1 `write()` par réponse) reste à confronter
 au CPU `nft`/`resp` mesuré en §16.2-16.3.
+
+### Campagne de charge après les correctifs de l'audit (branche `d-bench5`)
+
+Campagne de mesure demandée après le déploiement d'un build `dev` contenant
+tous les correctifs de §16.6-§16.9 (`d-ackread`, `d-valspread`, `d-nftcache`,
+`d-nftwrite`, `d-maxlen`, `d-rcvbuf`, `d-qhash`, `d-dohspin`). **Aucune
+modification de code, aucun défaut changé** : seules la configuration
+`nfqueue` de la cible (pour le volet B) et la documentation ont été touchées.
+Détail, tableaux et analyse : `docs/agents/perf.md` §17 ; rapport de campagne
+`tmp/bench5_report.md` ; harnais `tmp/tune/` (`dnsload5.py`, `runphase5.sh`,
+`analyse.py`, `cpuwin.py`) et résultats bruts `tmp/tune/results/` (ignorés par
+git).
+
+**Build vérifié** : `md5sum` du `lua/` de la branche et de `/usr/share/custos/`
+de la cible égaux pour `nfq_loop.lua`, `worker_nft.lua`, `nft_queue.lua`,
+`dup_query.lua`, `worker_responses.lua`, `nft_rules.lua`,
+`worker_questions.lua`. Les règles `queue to jhash` sont bien présentes
+(`nft list ruleset` lignes 973-976), conformes à `src/nft_rules.moon:163-183`.
+
+**Protocole** : `servus` authentifié (sonde `dig` avant **chaque** palier,
+jamais en échec) ; générateur `tmp/tune/dnsload5.py` (une seule IP source
+10.35.1.2, N ports source, 2 destinations 10.35.1.1/10.35.4.1) ; paliers de
+30 s, repos vérifié, compteurs nft+NFQUEUE dans le même instantané, sonde
+après chaque palier ; drain 45 s pour les paliers saturés et 2 s pour les
+contrôles explicitement comparés à §15. Configurations : **A** = cible
+(`responses: "14-15"`, questions par défaut `0-1`, `rcvbuf` 4 Mio, `maxlen`
+4096, `pending_max` 20 000) ; **B** = clé `nfqueue` supprimée par `sed`
+(défauts `questions "0-1"`, `responses "3-4"`, mêmes défauts des autres clés).
+Sauvegarde `/etc/custos/config.moon.dbench5` **avant** toute modification ;
+restauration et vérification en fin de campagne (§ ci-dessous).
+
+**Résultats (30 s, 128 ports, 2 destinations ; détail §17.3-17.4)** :
+
+| palier | A `14-15` | B `3-4` (défauts) |
+|---|---|---|
+| 200 `mixed` | 0 %, p50 22,7 ms | 0 %, p50 22,5 ms |
+| 350 `mixed` | 0 %, p50 37,6 ms | 0 %, p50 36,5 ms |
+| 500 `mixed` | 14,9 %, p50 3,87 s, `qdrop` 0 | 12,9 %, p50 4,40 s, `qdrop` 0 |
+| 700 `mixed` | 31,7 %, p50 9,39 s, `qdrop` 0 | 33,0 %, p50 7,49 s, `qdrop` 0 |
+| 800 `up` | 0 %, p50 0,83 s | 0 %, p50 0,39 s |
+| 1000 `up` | 34,1 %, p50 4,53 s, `qdrop` 0 | 28,8 %, p50 4,26 s, `qdrop` 0 |
+| 1300 `up` | 63,0 %, `qdrop` 687, prof. 4 049 | 67,3 %, `qdrop` 1 907, prof. 4 096 |
+
+A et B sont **équivalents** : les deux configurations ne diffèrent que par les
+numéros de files, toutes les autres clés étant déjà aux défauts en A.
+
+**Gains par correctif** (contrôles 1 socket comparables à §15/§16.2) :
+
+- `d-maxlen` : à 500 `mixed` au protocole exact de §15, `qdrop` 664 contre
+  8 782 (42,3 % → 34,8 % à chaud ; **3,7 %** après un drain de 20 s, `qdrop`
+  0) ; à 800 et 1000 `up`, `qdrop` 0 (contre 8 191 à 1000 `up` §15) ; il ne
+  réapparaît qu'à 1300 `up`.
+- `d-ackread` : à 350 `mixed` 1 socket, p50 81 ms contre 474 ms et
+  `response_entry_ms` p99 98 ms contre 337 ms (§16.2) ; à 200, p99 47 contre
+  73 ms.
+- `d-nftcache` + `d-nftwrite` : CPU `nft` à 200 `mixed` 20,3 % contre 50,9 %
+  (§16.2) et 18,0-19,6 % à 128 ports ; à 350, 35,1 % contre 64,5 %, à nombre
+  d'upserts par requête inchangé (1,70-1,71).
+- `d-qhash` : répartition effective avec plusieurs ports (1 port ⇒ q14 0 /
+  q15 2 058 ; 8 ports ⇒ 2 045 / 2 057 ; 128 ports ⇒ 1 742 / 1 706 sur une
+  seule destination). Limite : un client à port source unique concentre tout
+  son trafic sur une file de chaque sens (800 `up` 1 socket : 22,2 % de perte
+  contre 0 % en §15 avec l'ancien hachage par couple d'adresses).
+- `d-valspread` : non isolable dans ce build (choix du validateur non
+  journalisé).
+
+**Nouveau goulot** : à 500 `mixed` et 800 `up`, `idle` = 3,6-5,5 %, `resp` +
+`dns` + `nft` saturent les quatre cœurs ; la perte n'est plus un débordement de
+file noyau (`qdrop` = `udrop` = 0) mais des `response_orphan_dropped`
+(`ipc_retry_attempts=5`, compteurs `suppressed` de 1 630 à 27 161 selon le
+palier), cohérents avec l'expiration de `ipc.pending_ttl` (5 s) avant lecture
+d'une réponse dont `response_entry_ms` p99 atteint 5,5-5,9 s. Le plafond sans
+perte du profil complet est ≈ 350 q/s `mixed` / ≈ 800 q/s `up`.
+
+**Recommandation** : garder `responses: "14-15"` sur la cible (équivalent aux
+défauts `"3-4"`, aucune différence mesurable) ; pour une installation neuve,
+les défauts conviennent. Le levier de débit restant est le CPU par requête et
+l'arbitrage `pending_ttl`/`maxlen`, pas un réglage `nfqueue` supplémentaire.
+
+**Vérifications finales** : `/etc/custos/config.moon` restauré depuis
+`.dbench5`, `.dbench5` supprimé (absent), `grep` des seules clés étudiées :
+ligne 2 = `nfqueue: { responses: "14-15" }`, aucune autre clé `nfqueue`/`ipc` ;
+`nft list ruleset` : `queue to jhash … offset 14` pour les réponses, `offset 3`
+disparu ; `queue_maxlen` 4096 sur q0/q1/q14/q15 ; sonde DNS finale
+`vpn.stemarie.dynv6.net` → `reseau.stemarie.dynv6.net.` (rc=0) et
+`controlplane.tailscale.com` → 8 adresses (rc=0, toujours authentifié).
+`servus` : aucune IPv6 temporaire créée (la campagne n'a utilisé que l'IPv4
+existante 10.35.1.2 et des ports source) ; aucun générateur résiduel
+(`pgrep`). **Aucun fichier de code modifié.**
+
+**Tests** : `nix develop --command bash -c "make all && make check && make test"`
+→ **3139 succès / 0 échec / 0 erreur / 0 pending** (55,4 s, `tmp/test.log`).
+Pas de `make test-e2e` (consigne : le homelab ne doit pas tourner pendant la
+campagne).
+
+**Non fait / douteux** : `d-valspread` non isolé ; compteurs du cache d'upsert
+invisibles (niveau INFO, `batch_ok`/`skipped` en DEBUG, niveau non changé) ;
+partage exact entre réponses orphelines et réponses arrivées après la fenêtre
+non instrumenté ; une seule source (servus), pas d'IPv6 temporaire ; `perf`
+absent de la cible ; reproductibilité dépendante du tirage des ports (8 ports :
+25/75 et 50/50 selon le run ; 128 ports : 48-52 %).
