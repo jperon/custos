@@ -16,7 +16,7 @@ Voir [architecture.md](architecture.md) pour la vue d'ensemble et le queue map.
 ## worker_responses (`src/worker_responses.moon`)
 
 - **In :** NFQUEUE `QUEUE_RESPONSES` ; **son** pipe `question_response<i>` (lecture via `drain_pipe`) ; pipe ACK `nft` dédié ; pipe du bus de verdicts `so_verdict<i>` ; fd d'écriture `events` (`events_wfd`, injecté par `main.moon`) ; `sessions.lua` (cache mtime).
-- **Multi-worker :** un worker par file de `nfqueue.responses`. La répartition du noyau étant par flux, une réponse peut arriver dans un autre worker que celui qui a lu la question : c'est sans conséquence, chaque worker reçoit une copie de **toutes** les transactions (fan-out du pipe) et possède donc une table `pending` complète. Le coût est de `N` copies de `pending` (TTL `ipc.pending_ttl`, 5 s) et `N` écritures par question.
+- **Multi-worker :** un worker par file de `nfqueue.responses`. La répartition du noyau étant par flux, une réponse peut arriver dans un autre worker que celui qui a lu la question : c'est sans conséquence, chaque worker reçoit une copie de **toutes** les transactions (fan-out du pipe) et possède donc une table `pending` complète. Le coût est de `N` copies de `pending` (TTL `ipc.pending_ttl`, 5 s ; borne `ipc.pending_max`, 20 000 entrées par worker, cf. ci-dessous) et `N` écritures par question.
 - **Second avis inter-workers :** quand un worker reçoit la réponse du validateur (B), il diffuse le verdict encodé (`second_opinion.encode_verdict`) sur les pipes `so_verdict<j>` des autres workers (`broadcast_verdict`). Chacun l'applique (`drain_verdict_bus`) : s'il détient la réponse d'origine (A) parquée, il la débloque immédiatement ; sinon il mémorise le verdict pour une A ultérieure. Le pipe du bus est surveillé par le `poll` de `nfq_loop` (`extra_rfds`) : réveil immédiat, sans attendre le budget de 80 ms. À un seul worker, aucun bus n'est créé (chemin inchangé).
 - **Out :** `NF_ACCEPT` ou `nfq_set_verdict(NF_ACCEPT, patched_payload)` (TTL + EDE `Custos vigilat`) ou NXDOMAIN+EDE `Filtered` pour les transactions refusées.
 - **Effets de bord :** demande l'ajout dans `ip4_allowed`, `ip6_allowed`, `mac4_allowed`, `mac6_allowed` **via le pipe `nft`** (timeout `nft.ip_timeout`), puis attend l'ACK de `worker_nft` avant de rendre le verdict. Depuis le correctif de perf, **une seule attente d'ACK par lot NFQUEUE** (tous les paquets d'une même lecture netlink : `settle` diffère les verdicts, `nfq_loop.run_queue` appelle `flush_deferred` en fin de lot) au lieu d'une par réponse ; rafraîchit la table de voisins (`ip neigh show`) au plus toutes les `NEIGH_REFRESH_COOLDOWN` secondes. Quand `runtime.benchmark` est actif, la ligne `action=response_dns_benchmark` porte deux mesures **µs parallèles et non additives** : `ack_wait_us` (attente `nft_queue.wait_ack`, reportée de la transaction précédente car l'ACK est postérieur au log et à `set_verdict`) et `log_write_us` (dernier `libc.write` de journal terminé, cf. `log.set_timing`). Détail et avertissement : [doc/CONFIG.md](../doc/CONFIG.md#2-section-runtime).
@@ -145,7 +145,15 @@ Défini dans `src/ipc.moon` (format **texte** A4, `IPC_VERSION = "v1"`, une lign
 **Table `pending` (appariement).** Clé : `txid:ip_client:port_client:ip_résolveur`
 (`make_key`). `set_pending` alimente l'entrée à chaque message drainé ;
 `get_pending_entry` la lit (avec purge à l'expiration de `pending_ttl`) et
-`consume` la supprime (one-shot). Sur **collision de clé**, l'entrée et le
+`consume` la supprime (one-shot). La table est **bornée** par `ipc.pending_max`
+(défaut 20 000 entrées par worker réponses, ≈ 0,84 Ko/entrée mesuré) : au-delà,
+l'entrée à l'activité la plus ancienne est évincée en O(1) (liste doublement
+chaînée, sans tri), `pending_stats` expose `size`/`evicted`, et un `WARN`
+rate-limité `pending_evicted` est émis (clé = action, 10 s). Une réponse dont
+la question a été évincée suit le chemin d'une question expirée :
+`get_pending_entry` renvoie nil, la réponse est jetée comme orpheline
+(`NF_DROP`, `response_orphan_dropped`) — aucun comportement nouveau.
+Sur **collision de clé**, l'entrée et le
 message sont comparés champ à champ (`refused`, `rule_id`, `reason`,
 `timeout`, `modifiers`, `response_rule_ids`). Cas identique (retransmission UDP
 dominante) : **first-wins** (`overwrite_pending`), seul `expire` est rafraîchi
@@ -184,7 +192,7 @@ l'appariement du fait des fan-outs ci-dessus.
 
 | État | Où | Multi-worker |
 |------|----|--------------|
-| `pending` (appariement) | `ipc.moon:310-543`, privé au processus | **fan-out** : chaque worker reçoit toutes les transactions → correct |
+| `pending` (appariement) | `src/ipc.moon` (`set_pending` / `get_pending_entry` / `consume` / `purge_pending`), privé au processus | **fan-out** : chaque worker reçoit toutes les transactions → correct |
 | `mac_clients` / `ip_to_mac` (MAC du client, cross-family) | `worker_responses.moon:239-242` | alimentés par le même `pending` → complets dans chaque worker |
 | `tcp_state` (réassemblage DNS/TCP) | `worker_responses.moon:175` | hachage par flux → tous les segments d'un flux au même worker |
 | `deferred` (verdicts différés du lot) | `worker_responses.moon:395` | par lot, donc par processus → correct |

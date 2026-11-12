@@ -2847,3 +2847,52 @@ coupée en deux écritures, ligne invalide), `tests/unit/nft_dns_queues_spec.moo
 make test"` : **2833 succès / 0 échec / 0 erreur** (unitaires), `check_globals`
 OK, tests JS 12/12. `make test-e2e` : **94 passed, 0 failed** (lancé sans
 préparation préalable ; homelab déjà provisionné).
+
+### Borne de la table `pending` (branche d-pending)
+
+**Constat.** `pending` (`src/ipc.moon`) n'avait aucune borne de taille. Cycle de
+vie : création par `set_pending` à chaque message IPC drainé (`src/ipc.moon:544`),
+consommation one-shot par `consume` à la première réponse appariée
+(`src/ipc.moon:625`), purge paresseuse en lecture (`is_pending` /
+`get_pending_entry`) et purge active `purge_pending` (`src/ipc.moon:635`) toutes
+les 1000 paquets (`src/worker_responses.moon:1046-1053`), dès que
+`now > expire`, avec `expire = now + pending_ttl` (5 s). Depuis d-multi, chaque
+question est écrite dans **tous** les workers réponses
+(`ipc.write_with_retry_all`, `src/ipc.moon:141-147`) : la table existe en N
+copies. Sous une rafale sans réponse (résolveur muet, flood client), elle
+grossissait donc sans limite.
+
+**Taille mémoire mesurée.** `collectgarbage "count"` avant/après insertion de
+10 000 entrées (`nix develop`, `lua/ipc.lua`, `tmp/measure_pending.lua`) :
+8 237 Ko pour 10 000 entrées, soit **≈ 0,84 Ko/entrée** (entrée + nœud de liste
++ clé). À 20 000 entrées : ≈ 16 Mo par worker réponses.
+
+**Correctif.** `ipc.pending_max` (`src/config.moon:269`, défaut **20 000**,
+valeur absente/invalide → défaut ; commentaire de justification dans
+`src/config.moon:266-269`). Éviction des entrées à l'activité la plus ancienne
+par liste doublement chaînée (`src/ipc.moon:323-331` pour l'état,
+`src/ipc.moon:429-495` pour les opérations), donc O(1) par éviction sans tri ;
+insertion en queue, `consume`/purge/expiration démaillent le nœud (aucun
+emplacement fantôme accumulé sous la borne), une retransmission rafraîchissant
+`expire` repasse en queue. Compteur d'évictions exposé par `pending_stats`
+(`src/ipc.moon:642-644`). WARN rate-limité `pending_evicted` (champs `evicted`,
+`entries`, `pending_max` ; `RL_CONFIG` clé = action, fenêtre 10 s,
+`src/log.moon:208` ; champs classés volatils, `src/log.moon:137,141`).
+
+**Chemin d'une réponse évincée.** Identique à celui d'une question expirée :
+`get_pending_entry` renvoie `nil`, le retry d'appariement échoue, la réponse est
+jetée (`NF_DROP`) sous `response_orphan_dropped`
+(`src/worker_responses.moon:1104-1163`). Aucun nouveau comportement, aucun
+changement dans `worker_responses`.
+
+**Tests.** `tests/unit/ipc/ipc_spec.moon`, groupe « borne de la table pending » :
+taille bornée sous 3× la limite (150 entrées, limite 50) et compteur
+d'évictions ; ordre d'éviction (10 plus anciennes absentes, 50 récentes
+présentes) ; appariement intact d'une entrée récente (métadonnées) ; purge par
+âge inchangée (taille décrémentée, compteur d'évictions à 0) ; expiration lue
+décrémente la taille ; mesure mémoire `collectgarbage`.
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **2860 succès / 0 échec / 0 erreur / 0 pending** (`tmp/test.log`),
+`check_globals` OK, tests JS 12/12. `make test-e2e` non lancé (consigne « aucun
+ssh »).
