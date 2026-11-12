@@ -591,3 +591,101 @@ Le gain attendu reste celui du §10.1 ; le protocole de re-mesure est celui du
 §7.1 (paliers 300/400/500 `mixed` + `up` 500, repos vérifié), en contrôlant en
 plus `response_orphan_dropped`, `so_verdict_bus_invalid` et l'absence de
 `nft_ack_timeout`.
+
+## 12. Blocage définitif du multi-worker réponses — défaut et correctif
+
+Défaut observé en pré-prod sur `custos.lan` avec `nfqueue.responses: "14-15"`
+(branche `d-bench3`, mesures et journal dans `tmp/bench3_report.md` §3-§4). Le
+service est tombé **définitivement** en 4 minutes de trafic : 0 réponse DNS
+ensuite, à n'importe quel débit, jusqu'au redémarrage.
+
+### 12.1 Mécanisme (chaîne exacte)
+
+1. `main.moon` crée **un** tube `question_response<i>` par worker réponses
+   (`create_pipe`, 64 Kio demandés via `F_SETPIPE_SZ` ; `src/main.moon:128-148`)
+   et le worker questions écrit chaque transaction dans **tous**
+   (`ipc.write_with_retry_all`).
+2. Côté worker réponses, le tube n'était lu que par `handle_response`
+   (`drain_pipe`, `src/worker_responses.moon:1013-1018`), donc **seulement quand
+   un paquet arrivait sur SA file**. Le fd du tube n'était pas surveillé par le
+   `poll` de `nfq_loop` : `extra_rfds` ne contenait que le bus de verdicts du
+   second avis (`src/worker_responses.moon:1390-1393`).
+3. Le hachage NFQUEUE répartit par **couple d'adresses** (`§11.1`) : avec un seul
+   client, tous les paquets tombent dans une seule file de la plage (mesuré :
+   file 15 pour les réponses, file 14 inactive). Le tube du worker inactif
+   n'était donc jamais drainé et ses 64 Kio se remplissaient (~200 o/message).
+4. `write_with_retry_all` renvoyait `false` dès qu'**un** destinataire échouait
+   (EAGAIN, 5 × 20 ms de `nanosleep` par question, `src/ipc.moon:110-147`) et
+   `worker_questions` traitait cet échec comme définitif : `return NF_DROP`
+   (`src/worker_questions.moon:449-464`).
+5. Conséquence en boucle fermée : la question n'atteint plus le résolveur →
+   aucune réponse → le worker qui traitait les réponses ne reçoit plus de paquet
+   → **son** tube n'est plus drainé → l'échec devient permanent. Observé :
+   `questions_ipc_write_failed_exhausted errno=11` en boucle, débit du worker
+   questions effondré à ~10 q/s (`nanosleep`), `user_dropped` +8 553 sur la file 1.
+
+Portée : le défaut est **propre au multi-worker**. Il se déclenche dès qu'une
+file de la plage reste inactive assez longtemps pour remplir 64 Kio — cas
+systématique avec un seul client, cas réel dès qu'un déséquilibre dure quelques
+centaines de requêtes.
+
+### 12.2 Correctif (deux volets)
+
+**Volet 1 — le tube est drainé même sans paquet**
+(`src/worker_responses.moon`, `run`) : le fd `pipe_rfd` est ajouté à
+`extra_rfds` (avec `so_bus_rfd` s'il existe) et `on_extra_ready` appelle le même
+`drain_pipe` que `handle_response`, avec le même callback `drain_on_msg`
+(alimentation de `mac_clients`). `nfq_loop` réveille donc la boucle dès que le
+tube est lisible, sans attendre un paquet sur la file (mécanisme déjà utilisé
+par le bus de verdicts ; tests : `tests/unit/nfq_loop_enobufs_spec.moon`). Un
+`POLLHUP` (worker questions arrêté) retire le fd de la surveillance : pas de
+boucle à vide.
+
+L'état `pending` reste cohérent : la purge par expiration de `handle_response`
+(compteur mod 1000 paquets) ne tourne **jamais** sur un worker dont la file est
+inactive, d'où une purge supplémentaire tous les `DRAIN_PURGE_EVERY` (64)
+réveils du drain sans paquet — coût O(pending) borné, sinon les entrées
+absorbées ne partiraient qu'à l'éviction `ipc.pending_max`.
+
+Coût : `run_queue` passe désormais **toujours** par `poll()` (un appel par lot)
+au lieu d'un `read()` bloquant. Négligeable devant l'attente d'ACK nft (§3.1),
+mais c'est un changement de chemin pour la configuration à un seul worker.
+
+**Volet 2 — un destinataire en échec ne jette plus la question**
+(`src/ipc.moon`, `write_with_retry_all`) :
+
+- le message est considéré distribué dès qu'**au moins un** destinataire l'a
+  reçu (`true`) ; `false` seulement si **tous** ont échoué. Chaque worker
+  réponses possède la table `pending` complète, donc la question reste
+  appariable chez ceux qui l'ont reçue — c'est là que la réponse arrivera si sa
+  file y est affectée ;
+- un destinataire dont l'écriture a échoué est **marqué saturé** : les messages
+  suivants ne lui coûtent plus qu'**une** écriture non bloquante (aucun
+  `nanosleep`), jusqu'au premier succès qui efface la marque. Le retry complet
+  (5 × 20 ms) n'est donc payé qu'une fois par épisode de saturation, pas par
+  question — c'était le poste qui effondrait le débit du worker questions ;
+- WARN rate-limité **par destinataire** (`action=ipc_write_saturated`,
+  `ipc_fd`, `RL_CONFIG` fenêtre 60 s) à l'entrée en saturation, et
+  `INFO ipc_write_resumed` à la reprise.
+
+Choix de conserver le retry bloquant pour un destinataire non marqué : à un
+seul worker (cas historique), le tube plein est une contre-pression légitime
+(le worker réponses draine à chaque paquet) ; supprimer le retry y ferait perdre
+des questions sur un simple retard. La saturation durable, elle, ne se produit
+que si le destinataire ne draine plus du tout — cas où le retry ne peut rien
+sauver. Le compromis garde donc la contre-pression utile et supprime le coût
+pathologique.
+
+Limite assumée : les messages écrits **pendant** la saturation d'un
+destinataire sont perdus pour lui (une tentative non bloquante par message).
+Avec le volet 1, un worker sain ne peut plus rester saturé (il draine dès qu'il
+est réveillé) : la saturation ne persiste que si le worker est arrêté ou bloqué,
+auquel cas sa file ne traite de toute façon plus rien.
+
+Tests : `tests/unit/ipc/ipc_spec.moon` (tube plein → un seul `nanosleep` par
+épisode, livraison si un destinataire reçoit, `false` si tous échouent, effacement
+de l'état), `tests/unit/worker_questions_spec.moon` (un destinataire en échec
+permanent → `NF_ACCEPT`), `tests/unit/worker_responses_spec.moon` (tube drainé
+sans paquet nfq, purge bornée), `tests/unit/log_spec.moon` (rate-limiting par
+`ipc_fd`).
+
