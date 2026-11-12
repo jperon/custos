@@ -140,12 +140,20 @@ describe "filter.updater_io.process_custom_dir", ->
     assert.equals 12, file_size "#{OUT}/ads.bin"
     assert.is_nil file_size "#{SRC}/ads.bin"
 
-  it "ignore une liste vide sans la compter en erreur", ->
+  it "compile une source vide en .bin vide (liste vide valide)", ->
     write_txt "empty.txt", "# commentaire seulement\n\n"
+    n_ok, n_err = updater_io.process_custom_dir SRC, OUT, false
+    assert.equals 1, n_ok
+    assert.equals 0, n_err
+    -- Un .bin de 0 octet est une liste vide valide : le filtre ne logue plus
+    -- `filter_list_missing` au démarrage (au plus `filter_list_empty`).
+    assert.equals 0, file_size "#{OUT}/empty.bin"
+
+  it "ne crée aucun .bin pour une source absente (avertissement de liste manquante conservé)", ->
     n_ok, n_err = updater_io.process_custom_dir SRC, OUT, false
     assert.equals 0, n_ok
     assert.equals 0, n_err
-    assert.is_nil file_size "#{OUT}/empty.bin"
+    assert.is_nil file_size "#{OUT}/absente.bin"
 
   it "ne fait rien quand le dossier source est absent", ->
     n_ok, n_err = updater_io.process_custom_dir "tmp/updater_io_spec/absent", OUT, false

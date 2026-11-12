@@ -63,9 +63,6 @@ end
 local write_bin
 write_bin = function(domains, output_path, dry_run)
   local payload, n = bin48.pack_domains(domains)
-  if n == 0 then
-    return false, "aucun domaine valide", true
-  end
   if dry_run then
     return true, "dry-run : " .. tostring(n) .. " domaines → " .. tostring(output_path)
   end
@@ -83,6 +80,9 @@ write_bin = function(domains, output_path, dry_run)
   if ret ~= 0 then
     os.remove(tmp)
     return false, "rename échoué : " .. tostring(tmp) .. " → " .. tostring(output_path)
+  end
+  if n == 0 then
+    return true, "liste vide (0 domaine) → " .. tostring(output_path), false
   end
   return true, tostring(n) .. " domaines → " .. tostring(output_path) .. " (" .. tostring(#payload) .. " octets)"
 end
