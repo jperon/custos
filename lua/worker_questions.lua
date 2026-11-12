@@ -31,10 +31,10 @@ do
   local _obj_0 = require("ipc")
   write_msg, write_refused_msg = _obj_0.write_msg, _obj_0.write_refused_msg
 end
-local run_queue, NF_ACCEPT, NF_DROP
+local run_queue, NF_ACCEPT, NF_DROP, packet_age_ms
 do
   local _obj_0 = require("nfq_loop")
-  run_queue, NF_ACCEPT, NF_DROP = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP
+  run_queue, NF_ACCEPT, NF_DROP, packet_age_ms = _obj_0.run_queue, _obj_0.NF_ACCEPT, _obj_0.NF_DROP, _obj_0.packet_age_ms
 end
 local log_allow, log_block, log_warn, log_debug, log_info, level_enabled, set_action_prefix
 do
@@ -59,6 +59,7 @@ do
 end
 local dup_query = require("dup_query")
 local raw_send = require("raw_send")
+local netstamp = require("lib.netstamp")
 local so_cfg = config.second_opinion or { }
 local pipe_wfd = nil
 local mac_learn_wfd = nil
@@ -73,6 +74,9 @@ get_benchmark_ms = function()
   return tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 end
 local events_wfd = nil
+local shed_max_age_ms = nil
+local shed_total = 0
+local shed_ts_logged = false
 local captive_domain = nil
 local captive_ip4 = nil
 local captive_ip6 = nil
@@ -266,6 +270,30 @@ aggregate_decisions = function(decisions)
 end
 local handle_question
 handle_question = function(qh_ptr, nfad, pkt_id)
+  if shed_max_age_ms then
+    local age_ms = packet_age_ms(nfad)
+    if not (shed_ts_logged) then
+      shed_ts_logged = true
+      log_info(function()
+        return {
+          action = "question_shed_timestamp",
+          available = age_ms ~= nil
+        }
+      end)
+    end
+    if age_ms and age_ms > shed_max_age_ms then
+      shed_total = shed_total + 1
+      log_info(function()
+        return {
+          action = "question_shed",
+          age_ms = age_ms,
+          max_age_ms = shed_max_age_ms,
+          shed_total = shed_total
+        }
+      end)
+      return NF_DROP
+    end
+  end
   local payload_ptr = ffi.new("unsigned char*[1]")
   local payload_len = libnfq.nfq_get_payload(nfad, payload_ptr)
   if payload_len <= 0 then
@@ -522,6 +550,25 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   pipe_wfd = wfd
   mac_learn_wfd = learn_wfd
   events_wfd = ev_wfd
+  local age_cfg = tonumber((config.nfqueue or { }).max_age_ms)
+  if age_cfg == nil then
+    age_cfg = 1500
+  end
+  if age_cfg > 0 then
+    shed_max_age_ms = age_cfg
+  else
+    shed_max_age_ms = nil
+  end
+  shed_ts_logged = false
+  if shed_max_age_ms then
+    netstamp.enable()
+    log_info(function()
+      return {
+        action = "question_shed_armed",
+        max_age_ms = shed_max_age_ms
+      }
+    end)
+  end
   if filter_data then
     filter.rules = filter_data.rules
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
@@ -621,6 +668,10 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
     return metrics.write_now()
   end
 end
+local get_shed_total
+get_shed_total = function()
+  return shed_total
+end
 return {
   run = run,
   skip_ipv6_ext_hdrs = skip_ipv6_ext_hdrs,
@@ -630,5 +681,6 @@ return {
   MAX_RESPONSE_RULE_IDS = MAX_RESPONSE_RULE_IDS,
   handle_question = handle_question,
   write_event = write_event,
-  list_from_condition_reason = list_from_condition_reason
+  list_from_condition_reason = list_from_condition_reason,
+  get_shed_total = get_shed_total
 }

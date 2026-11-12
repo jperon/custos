@@ -508,6 +508,74 @@ describe("config.nfqueue.maxlen", function()
     end
   end)
 end)
+describe("config.nfqueue.max_age_ms", function()
+  after_each(function()
+    ffi.C.unsetenv("CUSTOS_CONFIG_PATH")
+    package.loaded["config"] = nil
+  end)
+  local capture_warns
+  capture_warns = function(fn)
+    local old_log = package.loaded["log"]
+    local calls = { }
+    package.loaded["log"] = {
+      log_warn = function(thunk)
+        calls[#calls + 1] = thunk()
+      end
+    }
+    local ok, err = pcall(fn)
+    package.loaded["log"] = old_log
+    assert.is_true(ok, err)
+    return calls
+  end
+  it("absent → défaut 1500 ms", function()
+    local cfg = reload(nil)
+    return assert.equals(1500, cfg.nfqueue.max_age_ms)
+  end)
+  it("0 (désactivé) conservé sans avertissement", function()
+    local path = "tmp/config_spec_nfq_max_age_zero.moon"
+    write_moon(path, [[return { nfqueue: { max_age_ms: 0 } }]])
+    local holder = { }
+    local calls = capture_warns(function()
+      holder.cfg = reload(path)
+    end)
+    os.remove(path)
+    assert.equals(0, holder.cfg.nfqueue.max_age_ms)
+    return assert.are.equal(0, #calls)
+  end)
+  it("entier positif conservé, y compris sous forme textuelle", function()
+    local path = "tmp/config_spec_nfq_max_age_str.moon"
+    write_moon(path, [[return { nfqueue: { max_age_ms: "750" } }]])
+    local cfg = reload(path)
+    os.remove(path)
+    return assert.equals(750, cfg.nfqueue.max_age_ms)
+  end)
+  return it("négatif, non entier ou non numérique → défaut + WARN nfqueue_max_age_invalid", function()
+    local _list_0 = {
+      "-1",
+      "12.5",
+      '"abc"'
+    }
+    for _index_0 = 1, #_list_0 do
+      local raw = _list_0[_index_0]
+      local path = "tmp/config_spec_nfq_max_age_bad.moon"
+      write_moon(path, "{ nfqueue: { max_age_ms: " .. tostring(raw) .. " } }")
+      local holder = { }
+      local calls = capture_warns(function()
+        holder.cfg = reload(path)
+      end)
+      os.remove(path)
+      assert.equals(1500, holder.cfg.nfqueue.max_age_ms, raw)
+      local found = false
+      for _index_1 = 1, #calls do
+        local c = calls[_index_1]
+        if c.action == "nfqueue_max_age_invalid" then
+          found = true
+        end
+      end
+      assert.is_true(found, "WARN nfqueue_max_age_invalid attendu pour " .. tostring(raw))
+    end
+  end)
+end)
 describe("config.nfqueue chevauchement", function()
   after_each(function()
     ffi.C.unsetenv("CUSTOS_CONFIG_PATH")

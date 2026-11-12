@@ -27,7 +27,7 @@ metrics_on = (config.metrics or {}).enabled != false
 bit                                      = require "bit"
 filter                   = require "filter"
 { :write_msg, :write_refused_msg } = require "ipc"
-{ :run_queue, :NF_ACCEPT, :NF_DROP } = require "nfq_loop"
+{ :run_queue, :NF_ACCEPT, :NF_DROP, :packet_age_ms } = require "nfq_loop"
 { :log_allow, :log_block, :log_warn, :log_debug, :log_info, :level_enabled, :set_action_prefix } = require "log"
 { :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
@@ -37,6 +37,7 @@ bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 dup_query = require "dup_query"
 raw_send = require "raw_send"
+netstamp = require "lib.netstamp"
 so_cfg = config.second_opinion or {}
 
 -- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
@@ -57,6 +58,18 @@ get_benchmark_ms = ->
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
 
 events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactivé)
+
+-- ── Délestage précoce sous saturation ─────────────────────────────
+-- Seuil (ms) lu depuis nfqueue.max_age_ms dans run() ; nil = désactivé.
+-- Une question dont l'horodatage noyau est plus vieux que le seuil est DROPPée
+-- avant tout traitement : le client a déjà dépassé son timeout DNS usuel
+-- (1-5 s), la traiter ne ferait que consommer du CPU au détriment des requêtes
+-- encore servables. Fail-closed : le verdict est NF_DROP, jamais NF_ACCEPT.
+shed_max_age_ms = nil
+shed_total = 0
+-- Log unique de disponibilité de l'horodatage noyau, émis au premier paquet
+-- traité quand le délestage est armé (voir question_shed_timestamp).
+shed_ts_logged = false
 
 -- ── Vol de question DNS pour le portail captif ───────────────────
 -- Initialisés dans run() depuis filter.get_auth_cfg().
@@ -238,6 +251,31 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
   -- Pas d'export de métriques ici : run_queue appelle on_idle (flush_if_due)
   -- avant chaque lecture, donc une fois par paquet au minimum, sans lire
   -- l'horloge dans ce callback.
+  -- ── Délestage précoce ─────────────────────────────────────────
+  -- Âge noyau > nfqueue.max_age_ms : le paquet a attendu dans la file plus que
+  -- le timeout DNS du client. DROP immédiat AVANT la copie du payload, le
+  -- parse, la décision de filtre et l'écriture IPC (ni duplication second
+  -- avis). Seul le chemin question est concerné : la file `questions` ne
+  -- sélectionne que `th dport 53` (src/nft_rules.moon:118-121), et les réponses
+  -- ne sont jamais délestées sur l'âge (worker_responses).
+  if shed_max_age_ms
+    age_ms = packet_age_ms nfad
+    -- Observabilité unique : le premier paquet révèle si l'horodatage noyau
+    -- est réellement joint (NFQA_TIMESTAMP). Sans lui, le délestage est
+    -- inerte même si le seuil est armé ; aucun log par paquet ensuite.
+    unless shed_ts_logged
+      shed_ts_logged = true
+      log_info -> { action: "question_shed_timestamp", available: age_ms != nil }
+    if age_ms and age_ms > shed_max_age_ms
+      shed_total += 1
+      log_info -> {
+        action:      "question_shed"
+        age_ms:      age_ms
+        max_age_ms:  shed_max_age_ms
+        shed_total:  shed_total
+      }
+      return NF_DROP
+
   -- ── Payload brut ─────────────────────────────────────────────
   payload_ptr = ffi.new "unsigned char*[1]"
   payload_len = libnfq.nfq_get_payload nfad, payload_ptr
@@ -499,6 +537,18 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   pipe_wfd      = wfd
   mac_learn_wfd = learn_wfd
   events_wfd    = ev_wfd
+  -- Seuil de délestage précoce (nfqueue.max_age_ms). 0 = désactivé ; absent =
+  -- défaut prudent 1500 ms (mi-distance des timeouts DNS usuels de 1-5 s).
+  age_cfg = tonumber (config.nfqueue or {}).max_age_ms
+  age_cfg = 1500 if age_cfg == nil
+  shed_max_age_ms = if age_cfg > 0 then age_cfg else nil
+  shed_ts_logged = false
+  if shed_max_age_ms
+    -- Active netstamp_needed_key (socket SO_TIMESTAMP conservé, jamais fermé)
+    -- pour que le noyau joigne NFQA_TIMESTAMP aux paquets de la file. Un
+    -- échec est journalisé en WARN mais n'empêche pas le worker de démarrer.
+    netstamp.enable!
+    log_info -> { action: "question_shed_armed", max_age_ms: shed_max_age_ms }
 
   -- Initialize filter with data passed from main.moon
   if filter_data
@@ -563,7 +613,12 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   -- Dernier instantané avant sortie (erreur de file, signal) : best-effort.
   metrics.write_now! if metrics_on
 
+--- Compteur de questions délestées depuis le démarrage du worker (tests,
+-- observabilité). @treturn number
+get_shed_total = -> shed_total
+
 { :run,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS,
-  :handle_question, :write_event, :list_from_condition_reason }
+  :handle_question, :write_event, :list_from_condition_reason,
+  :get_shed_total }

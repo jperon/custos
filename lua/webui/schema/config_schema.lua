@@ -92,6 +92,12 @@ return {
       label = "Longueur file noyau (paquets)",
       hint = "0 = auto (4096 ; 1024 en RAM faible)",
       default = 0
+    },
+    max_age_ms = {
+      type = "integer",
+      label = "Délestage des questions périmées (ms)",
+      hint = "0 = désactivé ; une question plus vieille est jetée sans analyse (nécessite l'horodatage noyau)",
+      default = 1500
     }
   },
   dns = {

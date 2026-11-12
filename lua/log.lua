@@ -207,6 +207,7 @@ local RL_IDENTITY_KEYS = {
   "src",
   "src_ip",
   "ssl_err",
+  "stage",
   "status",
   "target",
   "tlla",
@@ -229,6 +230,7 @@ local RL_VOLATILE_KEYS = {
   "ack_workers",
   "acks",
   "addrlen",
+  "age_ms",
   "age_h",
   "ancount",
   "answers",
@@ -278,6 +280,7 @@ local RL_VOLATILE_KEYS = {
   "log_write_us",
   "match_ms",
   "max_age_hours",
+  "max_age_ms",
   "max_attempts",
   "min_free_pct",
   "days_left",
@@ -312,6 +315,7 @@ local RL_VOLATILE_KEYS = {
   "sans_count",
   "sent",
   "seq",
+  "shed_total",
   "size",
   "skipped",
   "sock",
@@ -449,6 +453,10 @@ local RL_CONFIG = {
     window = 30
   },
   response_orphan_dropped = {
+    keys = { },
+    window = 10
+  },
+  question_shed = {
     keys = { },
     window = 10
   },

@@ -340,6 +340,7 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
 | `rcvbuf` | integer | auto (4 Mio, 512 Kio en RAM faible) | Taille du tampon de réception netlink de **chaque** socket NFQUEUE, en octets (voir note). |
 | `maxlen` | integer | auto (4096, 1024 en RAM faible) | Longueur de la file **noyau** de chaque NFQUEUE, en paquets (voir note). |
+| `max_age_ms` | integer | `1500` | Délestage précoce : une **question** plus vieille que ce seuil dans la file noyau est jetée sans analyse (voir note ; nécessite l'horodatage noyau, activé automatiquement). `0` = désactivé. |
 
 > **Tampon de réception netlink (`nfqueue.rcvbuf`).** libnetfilter_queue crée
 > son socket netlink sans `setsockopt(SO_RCVBUF)` : le défaut noyau
@@ -382,6 +383,40 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 > par défaut. Une valeur invalide (négative, non entière) est écartée au
 > chargement de la configuration avec le WARN `nfqueue_maxlen_invalid` (le
 > profil s'applique).
+
+> **Délestage précoce des questions (`nfqueue.max_age_ms`).** Au-delà de
+> ~350 q/s `mixed`, la file des réponses atteint plusieurs milliers de paquets et
+> le délai d'appariement dépasse `ipc.pending_ttl` : des réponses sont jetées en
+> `response_orphan_dropped` **après** avoir consommé du CPU, alors que les
+> clients ont abandonné depuis longtemps (`docs/agents/perf.md` §17.6/§17.9).
+> Le worker questions mesure donc l'âge de chaque paquet d'après l'horodatage
+> **noyau** (`NFQA_TIMESTAMP`, libnetfilter_queue `nfq_get_timestamp`, même
+> horloge `CLOCK_REALTIME`) et, si l'âge dépasse `max_age_ms` (**1500** par
+> défaut, `0` = désactivé), pose un verdict **`NF_DROP` immédiat** : ni copie du
+> payload, ni parse, ni décision de filtre, ni écriture IPC, ni second avis.
+> Le log INFO `question_shed` (champs `age_ms`, `max_age_ms`, `shed_total`) est
+> rate-limité (une ligne / 10 s, occurrences dans `suppressed=N`). Choix
+> fail-closed : une question jetée n'est **jamais** acceptée. Seul le chemin
+> questions est concerné ; une réponse n'est jamais jetée sur l'âge (si son
+> entrée `pending` existe, elle est servable). Valeur invalide (négative, non
+> entière, non numérique) : WARN `nfqueue_max_age_invalid` et retour au défaut.
+> **Disponibilité de l'horodatage** : le noyau ne joint `NFQA_TIMESTAMP` que
+> s'il horodate les paquets à la réception (`skb->tstamp`, static key
+> `netstamp_needed_key`, activée par un socket `SO_TIMESTAMP`). Pour que le
+> délestage ne soit pas silencieusement inerte, le worker questions ouvre donc
+> **automatiquement** au démarrage (quand `max_age_ms > 0`) un socket UDP
+> `SO_TIMESTAMP`, sans `bind` ni trafic, conservé jusqu'à la fin du processus :
+> il maintient `netstamp_needed_key` active pour tout le système. Un échec
+> d'ouverture ou de `setsockopt` produit le WARN `netstamp_enable_failed`
+> (champs `stage`, `errno`) mais n'est **pas fatal** : le worker démarre et le
+> délestage reste simplement inactif. Les constantes sont dans
+> `src/ffi_defs.moon` ; sur MIPS (`SOL_SOCKET` = `0xffff`) le module essaie
+> aussi ce niveau, et `SO_TIMESTAMP_NEW` (63) quand `time_t` est 64 bits (musl
+> d'OpenWrt). Le worker journalise `question_shed_armed` au démarrage quand le
+> seuil est actif ; au **premier paquet** traité, un unique INFO
+> `question_shed_timestamp` (champ `available: true|false`) indique si
+> l'horodatage est réellement joint, donc si le délestage peut opérer. Aucun
+> log n'est émis par paquet ensuite.
 
 **Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
 les paquets par le noyau sur **un worker par file**. Deux modes selon le nombre
@@ -453,6 +488,7 @@ nfqueue: {
   doh_vlan:  "13"
   -- rcvbuf: 4194304  -- octets ; absent = auto (4 Mio, 512 Kio en RAM faible)
   -- maxlen: 4096     -- paquets ; absent = auto (4096, 1024 en RAM faible)
+  -- max_age_ms: 1500 -- ms ; question plus vieille = DROP sans analyse (0 = off)
 }
 ```
 

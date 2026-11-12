@@ -417,6 +417,55 @@ describe "config.nfqueue.maxlen", ->
         found = true if c.action == "nfqueue_maxlen_invalid"
       assert.is_true found, "WARN nfqueue_maxlen_invalid attendu pour #{raw}"
 
+describe "config.nfqueue.max_age_ms", ->
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  capture_warns = (fn) ->
+    old_log = package.loaded["log"]
+    calls = {}
+    package.loaded["log"] = {
+      log_warn: (thunk) -> calls[#calls + 1] = thunk!
+    }
+    ok, err = pcall fn
+    package.loaded["log"] = old_log
+    assert.is_true ok, err
+    calls
+
+  it "absent → défaut 1500 ms", ->
+    cfg = reload nil
+    assert.equals 1500, cfg.nfqueue.max_age_ms
+
+  it "0 (désactivé) conservé sans avertissement", ->
+    path = "tmp/config_spec_nfq_max_age_zero.moon"
+    write_moon path, [[return { nfqueue: { max_age_ms: 0 } }]]
+    holder = {}
+    calls = capture_warns -> holder.cfg = reload path
+    os.remove path
+    assert.equals 0, holder.cfg.nfqueue.max_age_ms
+    assert.are.equal 0, #calls
+
+  it "entier positif conservé, y compris sous forme textuelle", ->
+    path = "tmp/config_spec_nfq_max_age_str.moon"
+    write_moon path, [[return { nfqueue: { max_age_ms: "750" } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 750, cfg.nfqueue.max_age_ms
+
+  it "négatif, non entier ou non numérique → défaut + WARN nfqueue_max_age_invalid", ->
+    for raw in *{ "-1", "12.5", '"abc"' }
+      path = "tmp/config_spec_nfq_max_age_bad.moon"
+      write_moon path, "{ nfqueue: { max_age_ms: #{raw} } }"
+      holder = {}
+      calls = capture_warns -> holder.cfg = reload path
+      os.remove path
+      assert.equals 1500, holder.cfg.nfqueue.max_age_ms, raw
+      found = false
+      for c in *calls
+        found = true if c.action == "nfqueue_max_age_invalid"
+      assert.is_true found, "WARN nfqueue_max_age_invalid attendu pour #{raw}"
+
 describe "config.nfqueue chevauchement", ->
   after_each ->
     ffi.C.unsetenv "CUSTOS_CONFIG_PATH"

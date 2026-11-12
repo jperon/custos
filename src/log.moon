@@ -123,13 +123,13 @@ RL_IDENTITY_KEYS = {
   "resolver", "resolver_ip", "resolvers", "resolution", "response"
   "ret", "retry_budget_skipped", "rl_shared", "role", "rule", "rule_id", "rule_kept", "rule_new", "rules"
   "section", "selected", "selected_mac", "sessions_file", "sip_method", "sip_status", "slots", "sni", "source"
-  "src", "src_ip", "ssl_err", "status", "target", "tlla", "transient"
+  "src", "src_ip", "ssl_err", "stage", "status", "target", "tlla", "transient"
   "type", "upstream_ip", "upstream_port", "url", "user", "username"
   "verdict", "verify_tls", "version", "vlan", "worker", "worker_idx"
 }
 
 RL_VOLATILE_KEYS = {
-  "ack_wait_us", "ack_workers", "acks", "addrlen", "age_h", "ancount", "answers"
+  "ack_wait_us", "ack_workers", "acks", "addrlen", "age_ms", "age_h", "ancount", "answers"
   "attempt", "attempts", "avail", "body_bytes", "bytes", "cert_size"
   "client_fd", "client_port", "client_timeout", "conditions_compiled", "conditions_worker_only"
   "configured_rules", "corr"
@@ -137,12 +137,12 @@ RL_VOLATILE_KEYS = {
   "effective_rules", "entries", "evicted", "events_rfd", "events_wfd", "expires_in_s"
   "fd", "frames", "free_pct", "grace", "groups", "hour", "ignored"
   "ipc_fd", "ipc_retry_attempts", "ipc_retry_wait_ms", "key_size", "learn_rfd", "learn_wfd"
-  "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_attempts", "min_free_pct"
+  "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_age_ms", "max_attempts", "min_free_pct"
   "days_left", "msg", "need", "new_size", "not_after", "parent_pid", "parse_ms", "payload_len", "payload_ms", "pending_max"
   "pid", "pkt_id", "port_src", "pos", "q_to_response_ms", "query_bytes"
   "question_proc_ms", "question_response_rfd"
   "question_response_wfd", "question_response_workers", "raw", "removed", "removed_count", "resp_bytes", "response_entry_ms"
-  "retry_after", "rfd", "revents", "rv", "sans_count", "sent", "seq", "size"
+  "retry_after", "rfd", "revents", "rv", "sans_count", "sent", "seq", "shed_total", "size"
   "skipped"
   "sock", "sockets", "sport", "src_port", "timeout"
   "timeout_ms", "total", "total_rules", "ts", "ttl", "ttl_s"
@@ -204,6 +204,10 @@ RL_CONFIG = {
   -- complète puis sans le préfixe du worker (`response_`, `questions_`…) : ces
   -- entrées s'appliquent donc aussi aux actions préfixées.
   response_orphan_dropped:          { keys: {}, window: 10 }
+  -- Délestage précoce des questions déjà périmées (nfqueue.max_age_ms) : même
+  -- agrégation par action seule, occurrences dans `suppressed=N`. Une rafale
+  -- de plusieurs centaines de jets par seconde ne coûte qu'une ligne / 10 s.
+  question_shed:                    { keys: {}, window: 10 }
   ipc_pending_overwrite:            { keys: {}, window: 10 }
   ipc_pending_overwrite_divergent:  { keys: {}, window: 10 }
   pending_evicted:                  { keys: {}, window: 10 }

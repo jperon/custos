@@ -23,6 +23,34 @@ local ENOBUFS = 105
 local READ_BUF_SIZE = 65536
 local MAX_BATCH_PKTS = 64
 local VERDICT_DONE = -1
+local CLOCK_REALTIME = 0
+local _ts_ok, _ts_fn = pcall(function()
+  return libnfq.nfq_get_timestamp
+end)
+local have_packet_timestamp = _ts_ok and _ts_fn ~= nil
+local _age_ts = nil
+local _age_tv = nil
+local realtime_ms
+realtime_ms = function()
+  libc.clock_gettime(CLOCK_REALTIME, _age_ts)
+  return tonumber(_age_ts[0].tv_sec) * 1000 + math.floor(tonumber(_age_ts[0].tv_nsec) / 1000000)
+end
+local packet_age_ms
+packet_age_ms = function(nfad)
+  if not (nfad and have_packet_timestamp) then
+    return nil
+  end
+  if not (_age_ts) then
+    _age_ts = ffi.new("timespec_t[1]")
+    _age_tv = ffi.new("struct timeval[1]")
+  end
+  if libnfq.nfq_get_timestamp(nfad, _age_tv) ~= 0 then
+    return nil
+  end
+  local pkt_ms = tonumber(_age_tv[0].tv_sec) * 1000 + math.floor(tonumber(_age_tv[0].tv_usec) / 1000)
+  local age = realtime_ms() - pkt_ms
+  return age < 0 and 0 or age
+end
 local run_queue
 run_queue = function(queue_num, callback, opts)
   if opts == nil then
@@ -356,5 +384,7 @@ return {
   NF_DROP = NF_DROP,
   VERDICT_DONE = VERDICT_DONE,
   set_verdict_marked = set_verdict_marked,
-  MAX_BATCH_PKTS = MAX_BATCH_PKTS
+  MAX_BATCH_PKTS = MAX_BATCH_PKTS,
+  packet_age_ms = packet_age_ms,
+  have_packet_timestamp = have_packet_timestamp
 }

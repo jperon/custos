@@ -3917,3 +3917,72 @@ partage exact entre réponses orphelines et réponses arrivées après la fenêt
 non instrumenté ; une seule source (servus), pas d'IPv6 temporaire ; `perf`
 absent de la cible ; reproductibilité dépendante du tirage des ports (8 ports :
 25/75 et 50/50 selon le run ; 128 ports : 48-52 %).
+
+### Délestage précoce des questions périmées (branche `d-shed`)
+
+**Constat** : au-delà de ~350 q/s `mixed`, la file réponses atteint
+2 000-4 000 paquets, `response_entry_ms` p99 dépasse `ipc.pending_ttl` (5 s) et
+les réponses sont jetées en `response_orphan_dropped` **après** un traitement
+complet, alors que le client a déjà dépassé son timeout DNS (`perf.md`
+§17.6/§17.9).
+
+**Correctif** :
+
+- `src/nfq_loop.moon` : `packet_age_ms(nfad)` lit l'horodatage noyau du paquet
+  (`NFQA_TIMESTAMP` via `nfq_get_timestamp`) et le compare à `CLOCK_REALTIME`
+  (même base que `ktime_get_real`) ; `nil` si l'attribut est absent. Symbole
+  résolu à la construction (`have_packet_timestamp`) pour qu'une
+  libnetfilter_queue ancienne ne tue pas le worker.
+- `src/ffi_defs.moon` : déclaration `nfq_get_timestamp(nfq_data*, struct
+  timeval*)`, plus les constantes `SO_TIMESTAMP` (29), `SO_TIMESTAMP_NEW` (63),
+  `SOL_SOCKET` (1) et `SOL_SOCKET_MIPS` (`0xffff`).
+- `src/lib/netstamp.moon` (nouveau) : au démarrage du worker questions, quand
+  `max_age_ms > 0`, ouvre un socket UDP `SO_TIMESTAMP` sans bind ni trafic,
+  conservé jusqu'à la fin du processus : il active `netstamp_needed_key` pour
+  tout le système, sans quoi `NFQA_TIMESTAMP` n'est jamais joint. Le module
+  essaie `SOL_SOCKET` générique puis MIPS, et `SO_TIMESTAMP` puis
+  `SO_TIMESTAMP_NEW` (32 bits avec `time_t` 64 bits). Échec → WARN
+  `netstamp_enable_failed` (`stage`, `errno`), non fatal.
+- `src/worker_questions.moon` : avant toute analyse, si
+  `age_ms > nfqueue.max_age_ms`, verdict **`NF_DROP`** immédiat (jamais ACCEPT),
+  compteur `shed_total`, log INFO rate-limité `question_shed` (`age_ms`,
+  `max_age_ms`, `shed_total`). Aucune écriture IPC, donc aucune entrée
+  `pending` et aucun second avis pour ces paquets. Un log INFO **unique**
+  `question_shed_timestamp` (`available: true|false`) est émis au premier
+  paquet traité pour vérifier que l'horodatage — donc le délestage — est
+  réellement opérationnel ; aucun log par paquet ensuite.
+- `src/config.moon` : nouvelle clé `nfqueue.max_age_ms`, défaut **1500 ms**
+  (`0` = désactivé), même valeur en RAM faible ; valeur invalide écartée avec
+  `nfqueue_max_age_invalid` et retour au défaut.
+- `src/worker_responses.moon` : une réponse n'est **jamais** jetée sur l'âge ;
+  seul le retry d'appariement (`5 × 20 ms`, budget 100 ms/s) est sauté au-delà
+  de `pending_ttl` (`retry_worthwhile`) — une réponse plus vieille que la TTL
+  ne peut plus être appariée, le token IPC de la question étant écrit avant
+  l'envoi en amont.
+- `src/log.moon` : `question_shed` agrégé par action (fenêtre 10 s) ; champs
+  `age_ms`, `max_age_ms`, `shed_total` classés volatils.
+
+**Vérification de l'horodatage** : en-têtes et source Linux v6.12
+(`nfqnl_build_packet_message`, `skb_tstamp_cond`) : `NFQA_TIMESTAMP` n'est
+émis que si `netstamp_needed_key` est active (socket `SO_TIMESTAMP`), et il
+n'existe pas de flag de configuration dédié. Le socket n'est donc plus laissé
+au hasard : `lib.netstamp` l'ouvre lui-même au démarrage et le garde ouvert.
+Sonde locale (noyau 6.18.60, netns non privilégié, `tmp/tsprobe.lua` jetable) :
+attribut présent, âge mesuré 1 200 ms pour un retard de lecture de 1 200 ms ⇒
+conversion et horloge justes. Sans attribut, `packet_age_ms` rend `nil` : le
+délestage est simplement inactif (chemin sûr), et le log
+`question_shed_timestamp` le signale (`available: false`).
+
+**Tests** : `tests/unit/worker_questions_spec.moon` (seuil strict, `0` =
+désactivé, âge `nil`, compteur, NF_DROP sans IPC/événement, socket
+`SO_TIMESTAMP` ouvert si `max_age_ms > 0` et pas sinon, repli MIPS, échecs
+`socket`/`setsockopt` non fatals, log `question_shed_timestamp` unique
+`available` vrai/faux), `tests/unit/nfq_loop_age_spec.moon` (conversion,
+attribut absent, symbole absent, horloge reculée), `tests/unit/config_spec.moon`
+(`config.nfqueue.max_age_ms`), `tests/unit/worker_responses_spec.moon`
+(`retry_worthwhile`). Suite complète : `make all && make check && make test`.
+
+**Non fait / douteux** : aucun palier de charge rejoué sur la cible ; le gain
+CPU réel n'est donc pas chiffré. L'horodatage est désormais activé
+automatiquement, et `question_shed_timestamp` dit s'il est effectivement
+disponible au premier paquet ; la mesure sur `custos.lan` reste à faire.

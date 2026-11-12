@@ -1929,3 +1929,65 @@ débordement de file réponses.
   conclusions de capacité reposent sur les deux séries et le contrôle 1 socket,
   pas sur un seul run.
 
+### 17.9 Délestage précoce des questions périmées (branche `d-shed`)
+
+§17.6 a montré que la perte au-delà de ~350 q/s `mixed` n'est plus un
+débordement de file : les réponses arrivent après expiration de leur entrée
+`pending` (`ipc.pending_ttl` = 5 s) et sont jetées en
+`response_orphan_dropped` après un traitement complet. Le correctif jette
+**plus tôt** les questions déjà périmées, pour rendre du CPU aux requêtes
+encore servables.
+
+- **Mesure de l'âge** : `src/nfq_loop.moon` expose `packet_age_ms(nfad)`, qui
+  lit l'horodatage **noyau** du paquet (`NFQA_TIMESTAMP`, via
+  `nfq_get_timestamp`, déclaré dans `src/ffi_defs.moon`) et le compare à
+  `CLOCK_REALTIME` (`ktime_get_real` côté noyau, même base). L'attribut est le
+  seul témoin du temps passé **dans la file noyau** : un horodatage pris à la
+  lecture userspace serait toujours ~0, puisque la lecture *est* le début du
+  traitement.
+- **Disponibilité noyau** (vérifiée dans les sources Linux v6.12, celui de la
+  cible) : `nfqnl_build_packet_message` n'ajoute `NFQA_TIMESTAMP` que si
+  `skb_tstamp_cond(entskb, false)` est non nul, pour les hooks
+  `<= NF_INET_FORWARD` ; `skb_tstamp_cond` ne renseigne l'horodatage que si
+  `netstamp_needed_key` est active (socket `SO_TIMESTAMP`). Il n'existe **pas**
+  de flag `NFQA_CFG_F_TIMESTAMP` dans les en-têtes 6.12/7.2 (seuls FAIL_OPEN,
+  CONNTRACK, GSO, UID_GID, SECCTX). Sans horodatage, `nfq_get_timestamp` rend
+  -1 et `packet_age_ms` rend `nil` : aucun délestage (chemin sûr). Sonde
+  locale (noyau 6.18.60, netns non privilégié, script jetable `tmp/tsprobe.lua`) :
+  `ts_rc=0`, âge mesuré **1 200 ms** après un retard de lecture imposé de
+  1 200 ms — le mécanisme et l'horloge sont donc justes.
+- **Activation automatique** (`src/lib/netstamp.moon`) : au démarrage du
+  worker questions, quand `max_age_ms > 0`, un socket UDP `SO_TIMESTAMP` est
+  ouvert sans `bind` ni trafic et conservé jusqu'à la fin du processus ; il
+  active `netstamp_needed_key` pour tout le système. Constantes dans
+  `src/ffi_defs.moon` : `SO_TIMESTAMP` = 29 (`asm-generic`, x86_64/arm),
+  `SO_TIMESTAMP_NEW` = 63 (32 bits avec `time_t` 64 bits, musl d'OpenWrt) ;
+  sur MIPS `SOL_SOCKET` = `0xffff` (au lieu de 1), essayé en repli. Un échec
+  (`socket` ou `setsockopt`) produit le WARN `netstamp_enable_failed` et n'est
+  **pas fatal**. Au premier paquet traité, un INFO unique
+  `question_shed_timestamp` (`available: true|false`) indique si
+  l'horodatage est réellement joint ; aucun log par paquet ensuite.
+- **Décision** : dans `src/worker_questions.moon`, avant la copie du payload,
+  `age_ms > nfqueue.max_age_ms` (**1 500 ms** par défaut, `0` = désactivé) →
+  `NF_DROP` immédiat, compteur `shed_total`, log INFO rate-limité
+  `question_shed` (une ligne / 10 s, `suppressed=N`). Aucun parse, aucune
+  décision de filtre, aucune écriture IPC, aucune duplication second avis.
+  La file `questions` ne sélectionne que `th dport 53`
+  (`src/nft_rules.moon:118-121`) : le paquet jeté est bien une question ; le
+  verdict est **DROP** (jamais ACCEPT), fail-closed conservé.
+- **Réponses** : jamais jetées sur l'âge. Le coût d'une orpheline était borné
+  par `ipc.match_retry` (5 × 20 ms, budget 100 ms/s par worker,
+  `src/worker_responses.moon:211-232`) ; ce sommeil ne peut plus apparier une
+  réponse plus vieille que `pending_ttl` (le token IPC de la question est écrit
+  avant que celle-ci ne parte en amont). `retry_worthwhile` saute donc le retry
+  au-delà de `pending_ttl` : coût d'une orpheline très vieille réduit au parse,
+  au lookup `pending` et au log rate-limité.
+- **Non mesuré** : aucun palier de charge n'a été rejoué sur la cible dans cette
+  branche (pas d'accès au homelab, consigne §17.8) ; le gain CPU attendu
+  (part des questions > 1,5 s × coût complet par question) reste à chiffrer.
+  L'horodatage noyau est désormais activé automatiquement par un socket
+  `SO_TIMESTAMP`, et le log `question_shed_timestamp` (au premier paquet) dit
+  s'il est réellement disponible ; la mesure de charge sur `custos.lan`, elle,
+  reste à faire.
+
+

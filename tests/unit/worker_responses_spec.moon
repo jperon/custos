@@ -414,6 +414,24 @@ describe "budget de retry d'appariement IPC", ->
       m = fresh_worker_responses!
       assert.equals 2, m.plan_retry_tries 0, 100000, 20, 2
 
+  describe "retry_worthwhile (fonction pure)", ->
+    it "reste utile tant que la réponse n'a pas dépassé pending_ttl", ->
+      m = fresh_worker_responses!
+      assert.is_true m.retry_worthwhile 0, 5
+      assert.is_true m.retry_worthwhile 4999, 5
+      assert.is_true m.retry_worthwhile 5000, 5
+
+    it "devient inutile au-delà de pending_ttl (entrée expirée)", ->
+      m = fresh_worker_responses!
+      assert.is_false m.retry_worthwhile 5001, 5
+      assert.is_false m.retry_worthwhile 60000, 5
+
+    it "reste utile quand l'âge ou la TTL sont inconnus", ->
+      m = fresh_worker_responses!
+      assert.is_true m.retry_worthwhile nil, 5
+      assert.is_true m.retry_worthwhile 60000, nil
+      assert.is_true m.retry_worthwhile 60000, 0
+
   describe "retry_pending_match borné", ->
     it "une rafale ne consomme qu'un budget par seconde puis saute le retry", ->
       m = load_with_match_retry { enabled: true, count: 5, sleep_ms: 20, budget_ms: 100 }
