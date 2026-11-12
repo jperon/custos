@@ -3468,3 +3468,66 @@ données brutes `tmp/perfaudit/results/`.
   coalescées ; `nfq_set_queue_maxlen` ; `jit.profile` avant optimisation CPU.
 - **Documentation** : `perf.md` §16 (nouvelle section datée). Aucune ligne
   ajoutée à `AGENTS.md`.
+
+### Lecture de la file réponses pendant l'attente d'ACK nft (branche d-ackread)
+
+Implémentation de la piste (2) de `perf.md` §16.5 (« drainer le netlink
+**pendant** `wait_ack` »), sans mesure de charge ni déploiement. Aucune ligne
+ajoutée à `AGENTS.md`.
+
+**Constat de départ (vérifié dans le code).** `flush_deferred`
+(`src/worker_responses.moon`) appelait `nft_queue.wait_ack` qui ne fait `poll`
+que sur le tube d'ACK ; le callback `on_wait` ne drainait que le tube question.
+Pendant 9-23 % du temps mesuré (`perf.md` §16.1), le socket netlink n'était donc
+pas lu, la file noyau grossissait (profondeur 210-350, `response_entry` p50
+337 ms).
+
+**Correctif.**
+
+- `src/nfq_loop.moon:183-206` : `run_queue` définit `read_packets(limit)` — la
+  lecture non bloquante du lot (poll 0 + read jusqu'à EAGAIN, déjà utilisée pour
+  le drain) — et la passe au hook `on_batch_end` (`:260`). Elle est bornée à
+  `MAX_BATCH_PKTS` (défaut, `:30`) et non réentrante : la garde `reading` fait
+  rendre 0 à un appel déclenché depuis un callback de paquet, donc
+  `nfq_handle_packet` n'est jamais rappelé depuis lui-même. L'ENOBUFS rencontré
+  pendant cette lecture est compté et logué comme dans la boucle principale. Le
+  drain du lot principal réutilise la même fonction (`:255`).
+- `src/worker_responses.moon:448-462` (`_flush_batch`) : le `on_wait` de
+  `wait_ack` draine le tube question puis appelle `read_packets` tant qu'il reste
+  du budget de lecture (au plus `MAX_BATCH_PKTS` paquets par attente).
+- `src/worker_responses.moon:477-497` (`flush_deferred`) : le lot courant est
+  **détaché** avant l'attente (`batch = deferred; deferred = {}`) ; les paquets
+  lus pendant l'attente s'accumulent donc dans un **lot suivant**, posé par un
+  second `_flush_batch` après **son propre** ACK (plus grand `seq` enfilé pendant
+  l'attente). `on_batch` (`:1432`) transmet la fonction fournie par `nfq_loop` ;
+  à la sortie de boucle, `on_batch_end()` est appelé sans argument et aucune
+  lecture n'a lieu.
+
+**Invariant de sécurité.** Aucun verdict ACCEPT d'une réponse injectée n'est
+posé avant l'ACK couvrant toutes ses insertions nft : un paquet lu pendant
+l'attente du lot N appartient au lot N+1 et son verdict attend le plus grand
+`seq` enfilé par N+1 (l'ACK est cumulatif par worker, `nft_queue.wait_ack`). Les
+verdicts immédiats existants (réponses refusées, `dnsonly` sans insertion) ne
+changent pas. Aucune lecture pendant la seconde attente : pas de récursion, les
+paquets restants sont lus par la boucle principale.
+
+**Bornes et comportement en timeout.** Budget de `wait_ack` inchangé (150 ms,
+`src/nft_queue.moon:11`) et comportement en timeout inchangé (verdicts posés,
+`nft_ack_timeout` logué) : en cas d'échec, le lot suivant est lui aussi posé et
+un second timeout est possible, soit au pire 300 ms, uniquement si `worker_nft`
+ne répond plus du tout.
+
+**Tests.** `tests/unit/nfq_loop_enobufs_spec.moon` : lecture pendant le hook,
+borne `MAX_BATCH_PKTS`, ENOBUFS, non-réentrance.
+`tests/unit/worker_responses_spec.moon` : ordre ACK-puis-verdict pour les deux
+lots, paquet lu pendant l'attente non verdicté avant l'ACK de son lot, timeout,
+borne du budget de lecture, sortie de boucle sans lecture.
+
+**Vérification.** `nix develop --command bash -c "make all && make check &&
+make test"` : **3 093 succès / 0 échec / 0 erreur** (`tmp/test.log`).
+`make test-e2e` non lancé (consigne : pas de déploiement).
+
+**Non fait.** Aucune mesure sur la cible : le gain attendu (recul de
+`response_entry_ms`, profondeur de file) reste à constater en rejouant les
+paliers 200/350 q/s authentifiés de `perf.md` §16.2.
+

@@ -1356,7 +1356,8 @@ brutes `tmp/perfaudit/results/`). Comparaison non authentifiée par référence 
   et `on_wait` ne draine **que** le tube question (`:455`) : **le socket netlink
   des réponses n'est pas lu** — mesuré **9-23 %** du temps des workers réponses
   (`ppoll(nfds=1)` vs `ppoll(nfds=3)` de la boucle principale, échantillonnage
-  20 Hz, `tmp/perfaudit/results/*_sys.txt`).
+  20 Hz, `tmp/perfaudit/results/*_sys.txt`). **Corrigé depuis** par la branche
+  `d-ackread` (§16.6).
 
 ### 16.2 Mesures (authentifié, 30 s chacun)
 
@@ -1429,3 +1430,43 @@ vide et `stack` non symbolisés (kallsyms absent) — remplacés par
 `chain_strip` non déterminable sans config ; le démontage de la file pendant
 les 10 dernières secondes du palier 350 (capacité +10 % à entrée constante)
 reste inexpliqué (échauffement JIT ou résolveur) faute d'instrumentation.
+
+### 16.6 Correctif du drain netlink pendant `wait_ack` (branche `d-ackread`)
+
+Implémentation de la piste (2) de §16.5, **sans mesure de charge** (pas de
+déploiement depuis cette branche).
+
+- **Ce qui change** : `nfq_loop.run_queue` fournit au hook `on_batch_end` une
+  lecture non bloquante bornée (`read_packets`, `src/nfq_loop.moon:183-206`),
+  non réentrante (garde `reading` : un appel depuis un callback de paquet rend 0
+  et ne lit rien). `worker_responses._flush_batch`
+  (`src/worker_responses.moon:448-462`) s'en sert dans le `on_wait` de
+  `wait_ack`, après le drain du tube question.
+- **Invariant préservé** : les paquets lus pendant l'attente sont traités
+  normalement (parse, appariement, enqueue nft, `settle`) mais leur verdict est
+  mémorisé dans un **lot suivant** (`flush_deferred`,
+  `src/worker_responses.moon:477-497`) ; ce lot est posé après **son propre**
+  ACK, c'est-à-dire le plus grand `seq` enfilé pendant l'attente, jamais après
+  l'ACK du lot courant. Les verdicts immédiats (refus, `dnsonly` sans insertion)
+  sont inchangés. En cas de timeout, comportement historique : verdicts posés,
+  `nft_ack_timeout` logué.
+- **Bornes** : au plus `MAX_BATCH_PKTS` (64, `src/nfq_loop.moon:30`) paquets lus
+  par attente, le budget de `wait_ack` reste de 150 ms
+  (`src/nft_queue.moon:11,217`) et aucune lecture n'a lieu pendant la seconde
+  attente (pas de récursion) : les paquets restants sont lus par la boucle
+  principale. Le coût de la lecture est proportionnel au seul retard de la file
+  (un `poll(0)` puis `EAGAIN` quand elle est vide) : à faible charge, la boucle
+  d'attente n'ajoute qu'un appel système négligeable par tour. L'ACK est
+  revérifié avant chaque rafale de lecture, donc une rafale retarde sa détection
+  d'un lot de travail au plus. Cas le plus défavorable théorique : deux timeouts
+  consécutifs (lot courant puis lot suivant), soit 300 ms, uniquement si
+  `worker_nft` ne répond plus du tout.
+- **Tests** : `tests/unit/nfq_loop_enobufs_spec.moon` (lecture pendant le hook,
+  borne du lot, ENOBUFS, non-réentrance) et
+  `tests/unit/worker_responses_spec.moon` (ordre ACK-puis-verdict pour les deux
+  lots, paquet lu pendant l'attente non verdicté avant l'ACK de son lot,
+  timeout, borne du budget).
+- **Reste à faire** : rejouer les paliers 200/350 q/s authentifiés de §16.2 et
+  surveiller `response_entry_ms` (attendu : recul de la profondeur de file et de
+  la latence d'entrée), `ack_wait_us` (inchangé), et l'absence de
+  `deferred_flush_error` / `nft_ack_timeout`.
