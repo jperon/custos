@@ -21,6 +21,10 @@ ENOBUFS = 105            -- file noyau pleine : paquets droppés, socket récup�
 -- Taille du buffer de lecture netlink (doit être > MTU + overhead netlink)
 READ_BUF_SIZE = 65536
 
+-- Taille maximale d'un lot drainé avant de poser les verdicts différés. Borne
+-- la latence ajoutée et la mémoire (un verdict différé retient son payload).
+MAX_BATCH_PKTS = 64
+
 -- Sentinel : le callback a déjà posé son propre verdict (ex: response avec payload patché)
 VERDICT_DONE = -1
 
@@ -29,10 +33,18 @@ VERDICT_DONE = -1
 -- Bloque jusqu'à la fermeture du fd netlink.
 -- @tparam number   queue_num Numéro de queue NFQUEUE (uint16)
 -- @tparam function callback  function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP | VERDICT_DONE
--- @tparam[opt] table opts    { idle_ms, on_idle } : si idle_ms > 0, la lecture
---                            passe par poll() avec ce timeout ; à chaque
---                            expiration (et avant chaque lecture) on_idle() est
---                            appelé. Sert au balayage du budget « second avis ».
+-- @tparam[opt] table opts    { idle_ms, on_idle, on_batch_end } : si idle_ms > 0,
+--                            la lecture passe par poll() avec ce timeout ; à
+--                            chaque expiration (et avant chaque lecture)
+--                            on_idle() est appelé (balayage du budget « second
+--                            avis »). on_batch_end() est appelé après le
+--                            traitement d'un lot de paquets : la lecture
+--                            bloquante, puis le drain non bloquant du socket
+--                            netlink (un read ne rend qu'un paquet) jusqu'à
+--                            MAX_BATCH_PKTS. C'est là que le worker réponses
+--                            pose les verdicts différés de son lot (cf.
+--                            worker_responses.flush_deferred) après un unique
+--                            ACK nft.
 -- @treturn nil
 run_queue = (queue_num, callback, opts=nil) ->
   log_info -> { action: "queue_open", queue: queue_num }
@@ -100,11 +112,22 @@ run_queue = (queue_num, callback, opts=nil) ->
   -- réponses parquées même sans nouveau trafic.
   idle_ms = opts and opts.idle_ms
   on_idle = opts and opts.on_idle
+  on_batch_end = opts and opts.on_batch_end
   pfd = nil
   if idle_ms and idle_ms > 0
     pfd = ffi.new "struct pollfd[1]"
     pfd[0].fd = fd
     pfd[0].events = 1   -- POLLIN
+  -- Drain du lot (verdicts différés) : un read() netlink ne rend QU'UN paquet
+  -- (un skb par paquet côté noyau). Sans ce drain non bloquant, « le lot » vaudrait
+  -- toujours un paquet et l'ACK nft resterait payé par réponse. On vide donc le
+  -- socket (poll 0 + read jusqu'à EAGAIN) après chaque lecture bloquante, borné
+  -- à MAX_BATCH_PKTS, puis on appelle on_batch_end une seule fois.
+  pfd_drain = nil
+  if on_batch_end
+    pfd_drain = ffi.new "struct pollfd[1]"
+    pfd_drain[0].fd = fd
+    pfd_drain[0].events = 1   -- POLLIN
 
   -- Compteur ENOBUFS : on logue la 1re occurrence puis périodiquement (avec le
   -- total) pour éviter le spam si la file déborde en continu.
@@ -128,6 +151,28 @@ run_queue = (queue_num, callback, opts=nil) ->
       if level_enabled "DEBUG"
         log_debug -> { action: "queue_handle_packet", queue: queue_num, rv: rv }
       libnfq.nfq_handle_packet h, buf, tonumber rv
+      if on_batch_end
+        -- Drain non bloquant du reste du lot (cf. pfd_drain ci-dessus).
+        drained = 1
+        while drained < MAX_BATCH_PKTS
+          pfd_drain[0].revents = 0
+          dr = libc.poll pfd_drain, 1, 0
+          break if dr <= 0
+          rv2 = libc.read fd, buf, READ_BUF_SIZE
+          if rv2 > 0
+            libnfq.nfq_handle_packet h, buf, tonumber rv2
+            drained += 1
+          else
+            if rv2 < 0
+              en2 = libc.__errno_location()[0]
+              if en2 == ENOBUFS
+                enobufs_total += 1
+                if enobufs_total == 1 or enobufs_total % 256 == 0
+                  log_warn -> { action: "queue_read_enobufs", queue: queue_num, total: enobufs_total }
+            break
+        -- Le lot est terminé : pose des verdicts différés (worker réponses)
+        -- après l'ACK unique des insertions nft de tous ces paquets.
+        on_batch_end!
     elseif rv == 0
       log_warn -> { action: "queue_read_eof", queue: queue_num }
       break   -- EOF inattendu
@@ -150,6 +195,9 @@ run_queue = (queue_num, callback, opts=nil) ->
       break   -- autre erreur → on sort
 
   log_info -> { action: "queue_closed", queue: queue_num }
+  -- Dernier lot éventuellement en attente (sortie sur EOF/erreur) : pose des
+  -- verdicts différés avant de détruire la queue, sinon ils seraient perdus.
+  on_batch_end! if on_batch_end
   libnfq.nfq_destroy_queue qh
   libnfq.nfq_close h
   c_callback\free!   -- libère le wrapper ffi.cast

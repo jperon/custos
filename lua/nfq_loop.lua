@@ -17,6 +17,7 @@ local NF_REPEAT = 3
 local EINTR = 4
 local ENOBUFS = 105
 local READ_BUF_SIZE = 65536
+local MAX_BATCH_PKTS = 64
 local VERDICT_DONE = -1
 local run_queue
 run_queue = function(queue_num, callback, opts)
@@ -119,11 +120,18 @@ run_queue = function(queue_num, callback, opts)
   end)
   local idle_ms = opts and opts.idle_ms
   local on_idle = opts and opts.on_idle
+  local on_batch_end = opts and opts.on_batch_end
   local pfd = nil
   if idle_ms and idle_ms > 0 then
     pfd = ffi.new("struct pollfd[1]")
     pfd[0].fd = fd
     pfd[0].events = 1
+  end
+  local pfd_drain = nil
+  if on_batch_end then
+    pfd_drain = ffi.new("struct pollfd[1]")
+    pfd_drain[0].fd = fd
+    pfd_drain[0].events = 1
   end
   local enobufs_total = 0
   while true do
@@ -173,6 +181,39 @@ run_queue = function(queue_num, callback, opts)
           end)
         end
         libnfq.nfq_handle_packet(h, buf, tonumber(rv))
+        if on_batch_end then
+          local drained = 1
+          while drained < MAX_BATCH_PKTS do
+            pfd_drain[0].revents = 0
+            local dr = libc.poll(pfd_drain, 1, 0)
+            if dr <= 0 then
+              break
+            end
+            local rv2 = libc.read(fd, buf, READ_BUF_SIZE)
+            if rv2 > 0 then
+              libnfq.nfq_handle_packet(h, buf, tonumber(rv2))
+              drained = drained + 1
+            else
+              if rv2 < 0 then
+                local en2 = libc.__errno_location()[0]
+                if en2 == ENOBUFS then
+                  enobufs_total = enobufs_total + 1
+                  if enobufs_total == 1 or enobufs_total % 256 == 0 then
+                    log_warn(function()
+                      return {
+                        action = "queue_read_enobufs",
+                        queue = queue_num,
+                        total = enobufs_total
+                      }
+                    end)
+                  end
+                end
+              end
+              break
+            end
+          end
+          on_batch_end()
+        end
       elseif rv == 0 then
         log_warn(function()
           return {
@@ -227,6 +268,9 @@ run_queue = function(queue_num, callback, opts)
       queue = queue_num
     }
   end)
+  if on_batch_end then
+    on_batch_end()
+  end
   libnfq.nfq_destroy_queue(qh)
   libnfq.nfq_close(h)
   return c_callback:free()

@@ -314,6 +314,84 @@ local drain_on_msg
 drain_on_msg = function(msg)
   return update_mac_clients(msg, drain_ts)
 end
+local deferred = { }
+local defer_deps = nil
+local verdict_deps
+verdict_deps = function()
+  return defer_deps or {
+    get_last_seq = get_last_seq,
+    wait_ack = measured_wait_ack,
+    set_verdict = set_verdict
+  }
+end
+local deferred_count
+deferred_count = function()
+  return #deferred
+end
+local _set_defer_deps
+_set_defer_deps = function(deps)
+  defer_deps = deps
+  return nil
+end
+local _reset_deferred
+_reset_deferred = function()
+  deferred = { }
+  return nil
+end
+local flush_deferred
+flush_deferred = function()
+  local n = #deferred
+  if n == 0 then
+    return 0
+  end
+  local deps = verdict_deps()
+  local ok, err = pcall(function()
+    local pending_seq = deps.get_last_seq()
+    if pending_seq then
+      deps.wait_ack(pending_seq, (deferred[n].corr or ""), (function()
+        return drain_pipe(pipe_rfd, now, drain_on_msg)
+      end))
+    end
+    for _index_0 = 1, #deferred do
+      local rec = deferred[_index_0]
+      deps.set_verdict(rec.qh_ptr, rec.pkt_id, rec.verdict, rec.payload)
+    end
+  end)
+  if not (ok) then
+    log_warn(function()
+      return {
+        action = "deferred_flush_error",
+        count = n,
+        err = tostring(err)
+      }
+    end)
+  end
+  deferred = { }
+  return n
+end
+local settle
+settle = function(ctx, verdict, payload, need_ack)
+  if ctx.defer then
+    deferred[#deferred + 1] = {
+      qh_ptr = ctx.qh_ptr,
+      pkt_id = ctx.pkt_id,
+      verdict = verdict,
+      payload = payload,
+      corr = ctx.ack_corr
+    }
+    return 
+  end
+  local deps = verdict_deps()
+  if need_ack and not ctx.dnsonly then
+    local pending_seq = deps.get_last_seq()
+    if pending_seq then
+      deps.wait_ack(pending_seq, ctx.ack_corr, (function()
+        return drain_pipe(pipe_rfd, now, drain_on_msg)
+      end))
+    end
+  end
+  return deps.set_verdict(ctx.qh_ptr, ctx.pkt_id, verdict, payload)
+end
 local sleep_ms
 sleep_ms = function(ms)
   if not (ms and ms > 0) then
@@ -496,10 +574,10 @@ finalize_a = function(ctx, override)
             }
           end)
         end
-        return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+        return settle(ctx, NF_ACCEPT, patched, false)
       end
     end
-    return set_verdict(qh_ptr, pkt_id, NF_DROP)
+    return settle(ctx, NF_DROP, nil, false)
   end
   if override and override.kind == "block" then
     write_block_event(ctx)
@@ -547,12 +625,6 @@ finalize_a = function(ctx, override)
           end
           if #redirect_answers > 0 then
             inject_answers(redirect_answers)
-            local pending_seq = get_last_seq()
-            if pending_seq then
-              measured_wait_ack(pending_seq, ack_corr, (function()
-                return drain_pipe(pipe_rfd, now, drain_on_msg)
-              end))
-            end
           end
           if level_enabled("DEBUG") then
             log_debug(function()
@@ -567,10 +639,10 @@ finalize_a = function(ctx, override)
               }
             end)
           end
-          return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
+          return settle(ctx, NF_ACCEPT, patched, (#redirect_answers > 0))
         end
       end
-      return set_verdict(qh_ptr, pkt_id, NF_DROP)
+      return settle(ctx, NF_DROP, nil, false)
     end
   end
   local response_hooks = (entry and entry.response_rule_ids and #entry.response_rule_ids > 0) and entry.response_rule_ids or nft_rule_id
@@ -695,7 +767,7 @@ finalize_a = function(ctx, override)
           }
         end)
       end
-      return set_verdict(qh_ptr, pkt_id, NF_DROP)
+      return settle(ctx, NF_DROP, nil, false)
     else
       log_warn(function()
         return {
@@ -708,19 +780,7 @@ finalize_a = function(ctx, override)
       end)
     end
   end
-  if not dnsonly and records_to_add > 0 then
-    local pending_seq = get_last_seq()
-    if pending_seq then
-      measured_wait_ack(pending_seq, ack_corr, (function()
-        return drain_pipe(pipe_rfd, now, drain_on_msg)
-      end))
-    end
-  end
-  if payload_modified then
-    return set_verdict(qh_ptr, pkt_id, NF_ACCEPT, patched)
-  else
-    return set_verdict(qh_ptr, pkt_id, NF_ACCEPT)
-  end
+  return settle(ctx, NF_ACCEPT, (payload_modified and patched or nil), (records_to_add > 0))
 end
 local build_orphan_fields
 build_orphan_fields = function(info)
@@ -748,6 +808,7 @@ sweep_parked = function()
   local _list_1 = so_state.expired(current_benchmark_ms())
   for _index_0 = 1, #_list_1 do
     local ctx = _list_1[_index_0]
+    ctx.defer = false
     finalize_a(ctx, nil)
   end
 end
@@ -1135,7 +1196,8 @@ handle_response = function(qh_ptr, nfad, pkt_id)
     src_ip = src_ip,
     dst_ip = dst_ip,
     qname = q1 and q1.name and q1.name:lower() or "-",
-    af = ip.version == 6 and "ipv6" or "ipv4"
+    af = ip.version == 6 and "ipv6" or "ipv4",
+    defer = true
   }
   local do_so = entry and entry.modifiers and entry.modifiers.validate
   if so_state and q1 and do_so and so_state.active_for(ip.version) and not direct_validator then
@@ -1209,7 +1271,9 @@ run = function(queue_num, rfd, rules_metadata)
       }
     end)
   end
-  local run_opts
+  local run_opts = {
+    on_batch_end = flush_deferred
+  }
   local all_resolvers = collect_all_resolvers()
   if #all_resolvers > 0 then
     local families = { }
@@ -1227,10 +1291,8 @@ run = function(queue_num, rfd, rules_metadata)
         verdict_ttl_s = 5,
         families = families
       })
-      run_opts = {
-        idle_ms = so_cfg.budget_ms or 80,
-        on_idle = sweep_parked
-      }
+      run_opts.idle_ms = so_cfg.budget_ms or 80
+      run_opts.on_idle = sweep_parked
       log_info(function()
         return {
           action = "dns_validator_responses_armed",
@@ -1272,5 +1334,10 @@ return {
   _retry_budget = _retry_budget,
   _set_pipe_rfd = _set_pipe_rfd,
   build_orphan_fields = build_orphan_fields,
+  settle = settle,
+  flush_deferred = flush_deferred,
+  deferred_count = deferred_count,
+  _set_defer_deps = _set_defer_deps,
+  _reset_deferred = _reset_deferred,
   finalize_a = finalize_a
 }
