@@ -1712,3 +1712,220 @@ coûtait N appels système avant l'unique `wait_ack` du lot.
   déploiement) ; gain attendu = N−1 appels système par réponse, à confronter
   au CPU `nft`/`resp` de §16.3 lors d'une re-mesure à 200/350 q/s authentifiés.
 
+## 17. Campagne de charge après les correctifs de l'audit (2026-11-12, branche `d-bench5`)
+
+Campagne demandée après le déploiement sur `custos.lan` d'un build `dev`
+contenant **tous** les correctifs de §16.6-§16.9 et des campagnes précédentes
+(`d-ackread`, `d-valspread`, `d-nftcache`, `d-nftwrite`, `d-maxlen`,
+`d-rcvbuf`, `d-qhash`, `d-dohspin`). **Aucune modification de code** : seules
+la configuration `nfqueue` de la cible et la documentation changent. Harnais
+`tmp/tune/` (copié de `d-tune`, plus `dnsload5.py` et `runphase5.sh`), résultats
+bruts `tmp/tune/results/` (ignorés par git), rapport de campagne
+`tmp/bench5_report.md`.
+
+### 17.1 Dispositif et protocole
+
+- **Cible** : `custos.lan` (10.35.1.254, OpenWrt, aarch64 Cortex-A55 ×4, noyau
+  6.12.74, `MemTotal` 4 029 208 Ko). Le build déployé est **identique** au
+  `lua/` de cette branche : `md5sum` égaux pour `nfq_loop.lua`,
+  `worker_nft.lua`, `nft_queue.lua`, `dup_query.lua`,
+  `worker_responses.lua`, `nft_rules.lua` et `worker_questions.lua`.
+- **Générateur** : `servus.lan` (10.35.1.2), `tmp/tune/dnsload5.py` passé par
+  stdin (rien installé). Une **seule IP source** (10.35.1.2) et **N ports
+  source** (un socket par port), charge en tourniquet sur deux destinations du
+  résolveur (`10.35.1.1`, `10.35.4.1`). `mixed` = 30 % NXDOMAIN + 70 % noms
+  cacheables (dont Tailscale) ; `up` = 100 % `vpn.stemarie.dynv6.net` (A).
+- **Authentification** : `servus` est authentifié sur le portail pendant toute
+  la campagne. Contrôle **avant chaque palier** (`dig controlplane.tailscale.com
+  @10.35.1.1` doit rendre 8 adresses) : jamais en échec.
+- **Paliers** : 30 s de charge, repos vérifié avant (profondeur nulle sur les
+  files de la plage et compteurs figés 3 s), un seul générateur (`pgrep`),
+  compteurs nft et NFQUEUE lus dans le même instantané, sonde DNS après chaque
+  palier. **Drain après la fenêtre** : 45 s pour les paliers principaux (la perte
+  « à chaud » d'un drain de 2 s, comme §15, ne distingue pas une file en retard
+  d'une perte réelle), 2 s pour les contrôles explicitement comparés à §15.
+- **CPU** : jiffies `/proc/<pid>/stat` échantillonnés (HZ mesuré 96-102 selon
+  la fenêtre), ramenés à la **fenêtre de 30 s** (pas au drain) ; `idle`/`user`/
+  `sys`/`softirq` par Δ`/proc/stat`. RSS = `VmRSS` de fin de fenêtre.
+- **Configurations** (une variable à la fois, `/etc/init.d/custos restart`
+  entre les deux, sauvegarde `.dbench5` avant toute modification) :
+  - **A — config de la cible** : `nfqueue: { responses: "14-15" }` (donc
+    `questions` = défaut `"0-1"`, `rcvbuf` absent = 4 Mio, `maxlen` absent =
+    4096, `pending_max` absent = 20 000) ;
+  - **B — défauts du code** : la seule clé `nfqueue` supprimée par `sed` →
+    `questions` `"0-1"`, `responses` `"3-4"`, mêmes défauts `rcvbuf`/`maxlen`/
+    `pending_max`. **A et B ne diffèrent donc que par les numéros de files**
+    (14-15 contre 3-4) : toutes les autres clés étaient déjà aux défauts en A.
+
+### 17.2 Répartition jhash mesurée (effet de `d-qhash`)
+
+Règles présentes dans `nft list ruleset` (lignes 973-976 sur la cible) :
+`ip saddr . th sport mod 2` (questions) et `ip daddr . th dport mod 2 offset 14`
+ou `offset 3` (réponses), conformes à `src/nft_rules.moon:163-183` et
+`doc/CONFIG.md:388-425`. La clé des réponses porte sur l'**IP et le port du
+client**, pas sur le couple client/résolveur.
+
+Distribution mesurée par Δ`id_sequence`, **une seule destination**
+(`10.35.1.1`), donc une seule « source » au sens de §13.2/§15.2 :
+
+| source | questions q0/q1 | réponses q14/q15 |
+|---|---|---|
+| 1 socket (1 port) | 1200 / 1 | **0 / 2058** |
+| 8 sockets (8 ports) | 1800 / 600 | **2045 / 2057** |
+| 128 sockets (128 ports) | 998 / 1002 | **1742 / 1706** |
+
+Avec un port unique, **tout** tombe sur une file de chaque sens (le hachage
+`(IP, port)` est constant) ; avec plusieurs ports, les réponses se répartissent
+sur les deux files — c'est l'effet attendu de `d-qhash`. `d-valspread` n'est
+pas séparable de `d-qhash` dans cette mesure : les deux sont dans le même
+build, et le choix du validateur n'est pas journalisé. Sur les paliers
+principaux (2 destinations, 128 ports), la répartition est équilibrée
+(p. ex. A 500 `mixed` : q14 13 562 / q15 12 008 ; B 500 : q3 12 597 / q4
+12 928).
+
+### 17.3 Résultats — configuration A de la cible (`0-1` / `14-15`)
+
+Paliers de 30 s, 128 ports source, 2 destinations, drain 45 s. `resp`/`dns` =
+somme des workers de la plage, `nft` = worker nft, `idle` = Δ`/proc/stat` sur
+la fenêtre. Perte = côté client après drainage ; `qdrop`/`udrop` = colonnes 6
+et 7 de `/proc/net/netfilter/nfnetlink_queue` ; `prof.` = profondeur max des
+files réponses.
+
+| palier | perte | p50/p99 (ms) | resp / dns / nft (% vCPU) | idle | RSS resp | qdrop / udrop | prof. |
+|---|---|---|---|---|---|---|---|
+| 200 `mixed` | 0 % | 22,7 / 42,5 | 62,6 / 41,3 / 18,0 | 42,1 % | 36,1 Mio | 0 / 0 | 7 |
+| 350 `mixed` | 0 % | 37,6 / 333,7 | 104,6 / 76,5 / 34,5 | 15,9 % | 36,1 Mio | 0 / 0 | 30 |
+| 500 `mixed` | **14,9 %** | 3866 / 6170 | 115,9 / 110,2 / 38,5 | 4,4 % | 36,1 Mio | 0 / 0 | 2 589 |
+| 700 `mixed` | **31,7 %** | 9394 / 14 677 | 115,8 / 115,9 / 36,0 | 3,6 % | 35,8 Mio | 0 / 0 | 3 083 |
+| 800 `up` | 0 % | 832 / 4605 | 124,5 / 91,2 / 0,0 | 3,8 % | 35,8 Mio | 0 / 0 | 2 044 |
+| 1000 `up` | **34,1 %** | 4526 / 6800 | 124,1 / 113,3 / 0,0 | 5,2 % | 38,0 Mio | 0 / 0 | 3 052 |
+| 1300 `up` | **63,0 %** | 5806 / 9817 | 125,9 / 133,8 / 0,0 | 4,2 % | 41,0 Mio | **687** / 0 | 4 049 |
+
+### 17.4 Résultats — défauts du code (B, `0-1` / `3-4`)
+
+Mêmes paliers, même générateur (128 ports), drain 45 s.
+
+| palier | perte | p50/p99 (ms) | resp / dns / nft (% vCPU) | idle | RSS resp | qdrop / udrop | prof. |
+|---|---|---|---|---|---|---|---|
+| 200 `mixed` | 0 % | 22,5 / 44,9 | 69,6 / 43,8 / 19,6 | 45,7 % | 20,5 Mio | 0 / 0 | 4 |
+| 350 `mixed` | 0 % | 36,5 / 348,4 | 104,5 / 72,6 / 34,1 | 17,1 % | 23,0 Mio | 0 / 0 | 15 |
+| 500 `mixed` | **12,9 %** | 4401 / 5887 | 117,4 / 102,8 / 39,4 | 5,5 % | 29,5 Mio | 0 / 0 | 2 399 |
+| 700 `mixed` | **33,0 %** | 7485 / 14 692 | 115,3 / 115,1 / 35,5 | 4,2 % | 32,8 Mio | 0 / 0 | 3 454 |
+| 800 `up` | 0 % | 390 / 2173 | 126,8 / 83,3 / 0,0 | 3,9 % | 32,7 Mio | 0 / 0 | 858 |
+| 1000 `up` | **28,8 %** | 4264 / 5962 | 125,9 / 103,3 / 0,0 | 5,2 % | 35,8 Mio | 0 / 0 | 3 217 |
+| 1300 `up` | **67,3 %** | 4854 / 6802 | 128,8 / 129,2 / 0,0 | 5,1 % | 45,7 Mio | **1 907** / 0 | 4 096 |
+
+**A et B sont équivalents** : les écarts (p. ex. 800 `up` p50 390 contre
+832 ms, 1000 `up` 28,8 % contre 34,1 %) sont dans la variabilité du tirage de
+ports et de la charge, pas dans la configuration. C'est attendu — les deux
+configurations sont le même profil 2/2 avec `rcvbuf` 4 Mio, `maxlen` 4096 et
+`pending_max` 20 000 ; seuls les numéros de files changent.
+
+### 17.5 Comparaison à §15 et §16.2, et gain par correctif
+
+**Contrôle au protocole exact de §15** (1 socket, 2 destinations, 30 s,
+drain 2 s) : à **500 `mixed`**, 15 000 émis / 9 787 reçus = **34,8 %** de perte
+(§15 : 42,3 %), `qdrop` **664** (q15) contre **8 782**, `udrop` 0, profondeur
+max 4 082. Le même palier avec un drain de 20 s rend **3,7 %** (14 447 reçus,
+`qdrop` 0) : l'essentiel de la perte « à chaud » est une **file en retard**, pas
+des paquets jetés. Détail des gains :
+
+1. **`nfqueue.maxlen` 4096 (`d-maxlen`)** — le plafond de 1024 ne jette plus :
+   à 500 `mixed` `qdrop` passe de 8 782 (§15) à 664 (contrôle 2 s) et 0 (drain
+   20 s) ; à 800 `up` et 1000 `up` (128 ports) `qdrop` = 0 (contre 8 191 à
+   1000 `up` §15). Il ne réapparaît qu'à **1300 `up`** (687 en A, 1 907 en B),
+   avec une profondeur de 4 049-4 096 : la longueur de file redevient le
+   limiteur à ce débit seulement.
+2. **Drain netlink pendant `wait_ack` (`d-ackread`)** — à **350 `mixed`**, avec
+   le même générateur 1 socket, p50 **81,2 ms** (p99 282) contre **474 / 873**
+   en §16.2, `response_entry_ms` p99 **98 ms** contre **337** ; à 200 `mixed`,
+   p99 **46,6** contre 73. La distribution est pourtant *moins* bonne dans ce
+   contrôle (un seul port ⇒ une seule file réponses, 100 % sur q4), donc le
+   gain vient bien du chemin de lecture, pas du hachage.
+3. **Cache d'upsert (`d-nftcache`) + coalescence des écritures (`d-nftwrite`)**
+   — CPU `nft` à 200 `mixed` : **20,3 %** (1 socket) contre **50,9 %** en §16.2
+   et **18,0-19,6 %** (128 ports) ; à 350 : **35,1 %** contre **64,5 %**. Le
+   nombre d'upserts par requête est inchangé (`nft_r`/`nft_q` = 1,70-1,71), donc
+   le coût **par paquet** a été divisé par ~2. Les deux branches ne sont pas
+   séparables dans ce build (aucun build sans l'une des deux) ; le cache
+   explique le saut d'insertions, la coalescence les `write()`.
+4. **`d-qhash` (+ `d-valspread`)** — la répartition est effective avec
+   plusieurs ports (§17.2), mais **un client à port source unique concentre
+   désormais tout son trafic sur une file de chaque sens** : à 800 `up`, le
+   contrôle 1 socket perd **22,2 %** (`qdrop` 1 202, un seul worker réponses à
+   80,5 % d'un vCPU) alors que §15 avait mesuré **0 %** avec l'ancien hachage
+   sur le couple d'adresses (les réponses A se répartissaient par destination).
+   Ce n'est pas une régression pour un client réel (les résolveurs tirent un
+   port éphémère par requête), mais c'est une limite à connaître : le hachage
+   par `(IP, port)` n'équilibre que si les ports varient.
+5. **`d-rcvbuf` / `d-dohspin`** : `udrop` = 0 et `doh` ≤ 0,1 % sur **tous** les
+   paliers, y compris avec un seul port ; les deux correctifs tiennent.
+
+### 17.6 Nouveau goulot
+
+À partir de 500 `mixed` et 800 `up` avec 128 ports, `idle` tombe à **3,6-5,5 %**
+et la perte n'est plus un débordement de file noyau : `qdrop` = `udrop` = 0
+jusqu'à 1000 `up` inclus. Deux mécanismes la portent :
+
+- **CPU agrégé** : `resp` 116-129 %, `dns` 91-134 %, `nft` 36-39 % (mixed),
+  `events` 13-22 %, `mac-lrn` 6-12 % — les quatre cœurs sont saturés
+  (`user` 62-68 %, `sys` 22-28 %, `softirq` 1,4-1,6 %). Aucun worker isolé ne
+  plafonne (les deux workers réponses restent à 56-65 % chacun) : c'est la
+  **somme** qui sature, comme en §15.4, mais sans les jets de file.
+- **`response_orphan_dropped`** : la perte visible est faite de réponses qui
+  arrivent sans entrée `pending` correspondante. Les lignes de la fenêtre
+  portent `ipc_retry_attempts=5`, `ipc_retry_wait_ms=100` et un compteur
+  `suppressed=` de **1 630** (500 `mixed` B), **5 069** (700 `mixed` A),
+  **8 258** (1000 `up` A), **27 161** (1300 `up` B) — du même ordre que les
+  réponses manquantes. L'hypothèse la plus cohérente avec les mesures : le
+  délai de lecture des réponses (`response_entry_ms` p99 5,5-5,9 s) dépasse
+  **`ipc.pending_ttl` = 5 s** (`doc/CONFIG.md:529`), l'entrée `pending` est
+  purgée avant que la réponse ne soit appariée. Non prouvé directement (aucun
+  journal d'expiration `pending`), mais cohérent avec le fait que la perte
+  n'apparaît qu'au-delà de p99 ≈ 5 s.
+
+Le plafond de débit mesuré du profil complet (2/2, 4 Mio, 4096, 20 000) est
+donc **≈ 350 q/s `mixed` et ≈ 800 q/s `up`** sans perte, avec une marge de
+latence déjà consommée à 350 (p99 334 ms) ; au-delà, la machine sature et la
+perte est d'abord un **retard d'appariement**, puis, à 1300 `up`, un
+débordement de file réponses.
+
+### 17.7 Recommandation de configuration
+
+- **Garder `responses: "14-15"` sur la cible** : c'est la configuration
+  mesurée, elle est équivalente aux défauts du code (`"3-4"`), et la changer
+  n'apporte rien. Les deux profils sont 2/2 avec les mêmes défauts de
+  `rcvbuf`/`maxlen`/`pending_max` ; le numéro de file est local et sans effet
+  mesurable.
+- **Pour une installation neuve**, les défauts du code (`questions` `"0-1"`,
+  `responses` `"3-4"`) conviennent : mêmes chiffres que 14-15 à la variabilité
+  près. Rien à changer dans les défauts.
+- **Capacité** : la cible 4 cœurs tient ~350 `mixed` / ~800 `up` sans perte.
+  Au-delà, la limite est le CPU agrégé, pas un réglage `nfqueue`. Les leviers
+  restants sont hors de cette campagne : (a) arbitrer `ipc.pending_ttl` (5 s)
+  contre le délai de file, (b) éventuellement borner `maxlen` pour échanger
+  moins de retard contre plus de jets, (c) réduire le coût CPU par requête
+  (le poste `dns`+`resp` reste le plus lourd).
+
+### 17.8 Non fait / douteux
+
+- **`d-valspread`** : effet non isolé (non séparable de `d-qhash` dans ce
+  build ; le validateur choisi n'est pas journalisé).
+- **Compteurs du cache d'upsert** : invisibles — la cible est au niveau INFO
+  (`batch_ok`/`skipped` sont émis en DEBUG) et le niveau de log n'a **pas** été
+  changé, comme demandé. L'effet est mesuré indirectement par le CPU `nft`.
+- **Perte vs retard** : la perte client dépend du drain. Les paliers saturés
+  sont donnés avec 45 s (contrôles §15 explicitement en 2 s) ; le partage exact
+  entre réponses jamais délivrées (orphelines) et réponses arrivées après la
+  fenêtre n'est pas instrumenté côté cible.
+- **Un seul client** (`servus`), deux destinations IPv4 ; pas de source IPv6
+  (aucune IPv6 temporaire n'a été nécessaire : la variation de couple se fait
+  par le port et la destination). Aucune capture AF_PACKET (interdit).
+- **`perf` absent** de la cible (rien installé) ; pas de `make test-e2e`
+  (consigne : le homelab ne doit pas tourner en même temps).
+- **Reproductibilité** : à charge égale, le tirage des ports modifie la
+  répartition (8 ports ont donné 25/75 et 50/50 selon le tirage ; 128 ports
+  donnent 48-52 %). Les chiffres A/B à 800-1300 `up` en portent la trace ; les
+  conclusions de capacité reposent sur les deux séries et le contrôle 1 socket,
+  pas sur un seul run.
+
