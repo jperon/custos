@@ -65,6 +65,7 @@
     _label: "Communication interne (IPC)"
     _description: "Avancé. Règle le dialogue entre les processus internes de Custos (corrélation requête/réponse DNS). À n'ajuster qu'en cas de problème de performance diagnostiqué."
     pending_ttl: { type: "integer", label: "Durée de conservation d'une requête en attente (s)", default: 5 }
+    pending_max: { type: "integer", label: "Taille maximale de la table des requêtes en attente", hint: "au-delà, les plus anciennes sont évincées", default: 20000 }
     match_retry: {
       _label: "Corrélation requête/réponse"
       count:    { type: "integer", label: "Nombre de tentatives", default: 5 }

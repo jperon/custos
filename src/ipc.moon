@@ -26,6 +26,10 @@ IPC_READ_CHUNK     = 2048
 IPC_MAX_LINE       = 1024
 IPC_WRITE_RETRY_COUNT = 5
 
+-- Borne par défaut de la table `pending` (cf. `ipc.pending_max`). Justification
+-- et taille mémoire mesurée : doc/CONFIG.md § 6.
+PENDING_MAX_DEFAULT = 20000
+
 EAGAIN       = 11
 EWOULDBLOCK  = 11
 
@@ -310,6 +314,22 @@ decode_msg = (raw) ->
 pending     = {}
 read_states = {}
 
+-- ── Borne de la table `pending` ────────────────────────────────────────
+-- Liste doublement chaînée d'insertion : la tête est l'entrée à l'activité la
+-- plus ancienne (insertion ou rafraîchissement de `expire`), la queue la plus
+-- récente. `consume`, la purge et l'expiration démaillent le nœud en O(1) :
+-- aucun emplacement fantôme ne s'accumule tant que la table reste sous sa
+-- borne. `_pending_size` évite un parcours complet à chaque insertion.
+_pending_head      = nil
+_pending_tail      = nil
+_pending_size      = 0
+_pending_evictions = 0
+
+_configured_pending_max = tonumber ipc_cfg.pending_max
+_pending_max = PENDING_MAX_DEFAULT
+if _configured_pending_max and _configured_pending_max >= 1
+  _pending_max = math.floor _configured_pending_max
+
 make_key = (txid, ip_str, src_port, resolver_ip_str) ->
   string.format "%04x:%s:%d:%s", txid, ip_str, src_port, resolver_ip_str
 
@@ -403,6 +423,79 @@ _most_restrictive = (entry, msg) ->
     entry.reason  = PENDING_CONFLICT_REASON
     "kept_allowed_conflict"
 
+--- Démaille un nœud de la liste d'insertion (O(1)).
+-- @tparam table node Nœud {key, entry, prev, next}
+-- @treturn nil
+_unlink_pending_node = (node) ->
+  prev, nxt = node.prev, node.next
+  if prev then prev.next = nxt else _pending_head = nxt
+  if nxt  then nxt.prev = prev else _pending_tail = prev
+  node.prev = nil
+  node.next = nil
+
+--- Ajoute une entrée en queue de liste (plus récente).
+-- @tparam string key   Clé `pending`
+-- @tparam table  entry Entrée `pending`
+-- @treturn table Nœud créé
+_append_pending_node = (key, entry) ->
+  node = { key: key, entry: entry, prev: _pending_tail, next: nil }
+  if _pending_tail then _pending_tail.next = node else _pending_head = node
+  _pending_tail = node
+  entry._pending_node = node
+  node
+
+--- Déplace un nœud en queue (rafraîchissement de l'expiration).
+-- @tparam table node Nœud existant
+-- @treturn nil
+_move_pending_node_to_tail = (node) ->
+  return if _pending_tail == node
+  _unlink_pending_node node
+  node.prev = _pending_tail
+  node.next = nil
+  if _pending_tail then _pending_tail.next = node else _pending_head = node
+  _pending_tail = node
+
+--- Retire une entrée `pending` (consommation, purge ou expiration).
+-- @tparam string key Clé `pending`
+-- @treturn boolean true si une entrée a été retirée
+_remove_pending = (key) ->
+  entry = pending[key]
+  return false unless entry
+  pending[key] = nil
+  node = entry._pending_node
+  if node
+    _unlink_pending_node node
+    entry._pending_node = nil
+  _pending_size -= 1
+  true
+
+--- Évince les entrées les plus anciennes jusqu'à respecter `ipc.pending_max`.
+-- O(1) par éviction (tête de liste), sans tri. Un WARN rate-limité
+-- (`pending_evicted`) est émis seulement si au moins une entrée a été évincée ;
+-- la réponse dont la question a été évincée suit le chemin d'une question
+-- expirée : `get_pending_entry` renvoie nil puis `worker_responses` jette la
+-- réponse comme orpheline (`NF_DROP`, `response_orphan_dropped`).
+-- @treturn nil
+_enforce_pending_max = ->
+  evicted = 0
+  while _pending_size > _pending_max
+    node = _pending_head
+    break unless node
+    pending[node.key] = nil
+    node.entry._pending_node = nil
+    _unlink_pending_node node
+    _pending_size -= 1
+    _pending_evictions += 1
+    evicted += 1
+  if evicted > 0
+    log_warn -> {
+      action: "pending_evicted"
+      evicted: evicted
+      entries: _pending_size
+      pending_max: _pending_max
+    }
+  nil
+
 --- Gère la réutilisation d'une clé `pending` déjà présente.
 -- Cas identique (retransmission UDP) : first-wins, seul `expire` est rafraîchi.
 -- Cas divergent : verdict le plus restrictif (fail-closed, cf. ci-dessus) —
@@ -418,6 +511,9 @@ _most_restrictive = (entry, msg) ->
 -- @treturn nil
 overwrite_pending = (key, entry, msg, now_fn) ->
   entry.expire = now_fn! + (ipc_cfg.pending_ttl or 5)
+  -- Rafraîchissement = activité récente : l'entrée repasse en queue de liste
+  -- d'éviction (elle ne sera plus la première victime d'une rafale).
+  _move_pending_node_to_tail entry._pending_node if entry._pending_node
   unless pending_meta_diverges entry, msg
     log_info -> {
       action: "ipc_pending_overwrite"
@@ -450,7 +546,7 @@ set_pending = (msg, now_fn) ->
   previous = pending[key]
   -- Chemin nominal (aucune collision) : une seule horloge, une seule entrée.
   return overwrite_pending key, previous, msg, now_fn if previous
-  pending[key] = {
+  entry = {
     expire:       now_fn! + (ipc_cfg.pending_ttl or 5)
     refused:      msg.refused
     modifiers:    msg.modifiers
@@ -461,6 +557,11 @@ set_pending = (msg, now_fn) ->
     timeout:      msg.timeout
     response_rule_ids: msg.response_rule_ids or {}
   }
+  pending[key] = entry
+  _append_pending_node key, entry
+  _pending_size += 1
+  _enforce_pending_max!
+  entry
 
 drain_lines = (pipe_rfd, buf, now_fn, on_msg) ->
   absorbed = 0
@@ -508,7 +609,7 @@ is_pending = (txid, ip_str, src_port, resolver_ip_str, now_fn) ->
   entry = pending[key]
   return false unless entry
   if now_fn! > entry.expire
-    pending[key] = nil
+    _remove_pending key
     return false
   true
 
@@ -517,12 +618,12 @@ get_pending_entry = (txid, ip_str, src_port, resolver_ip_str, now_fn) ->
   entry = pending[key]
   return nil unless entry
   if now_fn! > entry.expire
-    pending[key] = nil
+    _remove_pending key
     return nil
   entry
 
 consume = (txid, ip_str, src_port, resolver_ip_str) ->
-  pending[make_key txid, ip_str, src_port, resolver_ip_str] = nil
+  _remove_pending make_key txid, ip_str, src_port, resolver_ip_str
 
 --- Purge les entrées `pending` expirées jamais relues (question sans réponse :
 -- paquet perdu, upstream muet, client qui abandonne). Sans cet appel
@@ -534,7 +635,12 @@ consume = (txid, ip_str, src_port, resolver_ip_str) ->
 purge_pending = (now_fn) ->
   now = now_fn!
   for key, entry in pairs pending
-    pending[key] = nil if now > entry.expire
+    _remove_pending key if now > entry.expire
+
+--- État de la table `pending` (diagnostic/tests).
+-- @treturn table { size, evicted, pending_max }
+pending_stats = ->
+  { size: _pending_size, evicted: _pending_evictions, pending_max: _pending_max }
 
 {
   :encode_msg
@@ -546,10 +652,12 @@ purge_pending = (now_fn) ->
   :encode_modifiers
   :decode_modifiers
   :drain_pipe
+  :set_pending
   :is_pending
   :get_pending_entry
   :consume
   :purge_pending
+  :pending_stats
   :MSG_IPV4
   :MSG_IPV6
   :MSG_IPV4_REFUSED

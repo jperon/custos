@@ -134,11 +134,11 @@ RL_VOLATILE_KEYS = {
   "client_fd", "client_port", "client_timeout", "conditions_compiled", "conditions_worker_only"
   "configured_rules", "corr"
   "count", "decoded_bytes", "dest_whitelist", "detail", "dport", "drain_ms", "dropped", "dst_port"
-  "effective_rules", "entries", "events_rfd", "events_wfd", "expires_in_s"
+  "effective_rules", "entries", "evicted", "events_rfd", "events_wfd", "expires_in_s"
   "fd", "frames", "free_pct", "grace", "groups", "hour", "ignored"
   "ipc_fd", "ipc_retry_attempts", "ipc_retry_wait_ms", "key_size", "learn_rfd", "learn_wfd"
   "len", "listen_fd", "log_ms", "log_write_us", "match_ms", "max_age_hours", "max_attempts", "min_free_pct"
-  "days_left", "msg", "need", "new_size", "not_after", "parent_pid", "parse_ms", "payload_len", "payload_ms"
+  "days_left", "msg", "need", "new_size", "not_after", "parent_pid", "parse_ms", "payload_len", "payload_ms", "pending_max"
   "pid", "pkt_id", "port_src", "pos", "q_to_response_ms", "query_bytes"
   "question_proc_ms", "question_response_rfd"
   "question_response_wfd", "question_response_workers", "raw", "removed", "removed_count", "resp_bytes", "response_entry_ms"
@@ -205,6 +205,7 @@ RL_CONFIG = {
   response_orphan_dropped:          { keys: {}, window: 10 }
   ipc_pending_overwrite:            { keys: {}, window: 10 }
   ipc_pending_overwrite_divergent:  { keys: {}, window: 10 }
+  pending_evicted:                  { keys: {}, window: 10 }
 }
 
 -- Actions de cycle de vie jamais limitées : un crash répété (`worker_died`,

@@ -249,6 +249,7 @@ local RL_VOLATILE_KEYS = {
   "dst_port",
   "effective_rules",
   "entries",
+  "evicted",
   "events_rfd",
   "events_wfd",
   "expires_in_s",
@@ -282,6 +283,7 @@ local RL_VOLATILE_KEYS = {
   "parse_ms",
   "payload_len",
   "payload_ms",
+  "pending_max",
   "pid",
   "pkt_id",
   "port_src",
@@ -448,6 +450,10 @@ local RL_CONFIG = {
     window = 10
   },
   ipc_pending_overwrite_divergent = {
+    keys = { },
+    window = 10
+  },
+  pending_evicted = {
     keys = { },
     window = 10
   }

@@ -49,6 +49,34 @@ fresh_ipc = ->
   package.loaded["ipc"] = nil
   dofile "lua/ipc.lua"
 
+-- ── Helper : force `ipc.pending_max` pendant l'exécution de `fn` ─────────
+-- `ipc.lua` lit `ipc.pending_max` au chargement (via `ipc_cfg`) : la config
+-- doit donc être installée AVANT `fresh_ipc!`, puis restaurée.
+with_pending_max = (max, fn) ->
+  cfg   = package.loaded["config"]
+  saved = cfg.ipc
+  cfg.ipc = { pending_ttl: 5, pending_max: max }
+  ok, err = pcall fn
+  cfg.ipc = saved
+  error err unless ok
+
+-- ── Helper : message décodé minimal pour `set_pending` ───────────────────
+make_pending_msg = (txid, port, rule_id) ->
+  {
+    txid: txid
+    ip_str: "192.168.1.42"
+    src_port: port
+    resolver_ip_str: "1.1.1.3"
+    refused: false
+    modifiers: {}
+    reason: "ok"
+    benchmark_ms: nil
+    question_proc_ms: nil
+    rule_id: rule_id or ""
+    timeout: "2m"
+    response_rule_ids: {}
+  }
+
 -- ═════════════════════════════════════════════════════════════════════════
 describe "ipc", ->
 
@@ -777,3 +805,76 @@ describe "ipc", ->
       assert.equals 7, entry.question_proc_ms
 
       close_pipe p
+
+  -- ── 34. Borne de taille de la table `pending` (ipc.pending_max) ────────
+  -- La table `pending` n'avait aucune borne : sous une rafale de questions
+  -- sans réponse (résolveur muet, flood client) elle grossissait sans limite
+  -- dans CHAQUE worker réponses (fan-out `write_with_retry_all`), donc N fois.
+  describe "borne de la table pending (ipc.pending_max)", ->
+    it "borne la taille sous 3× la limite et compte les évictions", ->
+      with_pending_max 50, ->
+        m_ipc  = fresh_ipc!
+        now_fn = -> 1000
+        for i = 1, 150
+          m_ipc.set_pending make_pending_msg(i, 10000 + i), now_fn
+        stats = m_ipc.pending_stats!
+        assert.equals 50,  stats.size
+        assert.equals 100, stats.evicted
+
+    it "évince les plus anciennes et conserve les récentes", ->
+      with_pending_max 50, ->
+        m_ipc  = fresh_ipc!
+        now_fn = -> 1000
+        for i = 1, 60
+          m_ipc.set_pending make_pending_msg(i, 10000 + i), now_fn
+        for i = 1, 10
+          assert.is_nil m_ipc.get_pending_entry(i, "192.168.1.42", 10000 + i, "1.1.1.3", now_fn)
+        for i = 11, 60
+          assert.is_not_nil m_ipc.get_pending_entry(i, "192.168.1.42", 10000 + i, "1.1.1.3", now_fn)
+
+    it "l'appariement des entrées récentes reste intact", ->
+      with_pending_max 50, ->
+        m_ipc  = fresh_ipc!
+        now_fn = -> 1000
+        for i = 1, 60
+          m_ipc.set_pending make_pending_msg(i, 10000 + i, "r_#{i}"), now_fn
+        entry = m_ipc.get_pending_entry 60, "192.168.1.42", 10060, "1.1.1.3", now_fn
+        assert.is_not_nil entry
+        assert.equals "r_60", entry.rule_id
+        assert.equals "ok",   entry.reason
+
+    it "purge par âge inchangée et décrémente la taille", ->
+      with_pending_max 50, ->
+        m_ipc  = fresh_ipc!
+        now_fn = -> 1000
+        for i = 1, 10
+          m_ipc.set_pending make_pending_msg(i, 10000 + i), now_fn
+        m_ipc.purge_pending -> 1002
+        assert.equals 10, m_ipc.pending_stats!.size
+        assert.equals 0,  m_ipc.pending_stats!.evicted
+        m_ipc.purge_pending -> 1006
+        assert.equals 0, m_ipc.pending_stats!.size
+
+    it "une entrée expirée lue est retirée de la taille", ->
+      with_pending_max 50, ->
+        m_ipc  = fresh_ipc!
+        m_ipc.set_pending make_pending_msg(1, 10001), -> 1000
+        assert.equals 1, m_ipc.pending_stats!.size
+        assert.is_false m_ipc.is_pending(1, "192.168.1.42", 10001, "1.1.1.3", -> 1006)
+        assert.equals 0, m_ipc.pending_stats!.size
+
+    it "taille mémoire d'une entrée mesurée avec collectgarbage", ->
+      m_ipc  = fresh_ipc!
+      now_fn = -> 1000
+      n      = 1000
+      collectgarbage "collect"
+      before = collectgarbage "count"
+      for i = 1, n
+        m_ipc.set_pending make_pending_msg(i, 10000 + i), now_fn
+      collectgarbage "collect"
+      after  = collectgarbage "count"
+      per_entry = (after - before) * 1024 / n
+      -- Ordre de grandeur : quelques centaines d'octets (entrée + nœud de
+      -- liste + clé). Les bornes larges évitent la fragilité entre versions.
+      assert.is_true per_entry > 64,   "entrée non triviale (#{per_entry} o)"
+      assert.is_true per_entry < 4096, "entrée < 4 Ko (#{per_entry} o)"
