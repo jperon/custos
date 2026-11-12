@@ -97,10 +97,11 @@ octet-par-octet sur MIPS. Conséquences :
 
 Un `collectgarbage "collect"` est exécuté juste après `filter.load!` (avant le
 fork) pour purger les strings de compilation des règles : le tas propre est
-ensuite partagé en COW. Les réglages GC (`runtime.gc_pause`/`gc_stepmul`,
-appliqués dans `main.moon` et hérités par les workers) rendent la collecte plus
-agressive sur machines contraintes. Le format texte `.domains` (fallback) reste
-coûteux (hachage + tri en RAM au démarrage) : préférer `.bin`.
+ensuite partagé en COW. Les réglages GC (section `gc`, `src/lib/gc_tune.moon`,
+appliqués dans `main.moon` avant le fork puis rappelés au démarrage de chaque
+worker) règlent pause/stepmul, un pas de GC sur temps mort et un plafond de tas
+par worker. Le format texte `.domains` (fallback) reste coûteux (hachage + tri
+en RAM au démarrage) : préférer `.bin`.
 
 ---
 

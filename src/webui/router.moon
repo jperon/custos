@@ -35,7 +35,7 @@ MUTATING_METHODS = { POST: true, PUT: true, DELETE: true }
 
 -- Sections scalaires éditables via le handler générique
 SCALAR_SECTIONS = {
-  runtime:true, nfqueue:true, dns:true, nft:true, ipc:true, clients:true,
+  runtime:true, gc:true, nfqueue:true, dns:true, nft:true, ipc:true, clients:true,
   mac_learner:true, auth:true, doh:true, events:true, metrics:true, rtp:true
 }
 

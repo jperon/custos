@@ -291,9 +291,7 @@ end
 local DEFAULTS = {
   runtime = {
     log_level = "INFO",
-    benchmark = false,
-    gc_pause = 110,
-    gc_stepmul = 400
+    benchmark = false
   },
   nfqueue = {
     questions = "0-1",
@@ -851,9 +849,28 @@ normalize = function(cfg)
     cfg.doh.upstream_fallback_ca_file = nil
   end
   cfg.runtime.benchmark = coerce_boolean(cfg.runtime.benchmark)
-  local runtime_defaults = defaults.runtime or { }
-  cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause
-  cfg.runtime.gc_stepmul = tonumber(cfg.runtime.gc_stepmul) or runtime_defaults.gc_stepmul
+  local gc_tune = require("lib.gc_tune")
+  cfg.gc = cfg.gc or { }
+  local raw_gc = { }
+  for k, v in pairs(cfg.gc) do
+    raw_gc[k] = v
+  end
+  if raw_gc.pause == nil then
+    raw_gc.pause = cfg.runtime.gc_pause
+  end
+  if raw_gc.stepmul == nil then
+    raw_gc.stepmul = cfg.runtime.gc_stepmul
+  end
+  local gc_invalid
+  cfg.gc, gc_invalid = gc_tune.normalize(raw_gc)
+  for _index_0 = 1, #gc_invalid do
+    local key = gc_invalid[_index_0]
+    config_warn({
+      action = "gc_invalid",
+      key = key,
+      configured = tostring(raw_gc[key])
+    })
+  end
   if cfg.filter.decision.first_match_wins == nil then
     cfg.filter.decision.first_match_wins = decision_defaults.first_match_wins
   else

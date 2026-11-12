@@ -545,3 +545,67 @@ describe "config.auth.cert_dir", ->
     cfg = reload path
     os.remove path
     assert.equals "/var/run/custos/certs", cfg.auth.cert_dir
+
+describe "config.gc (réglage du GC par worker)", ->
+
+  gc_tune = require "lib.gc_tune"
+
+  reload = (path) ->
+    package.loaded["config"] = nil
+    actual = path or "tmp/__no_config_for_test__.moon"
+    ffi.C.setenv "CUSTOS_CONFIG_PATH", actual, 1
+    require "config"
+
+  after_each ->
+    ffi.C.unsetenv "CUSTOS_CONFIG_PATH"
+    package.loaded["config"] = nil
+
+  it "section absente : défauts de lib.gc_tune", ->
+    cfg = reload nil
+    assert.same gc_tune.DEFAULTS, cfg.gc
+
+  it "section présente : valeurs reprises telles quelles", ->
+    path = "tmp/config_spec_gc.moon"
+    write_moon path, [[return { gc: { pause: 300, stepmul: 400, idle_step: 50, max_heap_mb: 12 } }]]
+    cfg = reload path
+    os.remove path
+    assert.same { pause: 300, stepmul: 400, idle_step: 50, max_heap_mb: 12 }, cfg.gc
+
+  it "hérite de runtime.gc_pause/gc_stepmul quand la section gc est absente", ->
+    path = "tmp/config_spec_gc_legacy.moon"
+    write_moon path, [[return { runtime: { gc_pause: 250, gc_stepmul: 350 } }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 250, cfg.gc.pause
+    assert.equals 350, cfg.gc.stepmul
+    assert.equals gc_tune.DEFAULTS.idle_step, cfg.gc.idle_step
+
+  it "gc.pause explicite prime sur runtime.gc_pause", ->
+    path = "tmp/config_spec_gc_priority.moon"
+    write_moon path, [[return {
+      gc: { pause: 300 }
+      runtime: { gc_pause: 250, gc_stepmul: 350 }
+    }]]
+    cfg = reload path
+    os.remove path
+    assert.equals 300, cfg.gc.pause
+    assert.equals 350, cfg.gc.stepmul
+
+  it "valeurs invalides : retour aux défauts (et avertissement)", ->
+    path = "tmp/config_spec_gc_invalid.moon"
+    write_moon path, [[return { gc: { pause: "x", stepmul: 0, idle_step: -1, max_heap_mb: -2 } }]]
+    old_log = package.loaded["log"]
+    calls = {}
+    package.loaded["log"] = {
+      log_warn: (thunk) -> calls[#calls + 1] = thunk!
+      log_error: (thunk) -> calls[#calls + 1] = thunk!
+    }
+    holder = {}
+    ok, err = pcall -> holder.cfg = reload path
+    package.loaded["log"] = old_log
+    os.remove path
+    assert.is_true ok, tostring err
+    assert.same gc_tune.DEFAULTS, holder.cfg.gc
+    seen = {}
+    seen[c.action] = true for c in *calls
+    assert.is_true seen.gc_invalid

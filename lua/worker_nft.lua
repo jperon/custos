@@ -20,6 +20,7 @@ do
   local _obj_0 = require("lib.ipc_hex")
   split_fields, from_hex, is_ipv4_str, is_ipv6_str, is_valid_mac, is_valid_timeout = _obj_0.split_fields, _obj_0.from_hex, _obj_0.is_ipv4_str, _obj_0.is_ipv6_str, _obj_0.is_valid_mac, _obj_0.is_valid_timeout
 end
+local gc_tune = require("lib.gc_tune")
 local BUF_SIZE = 8192
 local MAX_BATCH = 64
 local EAGAIN = 11
@@ -454,6 +455,8 @@ end
 local run
 run = function(rfd, ack_wfds, cache)
   set_action_prefix("nft_")
+  local gc = gc_tune.shared()
+  gc.apply()
   ack_wfds = ack_wfds or { }
   cache = cache or new_cache()
   log_info(function()
@@ -474,6 +477,7 @@ run = function(rfd, ack_wfds, cache)
       poll_fd[0].revents = 0
       libc.poll(poll_fd, 1, -1)
     end
+    gc.guard()
     local batch_full = false
     while not batch_full do
       while true do
@@ -569,6 +573,9 @@ run = function(rfd, ack_wfds, cache)
     if pending_count > 0 or #ack_queue > 0 then
       flush_batch(pending, ack_queue, ack_wfds, cache)
       pending_count = 0
+    end
+    if not (batch_full) then
+      gc.idle()
     end
   end
 end

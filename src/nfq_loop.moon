@@ -8,6 +8,7 @@ config = require "config"
 nfq_rcvbuf = require "lib.nfq_rcvbuf"
 nfq_maxlen = require "lib.nfq_maxlen"
 lowmem = require "lib.lowmem"
+gc_tune = require "lib.gc_tune"
 { :log_info, :log_warn, :log_error, :log_debug, :level_enabled } = require "log"
 bit = require "bit"
 
@@ -78,11 +79,16 @@ packet_age_ms = (nfad) ->
 -- @tparam number   queue_num Numéro de queue NFQUEUE (uint16)
 -- @tparam function callback  function(qh_ptr, nfad, pkt_id) → NF_ACCEPT | NF_DROP | VERDICT_DONE
 -- @tparam[opt] table opts    { idle_ms, on_idle, on_batch_end, extra_rfds,
---                            on_extra_ready } : si idle_ms > 0,
+--                            on_extra_ready, gc } : si idle_ms > 0,
 --                            la lecture passe par poll() avec ce timeout ; à
 --                            chaque expiration (et avant chaque lecture)
 --                            on_idle() est appelé (balayage du budget « second
---                            avis »). on_batch_end() est appelé après le
+--                            avis »). `gc` est l'état lib.gc_tune du worker
+--                            (défaut : état partagé construit depuis config.gc) :
+--                            pause/stepmul y sont appliqués au démarrage, un
+--                            garde-fou mémoire est vérifié à chaque tour et un
+--                            pas de GC est fait quand poll() expire (file vide).
+--                            on_batch_end() est appelé après le
 --                            traitement d'un lot de paquets : la lecture
 --                            bloquante, puis le drain non bloquant du socket
 --                            netlink (un read ne rend qu'un paquet) jusqu'à
@@ -103,6 +109,11 @@ packet_age_ms = (nfad) ->
 -- @treturn nil
 run_queue = (queue_num, callback, opts=nil) ->
   log_info -> { action: "queue_open", queue: queue_num }
+
+  -- Réglage GC du worker (pause/stepmul), appliqué une fois à l'entrée de la
+  -- boucle : chaque worker fork son propre processus, donc son propre GC.
+  gc = (opts and opts.gc) or gc_tune.shared!
+  gc.apply!
 
   log_debug -> { action: "queue_nfq_open_call", queue: queue_num }
   h = libnfq.nfq_open!
@@ -246,12 +257,16 @@ run_queue = (queue_num, callback, opts=nil) ->
     n
 
   while true
+    -- Garde-fou mémoire (lecture du tas au plus 1×/s, cf. lib.gc_tune).
+    gc.guard!
     if pfd
       on_idle! if on_idle
       poll_timeout = if idle_ms and idle_ms > 0 then idle_ms else -1
       pr = libc.poll pfd, 1 + n_extra, poll_timeout
       if pr == 0
-        continue   -- timeout : rien à lire, on_idle a balayé les parqués
+        -- Timeout : file netlink vide → pas de GC borné sur temps mort.
+        gc.idle!
+        continue   -- on_idle a balayé les parqués
       elseif pr < 0
         en = libc.__errno_location()[0]
         continue if en == EINTR

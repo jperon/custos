@@ -1,4 +1,5 @@
 local ffi = require("ffi")
+local gc_tune = require("lib.gc_tune")
 local s2ip
 s2ip = require("ipparse.l3.ip").s2ip
 local sp = require("ipparse.lib.pack_compat").pack
@@ -355,12 +356,22 @@ setup = function(opts)
   os.execute("mkdir -p " .. tostring(PROF_DIR))
   local config = apply_config()
   install_stubs()
-  if config.runtime.gc_pause then
-    collectgarbage("setpause", config.runtime.gc_pause)
+  config.gc = config.gc or { }
+  local _list_0 = {
+    "pause",
+    "stepmul",
+    "idle_step",
+    "max_heap_mb"
+  }
+  for _index_0 = 1, #_list_0 do
+    local key = _list_0[_index_0]
+    local override = opts["gc_" .. key]
+    if override ~= nil then
+      config.gc[key] = override
+    end
   end
-  if config.runtime.gc_stepmul then
-    collectgarbage("setstepmul", config.runtime.gc_stepmul)
-  end
+  local gc_state = gc_tune.new(config.gc)
+  gc_state.apply()
   write_sessions_file()
   local filter = require("filter")
   filter.load()
@@ -447,6 +458,7 @@ setup = function(opts)
     msg_tls = msg_tls,
     msg_vpn = msg_vpn,
     ipc_line = ipc_line,
+    gc_state = gc_state,
     on_idle_q = run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle,
     on_idle_r = run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle,
     handle_question = run_queue_calls[1].callback,
@@ -597,6 +609,7 @@ run_case = function(c, iters, chunk)
   local v0 = verdicts
   local total = 0
   local min_block = nil
+  local heap_max = collectgarbage("count")
   local blocks = math.ceil(iters / chunk)
   for b = 1, blocks do
     local n = math.min(chunk, iters - (b - 1) * chunk)
@@ -624,8 +637,12 @@ run_case = function(c, iters, chunk)
     if c.drain then
       c.drain()
     end
+    local heap = collectgarbage("count")
+    if heap > heap_max then
+      heap_max = heap
+    end
   end
-  return total, rets, verdicts - v0, min_block
+  return total, rets, verdicts - v0, min_block, heap_max
 end
 local measure_alloc
 measure_alloc = function(c, iters)
@@ -724,7 +741,11 @@ parse_args = function(argv)
     list = false,
     jit_v = nil,
     jit_dump = nil,
-    jit_dump_mode = "t"
+    jit_dump_mode = "t",
+    gc_pause = nil,
+    gc_stepmul = nil,
+    gc_idle_step = nil,
+    gc_max_heap_mb = nil
   }
   local i = 1
   local next_val
@@ -758,6 +779,14 @@ parse_args = function(argv)
       o.jit_dump = next_val()
     elseif "--jit-dump-mode" == _exp_0 then
       o.jit_dump_mode = next_val()
+    elseif "--gc-pause" == _exp_0 then
+      o.gc_pause = tonumber(next_val())
+    elseif "--gc-stepmul" == _exp_0 then
+      o.gc_stepmul = tonumber(next_val())
+    elseif "--gc-idle-step" == _exp_0 then
+      o.gc_idle_step = tonumber(next_val())
+    elseif "--gc-max-heap" == _exp_0 then
+      o.gc_max_heap_mb = tonumber(next_val())
     end
     i = i + 1
   end
@@ -785,8 +814,8 @@ render_results = function(lines, results, o)
   lines[#lines + 1] = ""
   lines[#lines + 1] = "## Mesures (os.clock, GC actif, lots de " .. tostring(o.chunk) .. ", minimum de " .. tostring(o["repeat"]) .. " passages)"
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "| cas | iters | paquets | temps (s) | µs/paquet | µs/paquet (lot min) | µs/cycle | octets/paq (GC arrêté) | retours | verdicts/paq |"
-  lines[#lines + 1] = "|---|---|---|---|---|---|---|---|---|---|"
+  lines[#lines + 1] = "| cas | iters | paquets | temps (s) | µs/paquet | µs/paquet (lot min) | µs/cycle | octets/paq (GC arrêté) | tas max (Kio) | retours | verdicts/paq |"
+  lines[#lines + 1] = "|---|---|---|---|---|---|---|---|---|---|---|"
   for _index_0 = 1, #results do
     local r = results[_index_0]
     local pkts = r.iters * r.pkts
@@ -802,7 +831,7 @@ render_results = function(lines, results, o)
     else
       min_us = "—"
     end
-    lines[#lines + 1] = string.format("| %s | %d | %d | %.3f | %.1f | %s | %s | %.0f | `%s` | %s |", r.name, r.iters, pkts, r.secs, r.secs * 1e6 / pkts, min_us, cycle, r.alloc, render_rets(r.rets), render_verdicts(r))
+    lines[#lines + 1] = string.format("| %s | %d | %d | %.3f | %.1f | %s | %s | %.0f | %.0f | `%s` | %s |", r.name, r.iters, pkts, r.secs, r.secs * 1e6 / pkts, min_us, cycle, r.alloc, r.heap_max or 0, render_rets(r.rets), render_verdicts(r))
   end
   return nil
 end
@@ -879,13 +908,17 @@ main = function(argv)
       run_case(c, o.warmup, o.chunk)
     end
     local best, best_rets, best_v, best_min = nil, nil, nil, nil
+    local heap_peak = 0
     for rep = 1, math.max(1, o["repeat"]) do
-      local secs, rets, v, min_block = run_case(c, o.iters, o.chunk)
+      local secs, rets, v, min_block, heap_max = run_case(c, o.iters, o.chunk)
       if best == nil or secs < best then
         best, best_rets, best_v = secs, rets, v
       end
       if min_block and (best_min == nil or min_block < best_min) then
         best_min = min_block
+      end
+      if heap_max and heap_max > heap_peak then
+        heap_peak = heap_max
       end
     end
     local alloc = measure_alloc(c, math.min(o.iters, 20000))
@@ -898,7 +931,8 @@ main = function(argv)
       rets = best_rets,
       verdicts = best_v,
       alloc = alloc,
-      min_block = best_min
+      min_block = best_min,
+      heap_max = heap_peak
     }
   end
   local profiles = { }
@@ -938,6 +972,7 @@ main = function(argv)
   lines[#lines + 1] = ""
   lines[#lines + 1] = "- LuaJIT " .. tostring(jit.version) .. " / " .. tostring(jit.arch) .. " / " .. tostring(jit.os)
   lines[#lines + 1] = "- iters=" .. tostring(o.iters) .. ", repeat=" .. tostring(o["repeat"]) .. " (minimum retenu), chunk=" .. tostring(o.chunk) .. ", warmup=" .. tostring(o.warmup) .. ", profilage=" .. tostring(o.profile or "aucun") .. " (" .. tostring(o.duration) .. " s)"
+  lines[#lines + 1] = string.format("- GC : pause=%d, stepmul=%d, idle_step=%d, max_heap_mb=%d (surcharges CLI appliquées dans setup)", s.gc_state.values.pause, s.gc_state.values.stepmul, s.gc_state.values.idle_step, s.gc_state.values.max_heap_mb)
   lines[#lines + 1] = "- paquet question : " .. tostring(#s.pkt_question) .. " o ; réponse A (8 A) : " .. tostring(#s.pkt_resp_a) .. " o ; réponse B : " .. tostring(#s.pkt_resp_b) .. " o"
   lines[#lines + 1] = "- duplication émise (stub raw_send) : " .. tostring(dup_sent) .. " ; verdicts posés (stub libnfq) : " .. tostring(verdicts)
   render_results(lines, results, o)

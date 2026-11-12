@@ -49,6 +49,7 @@ local MUTATING_METHODS = {
 }
 local SCALAR_SECTIONS = {
   runtime = true,
+  gc = true,
   nfqueue = true,
   dns = true,
   nft = true,

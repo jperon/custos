@@ -22,6 +22,7 @@ purge_pending = require("ipc").purge_pending
 local ttl_set = require("lib.ttl_set")
 local shquote
 shquote = require("lib.shquote").shquote
+local gc_tune = require("lib.gc_tune")
 local mac_cfg = config.mac_learner or { }
 local auth_cfg = config.auth or { }
 local PROBE_TIMEOUT_MS = 200
@@ -307,6 +308,8 @@ end
 local run
 run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
   ifname = ifname or "br"
+  local gc = gc_tune.shared()
+  gc.apply()
   prober = mac_prober.init(ifname)
   if prober then
     log_info(function()
@@ -387,7 +390,19 @@ run = function(learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd)
     else
       poll_ms = 1000
     end
+    gc.guard()
     libc.poll(pfds, nfds, poll_ms)
+    if poll_ms >= 1000 then
+      local idle = true
+      for i = 0, nfds - 1 do
+        if pfds[i].revents ~= 0 then
+          idle = false
+        end
+      end
+      if idle then
+        gc.idle()
+      end
+    end
     if bit.band(pfds[0].revents, POLLIN) ~= 0 then
       while true do
         local n = libc.read(learn_rfd, learn_buf, msg_size)

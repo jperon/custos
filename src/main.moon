@@ -53,12 +53,20 @@ filter = require "filter"
 pidfile = require "lib.pidfile"
 metrics = require "metrics"
 
--- Réglage GC LuaJIT économe (machines à faible RAM). Appliqué dans le
--- superviseur ; hérité par tous les workers forkés ensuite.
+-- Réglage GC LuaJIT (machines à faible RAM) : appliqué dans le superviseur
+-- AVANT tout fork (hérité par COW), puis rappelé au démarrage de chaque worker
+-- par lib.gc_tune.shared!.apply! (nfq_loop / boucles de tubes).
 do
-  gc_cfg = config.runtime or {}
-  collectgarbage "setpause", gc_cfg.gc_pause if gc_cfg.gc_pause
-  collectgarbage "setstepmul", gc_cfg.gc_stepmul if gc_cfg.gc_stepmul
+  gc_state = require("lib.gc_tune").shared!
+  gc_state.apply!
+  log_info -> {
+    action: "gc_tuning"
+    pause: gc_state.values.pause
+    stepmul: gc_state.values.stepmul
+    idle_step: gc_state.values.idle_step
+    max_heap_mb: gc_state.values.max_heap_mb
+  }
+
 nft_extra = require "nft_extra_rules"
 lowmem = require "lib.lowmem"
 { :plan_optional_workers } = require "lib.worker_plan"

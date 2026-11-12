@@ -193,6 +193,30 @@ describe "nfq_loop.run_queue ENOBUFS/EINTR", ->
     assert.equals 2, read_idx
     assert.same { 10 }, handled
 
+  it "applique le GC au démarrage, garde-fou à chaque tour, pas sur timeout", ->
+    poll_script = {
+      { rv: 0 }    -- timeout : file vide → pas de GC
+      { rv: 1 }    -- paquet prêt
+      { rv: 1 }    -- prêt pour la lecture suivante (EOF)
+    }
+    reads = { { rv: 10 }, { rv: 0 } }
+    calls = {}
+    fake_gc = {
+      apply: -> calls[#calls + 1] = "apply"
+      guard: -> calls[#calls + 1] = "guard"
+      idle: -> calls[#calls + 1] = "idle"
+    }
+    nfq.run_queue 0, (-> 1), { idle_ms: 10, gc: fake_gc }
+    assert.equals "apply", calls[1]
+    n_apply, n_guard, n_idle = 0, 0, 0
+    for c in *calls
+      n_apply += 1 if c == "apply"
+      n_guard += 1 if c == "guard"
+      n_idle += 1 if c == "idle"
+    assert.equals 1, n_apply
+    assert.equals 3, n_guard
+    assert.equals 1, n_idle
+
   it "erreur de lecture autre que EINTR/ENOBUFS → sortie (flush final du lot)", ->
     batch = {}
     reads = { { rv: -1, errno: 5 } }   -- EIO

@@ -346,6 +346,10 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   set_action_prefix "events_"
   os.execute "mkdir -p '#{events_dir}'"
 
+  -- Réglage GC du worker (pause/stepmul/plafond tas/idle_step).
+  gc = require("lib.gc_tune").shared!
+  gc.apply!
+
   sfd = create_signal_fd!
 
   pfds = ffi.new "struct pollfd[2]"
@@ -370,6 +374,9 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
   cleanup_old events_dir, max_age_hours, min_free_pct
 
   while true
+    -- Garde-fou mémoire (au plus 1 lecture de tas/s) ; pause/stepmul ont été
+    -- appliqués au démarrage du worker.
+    gc.guard!
     libc.poll pfds, 2, POLL_TIMEOUT
 
     -- Priorité au signal SIGTERM : flush propre puis sortie immédiate
@@ -404,6 +411,10 @@ run = (events_rfd, events_dir, max_age_hours, min_free_pct) ->
         if verdict_touched and now - last_verdicts_write >= VERDICTS_MIN_INTERVAL
           flush_verdicts verdicts, events_dir
           last_verdicts_write = now
+
+    -- Tube vide (timeout poll ou réveil par signal) : pas de GC borné sur
+    -- temps mort, sans attendre le prochain événement DNS.
+    gc.idle! if bit.band(pfds[0].revents, POLLIN) == 0
 
     -- Détection du changement d'heure après chaque retour de poll
     new_hour = current_hour!

@@ -206,12 +206,13 @@ DEFAULTS = {
   runtime: {
     log_level: "INFO"
     benchmark: false
-    -- Réglage GC LuaJIT (machines à faible RAM). gc_pause=110 collecte dès
-    -- +10 % du tas (défaut LuaJIT 200) ; gc_stepmul=400 fait des pas de GC
-    -- plus gros. Voir doc/CONFIG.md.
-    gc_pause: 110
-    gc_stepmul: 400
   }
+
+  -- Réglage du GC LuaJIT par worker (machines à RAM limitée). Les défauts
+  -- vivent dans src/lib/gc_tune.moon (DEFAULTS) pour être partagés avec la
+  -- validation ; la section est construite par normalize ci-dessous. Voir
+  -- doc/CONFIG.md § « gc ». Les anciennes clés runtime.gc_pause/gc_stepmul
+  -- restent lues en repli (compatibilité).
 
   nfqueue: {
     questions: "0-1"
@@ -745,9 +746,26 @@ normalize = (cfg) ->
     coerce_boolean cfg.doh.upstream_fallback_insecure
   cfg.doh.upstream_fallback_ca_file = nil if cfg.doh.upstream_fallback_ca_file == ""
   cfg.runtime.benchmark = coerce_boolean cfg.runtime.benchmark
-  runtime_defaults = defaults.runtime or {}
-  cfg.runtime.gc_pause = tonumber(cfg.runtime.gc_pause) or runtime_defaults.gc_pause
-  cfg.runtime.gc_stepmul = tonumber(cfg.runtime.gc_stepmul) or runtime_defaults.gc_stepmul
+  -- Réglage GC : nouvelle section `gc`, avec repli sur les anciennes clés
+  -- runtime.gc_pause/gc_stepmul (compatibilité des configurations existantes).
+  -- Chaque valeur est validée par lib.gc_tune (entier dans les bornes) ; une
+  -- valeur rejetée reprend le défaut et produit un warn gc_invalid.
+  gc_tune = require "lib.gc_tune"
+  cfg.gc = cfg.gc or {}
+  raw_gc = {}
+  for k, v in pairs cfg.gc
+    raw_gc[k] = v
+  if raw_gc.pause == nil
+    raw_gc.pause = cfg.runtime.gc_pause
+  if raw_gc.stepmul == nil
+    raw_gc.stepmul = cfg.runtime.gc_stepmul
+  cfg.gc, gc_invalid = gc_tune.normalize raw_gc
+  for key in *gc_invalid
+    config_warn {
+      action: "gc_invalid"
+      key: key
+      configured: tostring raw_gc[key]
+    }
 
   if cfg.filter.decision.first_match_wins == nil
     cfg.filter.decision.first_match_wins = decision_defaults.first_match_wins

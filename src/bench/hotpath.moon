@@ -32,6 +32,7 @@
 -- Sorties : `tmp/prof/hotpath.md` (+ synthèse sur stdout).
 
 ffi = require "ffi"
+gc_tune = require "lib.gc_tune"
 { :s2ip } = require "ipparse.l3.ip"
 sp = require("ipparse.lib.pack_compat").pack
 
@@ -371,10 +372,15 @@ setup = (opts={}) ->
   config = apply_config!
   install_stubs!
 
-  if config.runtime.gc_pause
-    collectgarbage "setpause", config.runtime.gc_pause
-  if config.runtime.gc_stepmul
-    collectgarbage "setstepmul", config.runtime.gc_stepmul
+  -- Réglage GC du banc : surcharge éventuelle par les options CLI puis
+  -- application (setpause/setstepmul) via le module de production. Les
+  -- mesures « tas max » de run_case comparent donc les configurations.
+  config.gc = config.gc or {}
+  for key in *{"pause", "stepmul", "idle_step", "max_heap_mb"}
+    override = opts["gc_" .. key]
+    config.gc[key] = override if override != nil
+  gc_state = gc_tune.new config.gc
+  gc_state.apply!
 
   write_sessions_file!
 
@@ -458,6 +464,7 @@ setup = (opts={}) ->
     :set_payload
     :pkt_question, :pkt_question_vpn, :pkt_resp_a, :pkt_resp_b, :pkt_resp_vpn
     :msg_tls, :msg_vpn, :ipc_line
+    :gc_state
     on_idle_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle
     on_idle_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle
     handle_question: run_queue_calls[1].callback
@@ -581,11 +588,13 @@ build_cases = (s) ->
 -- @treturn number Durée du lot le plus rapide (secondes) : la machine partage
 --         ses cœurs avec d'autres processus, le minimum par lot est la seule
 --         mesure stable d'un coût par paquet (le total, lui, est bruyant).
+-- @treturn number Tas maximum observé (Kio, collectgarbage "count" après lot).
 run_case = (c, iters, chunk) ->
   rets = {}
   v0 = verdicts
   total = 0
   min_block = nil
+  heap_max = collectgarbage "count"
   blocks = math.ceil iters / chunk
   for b = 1, blocks
     n = math.min chunk, iters - (b - 1) * chunk
@@ -602,7 +611,9 @@ run_case = (c, iters, chunk) ->
     if n == chunk and (min_block == nil or dt < min_block)
       min_block = dt
     c.drain! if c.drain
-  total, rets, verdicts - v0, min_block
+    heap = collectgarbage "count"
+    heap_max = heap if heap > heap_max
+  total, rets, verdicts - v0, min_block, heap_max
 
 --- Mesure l'allocation brute (octets/paquet) avec le GC arrêté.
 -- @tparam table  c     Cas.
@@ -682,6 +693,10 @@ parse_args = (argv) ->
     jit_v: nil
     jit_dump: nil
     jit_dump_mode: "t"
+    gc_pause: nil
+    gc_stepmul: nil
+    gc_idle_step: nil
+    gc_max_heap_mb: nil
   }
   i = 1
   next_val = ->
@@ -700,6 +715,10 @@ parse_args = (argv) ->
       when "--jit-v" then o.jit_v = next_val!
       when "--jit-dump" then o.jit_dump = next_val!
       when "--jit-dump-mode" then o.jit_dump_mode = next_val!
+      when "--gc-pause" then o.gc_pause = tonumber next_val!
+      when "--gc-stepmul" then o.gc_stepmul = tonumber next_val!
+      when "--gc-idle-step" then o.gc_idle_step = tonumber next_val!
+      when "--gc-max-heap" then o.gc_max_heap_mb = tonumber next_val!
     i += 1
   o
 
@@ -733,8 +752,8 @@ render_results = (lines, results, o) ->
   lines[#lines + 1] = ""
   lines[#lines + 1] = "## Mesures (os.clock, GC actif, lots de #{o.chunk}, minimum de #{o.repeat} passages)"
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "| cas | iters | paquets | temps (s) | µs/paquet | µs/paquet (lot min) | µs/cycle | octets/paq (GC arrêté) | retours | verdicts/paq |"
-  lines[#lines + 1] = "|---|---|---|---|---|---|---|---|---|---|"
+  lines[#lines + 1] = "| cas | iters | paquets | temps (s) | µs/paquet | µs/paquet (lot min) | µs/cycle | octets/paq (GC arrêté) | tas max (Kio) | retours | verdicts/paq |"
+  lines[#lines + 1] = "|---|---|---|---|---|---|---|---|---|---|---|"
   for r in *results
     pkts = r.iters * r.pkts
     cycle = if r.pkts > 1 then string.format("%.1f", r.secs * 1e6 / r.iters) else "—"
@@ -743,9 +762,9 @@ render_results = (lines, results, o) ->
     else
       "—"
     lines[#lines + 1] = string.format(
-      "| %s | %d | %d | %.3f | %.1f | %s | %s | %.0f | `%s` | %s |",
+      "| %s | %d | %d | %.3f | %.1f | %s | %s | %.0f | %.0f | `%s` | %s |",
       r.name, r.iters, pkts, r.secs, r.secs * 1e6 / pkts,
-      min_us, cycle, r.alloc, render_rets(r.rets), render_verdicts(r)
+      min_us, cycle, r.alloc, r.heap_max or 0, render_rets(r.rets), render_verdicts(r)
     )
   nil
 
@@ -815,17 +834,19 @@ main = (argv) ->
     -- cœurs avec d'autres processus, la médiane serait contaminée).
     run_case c, o.warmup, o.chunk if o.warmup > 0
     best, best_rets, best_v, best_min = nil, nil, nil, nil
+    heap_peak = 0
     for rep = 1, math.max(1, o.repeat)
-      secs, rets, v, min_block = run_case c, o.iters, o.chunk
+      secs, rets, v, min_block, heap_max = run_case c, o.iters, o.chunk
       if best == nil or secs < best
         best, best_rets, best_v = secs, rets, v
       if min_block and (best_min == nil or min_block < best_min)
         best_min = min_block
+      heap_peak = heap_max if heap_max and heap_max > heap_peak
     alloc = measure_alloc c, math.min(o.iters, 20000)
     results[#results + 1] = {
       name: c.name, pkts: c.pkts, iters: o.iters, repeat: math.max(1, o.repeat)
       secs: best, rets: best_rets, verdicts: best_v, :alloc
-      min_block: best_min
+      min_block: best_min, heap_max: heap_peak
     }
 
   profiles = {}
@@ -857,6 +878,10 @@ main = (argv) ->
   lines[#lines + 1] = ""
   lines[#lines + 1] = "- LuaJIT #{jit.version} / #{jit.arch} / #{jit.os}"
   lines[#lines + 1] = "- iters=#{o.iters}, repeat=#{o.repeat} (minimum retenu), chunk=#{o.chunk}, warmup=#{o.warmup}, profilage=#{o.profile or "aucun"} (#{o.duration} s)"
+  lines[#lines + 1] = string.format(
+    "- GC : pause=%d, stepmul=%d, idle_step=%d, max_heap_mb=%d (surcharges CLI appliquées dans setup)",
+    s.gc_state.values.pause, s.gc_state.values.stepmul,
+    s.gc_state.values.idle_step, s.gc_state.values.max_heap_mb)
   lines[#lines + 1] = "- paquet question : #{#s.pkt_question} o ; réponse A (8 A) : #{#s.pkt_resp_a} o ; réponse B : #{#s.pkt_resp_b} o"
   lines[#lines + 1] = "- duplication émise (stub raw_send) : #{dup_sent} ; verdicts posés (stub libnfq) : #{verdicts}"
   render_results lines, results, o

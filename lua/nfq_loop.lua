@@ -7,6 +7,7 @@ local config = require("config")
 local nfq_rcvbuf = require("lib.nfq_rcvbuf")
 local nfq_maxlen = require("lib.nfq_maxlen")
 local lowmem = require("lib.lowmem")
+local gc_tune = require("lib.gc_tune")
 local log_info, log_warn, log_error, log_debug, level_enabled
 do
   local _obj_0 = require("log")
@@ -62,6 +63,8 @@ run_queue = function(queue_num, callback, opts)
       queue = queue_num
     }
   end)
+  local gc = (opts and opts.gc) or gc_tune.shared()
+  gc.apply()
   log_debug(function()
     return {
       action = "queue_nfq_open_call",
@@ -219,6 +222,7 @@ run_queue = function(queue_num, callback, opts)
   while true do
     local _continue_0 = false
     repeat
+      gc.guard()
       if pfd then
         if on_idle then
           on_idle()
@@ -231,6 +235,7 @@ run_queue = function(queue_num, callback, opts)
         end
         local pr = libc.poll(pfd, 1 + n_extra, poll_timeout)
         if pr == 0 then
+          gc.idle()
           _continue_0 = true
           break
         elseif pr < 0 then

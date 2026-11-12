@@ -101,7 +101,7 @@ build_section = (schema, prefix, form_data) ->
 -- ── Sections disponibles ──────────────────────────────────────────────────
 
 EDITABLE_SECTIONS = {
-  "runtime", "nfqueue", "dns", "nft", "ipc", "clients",
+  "runtime", "gc", "nfqueue", "dns", "nft", "ipc", "clients",
   "mac_learner", "auth", "doh", "events", "metrics", "rtp"
 }
 

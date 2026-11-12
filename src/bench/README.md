@@ -44,12 +44,17 @@ make bench-hotpath HP_PROFILE=l HP_DURATION=12   # profil jit.profile par ligne
 make bench-hotpath HP_JIT_V=tmp/prof/jitv.txt HP_JIT_DUMP=tmp/prof/jitdump.txt
 make bench-hotpath HP_ONLY=so_cycle HP_ITERS=200000
 make bench-hotpath HP_TASKSET=5             # épingle le banc sur un cœur
+make bench-hotpath HP_ONLY=response HP_EXTRA="--gc-pause 300 --gc-stepmul 400"  # A/B du GC
 ```
 
 Variables : `HP_ITERS`, `HP_CHUNK` (64 = `MAX_BATCH_PKTS`), `HP_WARMUP`,
 `HP_DURATION`, `HP_REPEAT` (passages chronométrés dont on garde le minimum),
 `HP_PROFILE=f|l`, `HP_ONLY=<cas>`, `HP_JIT_V=<fichier>`,
 `HP_JIT_DUMP=<fichier>`, `HP_TASKSET=<cpu>`, `HP_EXTRA` (flags bruts).
+Flags GC (via `HP_EXTRA`) : `--gc-pause`, `--gc-stepmul`, `--gc-idle-step`,
+`--gc-max-heap`. Le rapport porte le réglage appliqué et une colonne
+`tas max (Kio)` (`collectgarbage "count"` relevé après chaque lot), ce qui
+permet de comparer coût par paquet et empreinte entre deux réglages.
 Cas disponibles : `question`, `ipc_drain`, `response`, `so_a`, `so_cycle`,
 `setup_control` (`--list`). Le banc **échoue** (code 1) si le chemin mesuré n'est
 pas celui attendu (mauvais code retour, verdict manquant) : une mesure ne doit

@@ -192,6 +192,7 @@ build_section = function(schema, prefix, form_data)
 end
 local EDITABLE_SECTIONS = {
   "runtime",
+  "gc",
   "nfqueue",
   "dns",
   "nft",
