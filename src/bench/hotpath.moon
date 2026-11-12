@@ -460,6 +460,11 @@ setup = (opts={}) ->
     :msg_tls, :msg_vpn, :ipc_line
     on_idle_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle
     on_idle_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle
+    -- Fin de lot du worker questions : c'est là que la production vide les
+    -- tampons events/learn (cf. docs/agents/perf.md §19). nil quand la version
+    -- mesurée n'a pas de tampon (comparaison avant/après).
+    on_batch_end_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_batch_end
+    on_batch_end_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_batch_end
     handle_question: run_queue_calls[1].callback
     handle_response: run_queue_calls[2].callback
   }
@@ -498,6 +503,9 @@ build_cases = (s) ->
         s.on_idle_q! if s.on_idle_q
         s.set_payload s.pkt_question
       steps: { (i) -> s.handle_question nil, nil, i }
+      -- Fin de lot NFQUEUE : vidage des tampons events/learn comme en production
+      -- (no-op pour une version sans tampon, ce qui rend l'avant/après comparable).
+      finish: -> s.on_batch_end_q! if s.on_batch_end_q
       drain: drain_all
     }
     {

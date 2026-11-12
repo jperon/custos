@@ -449,6 +449,8 @@ setup = function(opts)
     ipc_line = ipc_line,
     on_idle_q = run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle,
     on_idle_r = run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle,
+    on_batch_end_q = run_queue_calls[1].opts and run_queue_calls[1].opts.on_batch_end,
+    on_batch_end_r = run_queue_calls[2].opts and run_queue_calls[2].opts.on_batch_end,
     handle_question = run_queue_calls[1].callback,
     handle_response = run_queue_calls[2].callback
   }
@@ -492,6 +494,11 @@ build_cases = function(s)
           return s.handle_question(nil, nil, i)
         end
       },
+      finish = function()
+        if s.on_batch_end_q then
+          return s.on_batch_end_q()
+        end
+      end,
       drain = drain_all
     },
     {
