@@ -146,7 +146,7 @@ RL_VOLATILE_KEYS = {
   "skipped"
   "sock", "sockets", "sport", "src_port", "timeout"
   "timeout_ms", "total", "total_rules", "ts", "ttl", "ttl_s"
-  "txid", "upstream_retries", "userlists", "users", "worker_only"
+  "txid", "upstream_retries", "userlists", "users", "worker_only", "written"
 }
 
 -- Ensembles d'appartenance pour le test garde-fou (et pour la résolution

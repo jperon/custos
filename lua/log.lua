@@ -333,7 +333,8 @@ local RL_VOLATILE_KEYS = {
   "upstream_retries",
   "userlists",
   "users",
-  "worker_only"
+  "worker_only",
+  "written"
 }
 local RL_IDENTITY_SET = { }
 for _index_0 = 1, #RL_IDENTITY_KEYS do
