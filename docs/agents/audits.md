@@ -2545,7 +2545,7 @@ par configuration, défaut = 1 worker, aucune régression à 1 worker.
   **par CPU** : il ne devait pas être ajouté. Le template n'en avait pas
   (`nft-rules/dns-filter-bridge.nft:189-190`) ; la sortie de `nft` pour
   `queue num 4-5` a été vérifiée dans un espace de noms réseau isolé (nft 1.1.6).
-- État par processus de `worker_responses` : `pending` (`ipc.moon:293-522`) et
+- État par processus de `worker_responses` : `pending` (`ipc.moon:310-543`) et
   `mac_clients`/`ip_to_mac` étaient alimentés depuis **un seul** pipe partagé :
   avec plusieurs files, une entrée n'était lue que par un worker et la réponse
   livrée à un autre était jetée (`NF_DROP`, `response_orphan_dropped`). C'est
