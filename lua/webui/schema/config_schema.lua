@@ -80,6 +80,12 @@ return {
       label = "Trafic SIP/STUN",
       hint = "n° de file, ex: 12",
       default = "12"
+    },
+    rcvbuf = {
+      type = "integer",
+      label = "Tampon netlink (octets)",
+      hint = "0 = auto (4 Mio ; 512 Kio en RAM faible)",
+      default = 0
     }
   },
   dns = {

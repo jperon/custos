@@ -3226,3 +3226,67 @@ le temps CPU).
 "make all && make check && make test"` : **3045 succès / 0 échec / 0 erreur /
 0 pending** (sortie `tmp/test.log`). Les `tests/**/*_spec.lua` générés sont
 ignorés par git (`.gitignore:38`) : seul le `.moon` du spec est versionné.
+
+### Tampon de réception netlink des files NFQUEUE (branche d-rcvbuf)
+
+Suite du goulot mesuré en `d-bench4` (`perf.md` §13.5) : à 700 `mixed` et
+800 `up`, la perte (24,1 %) est portée uniquement par
+`queue_user_dropped` sur les files réponses, alors que les workers réponses ne
+sont qu'à 46-49 % d'un vCPU. `libnetfilter_queue` ne pose aucun
+`setsockopt(SO_RCVBUF)` : le socket garde `net.core.rmem_default` (~208 Ko) et
+les rafales du résolveur débordent.
+
+- **Correctif.** Nouveau module `src/lib/nfq_rcvbuf.moon` (valeur demandée,
+  `setsockopt(SO_RCVBUF)`, relecture `getsockopt`, repli
+  `setsockopt(SO_RCVBUFFORCE)` si la valeur obtenue est bornée par
+  `net.core.rmem_max`, logs INFO/WARN), appelé dans `run_queue`
+  (`src/nfq_loop.moon:75-82`) **avant** `nfq_create_queue`. Clé
+  `nfqueue.rcvbuf` (octets) : défaut 4 Mio, 512 Kio en mode `runtime.lowmem` ;
+  absente/nulle/illisible = défaut du profil.
+- **`NETLINK_NO_ENOBUFS` non activé** : l'option masquerait la perte au lieu de
+  la traiter ; `user_dropped` et `queue_read_enobufs` restent les signaux du
+  goulot. Choix documenté dans `doc/CONFIG.md` §3 et `perf.md` §14.
+- **Déclaration FFI manquante.** `getsockopt` n'était pas dans le bloc cdef
+  libc de `src/ffi_defs.moon` (seul `setsockopt` y figurait) : ajout de la
+  déclaration, sans quoi la relecture de la valeur effective est impossible.
+- **Tests.** `tests/unit/lib/nfq_rcvbuf_spec.moon` : valeur config/profil
+  (dont lowmem), valeur obtenue, repli FORCE accepté/refusé (EPERM), échec
+  `setsockopt(SO_RCVBUF)` (errno), absence de l'API socket dans un stub, logs
+  INFO/WARN (`queue_rcvbuf`, `queue_rcvbuf_below_requested`,
+  `queue_rcvbuf_failed`). Varargs/cdata : la valeur est passée via
+  `ffi.new "int[1]"` et `socklen_t` casté par FFI, pas de vararg LuaJIT.
+- **Documentation.** `doc/CONFIG.md` §3 (clé + note), schéma webui
+  `nfqueue.rcvbuf`, `perf.md` §3.3 (correctif) et §14 (mécanisme, réglage,
+  portée), présente section.
+
+**Non fait.** Aucune mesure de charge après correctif (pas d'accès au homelab,
+pas d'e2e) : les paliers 700/800 de `perf.md` §13.3 restent à rejouer pour
+constater la disparition de `queue_user_dropped` et de la perte client.
+
+### Sémantique de relecture `SO_RCVBUF` corrigée (branche d-rcvbuf)
+
+- **Problème.** `getsockopt(SO_RCVBUF)` renvoie le **double** de la taille
+  réellement accordée (man 7 socket). Les comparaisons `res.obtained <
+  requested` de `src/lib/nfq_rcvbuf.moon` (décision `SO_RCVBUFFORCE` dans
+  `apply_rcvbuf`, WARN dans `configure`) portaient donc sur une valeur doublée :
+  avec `net.core.rmem_max` = 3 Mio et 4 Mio demandés, `obtained` valait 6 Mio,
+  donc ni FORCE ni WARN, alors que la taille effective n'était que 3 Mio.
+- **Correctif.** `read_back` (`src/lib/nfq_rcvbuf.moon:60-72`) divise la
+  relecture par deux et documente la taille **effective** ; les comparaisons
+  (`:96`, `:100`, `:131`) et le champ `obtained` des logs INFO/WARN portent sur
+  cette valeur effective (moitié du brut noyau). En-tête du module et docstring
+  de `configure` précisent la sémantique ; aucun nouveau champ de log (donc
+  aucune modification de `src/log.moon`).
+- **Tests.** `tests/unit/lib/nfq_rcvbuf_spec.moon` : le stub `getsockopt`
+  fournit désormais les valeurs brutes doublées. Cas ajouté « rmem_max =
+  3 Mio » pour `apply_rcvbuf` (FORCE déclenché, relecture à 2 × 4 Mio) et pour
+  `configure` (FORCE refusé → INFO `obtained` = 3 Mio puis WARN
+  `queue_rcvbuf_below_requested`). 15 cas dans le spec.
+- **Documentation.** `doc/CONFIG.md` §3 (note `nfqueue.rcvbuf`) et
+  `docs/agents/perf.md` §14.2 (séquence et journalisation).
+- **Vérification.** `nix develop --command bash -c "make all && make check &&
+  make test"` : **3058 succès / 0 échec / 0 erreur / 0 pending**, tests JS
+  12/12 (sortie `tmp/test.log`).
+
+**Non fait.** Aucune vérification sur un noyau réel avec `rmem_max` réduit
+(pas de ssh, pas d'e2e) : le cas est couvert par le stub `getsockopt`.

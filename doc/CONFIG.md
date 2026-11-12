@@ -336,6 +336,28 @@ Linux : une plage `"14-15"` fork donc **deux** workers réponses.
 | `sni` | string | `"6"` | Verdict SNI TLS/QUIC (443) |
 | `sip` | string | `"12"` | Trafic SIP/VoIP |
 | `doh_vlan` | string | `"13"` | Détection VLAN des clients DoH (worker `worker_doh_vlan`, optionnel : seulement si `doh.enabled`). Renseigne `req.vlan` en DoH pour `from_vlan`. |
+| `rcvbuf` | integer | auto (4 Mio, 512 Kio en RAM faible) | Taille du tampon de réception netlink de **chaque** socket NFQUEUE, en octets (voir note). |
+
+> **Tampon de réception netlink (`nfqueue.rcvbuf`).** libnetfilter_queue crée
+> son socket netlink sans `setsockopt(SO_RCVBUF)` : le défaut noyau
+> (`net.core.rmem_default`, ~208 Ko) suffit au trafic régulier mais déborde
+> quand le résolveur répond par rafales — le noyau jette alors les paquets et
+> incrémente `queue_user_dropped` (colonne 7 de
+> `/proc/net/netfilter/nfnetlink_queue`, cf. `docs/agents/perf.md` §5 et
+> §13.5). Chaque file reçoit donc une demande de `rcvbuf` octets (défaut
+> **4 Mio**, **512 Kio** quand `runtime.lowmem` est actif ; `0` ou une valeur
+> absente/illisible = défaut du profil). Le noyau borne la demande par
+> `net.core.rmem_max` puis stocke le **double** de la valeur accordée ;
+> `getsockopt(SO_RCVBUF)` renvoie ce double (man 7 socket), que Custos divise
+> par deux : la taille effective est journalisée en INFO (`action=queue_rcvbuf`,
+> champs `requested`, `obtained` — effective, en octets — et `forced`). Si
+> `obtained` reste inférieur à la demande, Custos tente `SO_RCVBUFFORCE`
+> (contourne `rmem_max`, exige `CAP_NET_ADMIN` :
+> root) ; sans cette capacité la valeur bornée est conservée et un WARN
+> `queue_rcvbuf_below_requested` est émis. Une erreur de `setsockopt` produit
+> le WARN `queue_rcvbuf_failed` (avec `errno`) sans empêcher la file de
+> démarrer. `NETLINK_NO_ENOBUFS` n'est **pas** activé : il ferait taire
+> l'erreur ENOBUFS au lieu de la traiter, en masquant la perte.
 
 **Répartition multi-workers.** Une plage (ex. `"0-1"` ou `"14-15"`) fait répartir
 les paquets par le noyau, **par flux** : `queue num N-M` hache le couple
@@ -385,6 +407,7 @@ nfqueue: {
   sni:       "6"
   sip:       "12"
   doh_vlan:  "13"
+  -- rcvbuf: 4194304  -- octets ; absent = auto (4 Mio, 512 Kio en RAM faible)
 }
 ```
 

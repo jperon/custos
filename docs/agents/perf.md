@@ -108,13 +108,21 @@ Mesures :
 ### 3.3 Tampon de réception netlink trop petit / absence de `NETLINK_NO_ENOBUFS` — **RÉFUTÉE comme cause racine**
 
 - Aucun `setsockopt(SO_RCVBUF)` ni `NETLINK_NO_ENOBUFS` dans le binding
-  (`src/nfq_loop.moon:92-127`) : le socket garde le défaut noyau
-  (`rmem_default` = 212 992 o, soit ~140 paquets de 1,5 Ko).
+  (`src/nfq_loop.moon:92-127` avant la branche `d-rcvbuf`) : le socket garde le
+  défaut noyau (`rmem_default` = 212 992 o, soit ~140 paquets de 1,5 Ko).
 - `queuedropped` (colonne 6) = **0** sur toutes les files à tous les paliers :
   la file nft (`maxlen` par défaut) ne déborde pas.
-- Le tampon n'est pas « trop petit » en soi : il se remplit **parce que** le
-  worker ne lit pas pendant l'attente d'ACK (§3.1). L'agrandir masquerait la
-  perte en augmentant la latence ; ce n'est pas le correctif retenu.
+- Le tampon n'est pas « trop petit » **à ces paliers** : il se remplit
+  **parce que** le worker ne lit pas pendant l'attente d'ACK (§3.1). L'agrandir
+  seul n'aurait pas corrigé le plafond de §3 ; ce n'est donc pas le correctif
+  retenu à l'époque.
+- **Depuis la branche `d-rcvbuf`** (2026-11-12), le tampon est réglé
+  explicitement avant `nfq_create_queue` (`src/nfq_loop.moon:75-82`,
+  `src/lib/nfq_rcvbuf.moon`) : `nfqueue.rcvbuf` (défaut 4 Mio, 512 Kio en RAM
+  faible), relecture `getsockopt` et repli `SO_RCVBUFFORCE`. Cette correction
+  vise le goulot **distinct** mesuré à 700-800 q/s en §13.5 (rafales du
+  résolveur sur les files réponses), pas le plafond à 200-500 q/s analysé ici.
+  `NETLINK_NO_ENOBUFS` reste volontairement inactif (il masquerait la perte).
 
 ### 3.4 Journalisation synchrone — **RÉFUTÉE**
 
@@ -1029,7 +1037,7 @@ rupture `resp-q4` 78 %, `dns-q1` 77-83 %, `nft` 60-63 % d'un vCPU chacun.
    (~208 Ko, aucun `setsockopt(SO_RCVBUF)`, cf. §3.3) : les réponses du
    résolveur arrivent par rafales (profondeur qui bondit de ~150 paquets entre
    deux échantillons à 10 Hz) et le noyau jette l'excédent. Le chemin questions,
-   alimenté au rythme régulier du client, ne perd rien.
+   alimenté au rythme régulier du client, ne perd rien. Correctif : §14.
 2. **La machine est néanmoins à 90-95 % occupée** (moyenne fenêtre :
    user 60-63 %, sys 27-31 %, softirq 4 %, idle 5-8 %) : le plafond global est
    bien le CPU agrégé des 4 cœurs, mais **aucun worker n'est saturé** — c'est la
@@ -1065,3 +1073,63 @@ par question) réparti sur 4 cœurs dont un est mangé par DoH.
 - Aucun redémarrage, aucune reprise n'a été nécessaire : la sonde unique après
   chaque palier a répondu (`rc=0`), y compris après les paliers à 24 % de perte,
   et les files sont revenues à une profondeur nulle.
+
+## 14. Tampon de réception netlink des files NFQUEUE (2026-11-12, branche `d-rcvbuf`)
+
+Correctif du point de perte identifié §13.5.1. **Aucune mesure de charge n'a été
+refaite** dans cette branche (pas d'accès au homelab, pas d'e2e) : la section
+décrit le mécanisme et le réglage, pas un gain mesuré.
+
+### 14.1 Mécanisme
+
+`libnetfilter_queue` crée son socket netlink dans `nfq_open()` et ne pose aucun
+`setsockopt(SO_RCVBUF)` : la taille de réception reste `net.core.rmem_default`
+(212 992 o sur `custos.lan`, mesuré §3.3). Quand le résolveur répond par
+rafales, `netlink_unicast()` vers le socket du worker réponses échoue tant que
+le tampon est plein ; le noyau jette le paquet et incrémente
+`queue_user_dropped` (colonne 7), pas `queue_dropped` (colonne 6) — d'où la
+perte côté réponses à 700-800 q/s alors que les workers ne sont qu'à 46-49 %
+d'un vCPU. Aucun `SO_RCVBUF` n'est posé par nft ni par le noyau au nom du
+processus : c'est bien le socket userspace qu'il faut dimensionner.
+
+### 14.2 Réglage appliqué
+
+- Nouveau module `src/lib/nfq_rcvbuf.moon`, appelé dans `run_queue` **avant**
+  `nfq_create_queue` (`src/nfq_loop.moon:75-82`) : dès que le handler de file
+  existe, des paquets peuvent être mis en file, donc le tampon est réglé avant.
+- Clé `nfqueue.rcvbuf` (octets, `doc/CONFIG.md` §3). Absente, nulle ou
+  illisible : **4 Mio** (`DEFAULT_RCVBUF`), ou **512 Kio** (`LOWMEM_RCVBUF`)
+  quand `runtime.lowmem` est actif — le mode RAM faible réduit aussi le nombre
+  de workers, mais 4 Mio de tampon noyau par socket y seraient disproportionnés.
+- Séquence : `setsockopt(SO_RCVBUF)` → `getsockopt` (le noyau borne la demande
+  par `net.core.rmem_max` puis renvoie le **double** de la valeur accordée,
+  man 7 socket ; le module divise par deux pour obtenir la taille effective)
+  → si cette taille effective est inférieure à la demande,
+  `setsockopt(SO_RCVBUFFORCE)` (contourne `rmem_max`, exige `CAP_NET_ADMIN`)
+  → nouvelle relecture. Si FORCE échoue (EPERM), la valeur bornée est conservée.
+- Journalisation : INFO `queue_rcvbuf` avec `requested`, `obtained` (taille
+  **effective**, c'est-à-dire la moitié du brut renvoyé par `getsockopt`) et
+  `forced` ; WARN `queue_rcvbuf_below_requested`
+  si `obtained < requested` malgré le repli ; WARN `queue_rcvbuf_failed`
+  (`errno`) si `setsockopt(SO_RCVBUF)` échoue — la file démarre quand même.
+- `NETLINK_NO_ENOBUFS` reste **inactif** : l'option supprime la remontée
+  d'ENOBUFS au lieu de traiter le débordement, ce qui masquerait la perte
+  (`queue_read_enobufs` / `user_dropped` sont les seuls signaux de ce goulot).
+  Le dimensionnement du tampon est la réponse ; l'option ne serait justifiée
+  que si l'on voulait ignorer délibérément la perte, ce qui n'est pas le cas.
+
+### 14.3 Portée et vérification
+
+- Le réglage s'applique à **toutes** les files (`run_queue` est commun aux
+  workers questions/réponses/captive/reject/auth/SNI/SIP/DoH-VLAN). Il est
+  surtout utile aux réponses, mais un tampon plus grand ne coûte que de la
+  mémoire noyau non touchée tant qu'elle n'est pas remplie.
+- Tests unitaires : `tests/unit/lib/nfq_rcvbuf_spec.moon` (valeur demandée
+  config/profil, valeur obtenue, repli FORCE, refus EPERM, échec setsockopt,
+  absence d'API socket, logs INFO/WARN). `make test` couvre aussi le chemin
+  d'appel dans `run_queue` (stub `ffi_defs` du harnais Busted : le module
+  désactive alors silencieusement le réglage, faute de `getsockopt` cdef).
+- **Reste à faire** : rejouer les paliers 700 `mixed` / 800 `up` de §13.3 sur
+  le homelab et vérifier que `queue_user_dropped` retombe à 0 sur q14/q15 et
+  que la perte client disparaît, avec `forced=true` et `obtained` cohérent dans
+  les lignes `queue_rcvbuf` du journal.
