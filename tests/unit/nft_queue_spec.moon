@@ -307,3 +307,155 @@ describe "nft_queue element_spec (regroupement par set)", ->
     q = fresh_nft_queue!
     lines = q.cmd_lines_for "ip4", "10.0.0.1", "1.2.3.4", "r_test", "2m"
     assert.same { "add element bridge dns-filter-bridge r_test_ip4 { 10.0.0.1 . 1.2.3.4 timeout 2m }" }, lines
+
+describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
+  saved_defs = nil
+  saved_timeout = nil
+  errno_box = nil
+  writes = nil
+  sleeps = nil
+
+  fresh_with_libc = (write_fn, sleep_fn) ->
+    errno_box = ffi.new "int[1]"
+    libc = setmetatable {
+      write: write_fn
+      __errno_location: -> errno_box
+      nanosleep: (req, rem) ->
+        sleeps += 1
+        sleep_fn req, rem if sleep_fn
+        0
+    }, { __index: ffi.C }
+    package.loaded["ffi_defs"] = { :ffi, :libc }
+    package.loaded["nft_queue"] = nil
+    dofile "lua/nft_queue.lua"
+
+  setup ->
+    saved_defs = package.loaded["ffi_defs"]
+    saved_timeout = package.loaded["config"].nft.ip_timeout
+
+  teardown ->
+    package.loaded["ffi_defs"] = saved_defs
+    package.loaded["config"].nft.ip_timeout = saved_timeout
+    package.loaded["nft_queue"] = nil
+
+  before_each ->
+    package.loaded["ffi_defs"] = saved_defs
+    writes = 0
+    sleeps = 0
+    errno_box = ffi.new "int[1]"
+
+  it "sans tube de sortie, l'enqueue retourne false", ->
+    q = fresh_nft_queue!
+    assert.is_false q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.is_false q.send_barrier "corr"
+
+  it "une ligne plus grande que PIPE_BUF_SAFE est refusée sans écriture", ->
+    wrote = 0
+    q = fresh_with_libc ((fd, line, len) ->
+      wrote += 1
+      len
+    ), nil
+    q.set_wfd 1
+    ok = q.add_ip4 "10.0.0.1", "1.2.3.4", string.rep("r", 600), "2m"
+    assert.is_false ok
+    assert.equals 0, wrote
+
+  it "une écriture EAGAIN réessaie après sleep puis réussit", ->
+    q = fresh_with_libc ((fd, line, len) ->
+      writes += 1
+      if writes == 1
+        errno_box[0] = 11   -- EAGAIN
+        return -1
+      len
+    ), nil
+    q.set_wfd 1
+    assert.is_true q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.equals 2, writes
+    assert.equals 1, sleeps
+
+  it "une erreur d'écriture non EAGAIN abandonne immédiatement", ->
+    q = fresh_with_libc ((fd, line, len) ->
+      writes += 1
+      errno_box[0] = 5   -- EIO
+      -1
+    ), nil
+    q.set_wfd 1
+    assert.is_false q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.equals 1, writes
+    assert.equals 0, sleeps
+
+  it "EAGAIN sur toutes les tentatives épuise les reprises et retourne false", ->
+    q = fresh_with_libc ((fd, line, len) ->
+      writes += 1
+      errno_box[0] = 11
+      -1
+    ), nil
+    q.set_wfd 1
+    assert.is_false q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m"
+    assert.equals 3, writes
+    assert.equals 3, sleeps
+
+  it "send_barrier écrit une ligne barrier et get_last_seq la consomme", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    assert.is_true q.send_barrier "corr-b"
+    line = read_pipe p[1]
+    assert.truthy line\find "|barrier|", 1, true
+    assert.equals 1, q.get_last_seq!
+    assert.is_nil q.get_last_seq!
+    close_pipe p
+
+  it "get_worker_idx reflète set_ack_rfd", ->
+    q = fresh_nft_queue!
+    assert.is_nil q.get_worker_idx!
+    q.set_ack_rfd 7, 3
+    assert.equals 3, q.get_worker_idx!
+
+  it "enqueue refuse un tuple incomplet (kind/key/ip manquant)", ->
+    q = fresh_nft_queue!
+    q.set_wfd 1
+    assert.is_false q.add_ip4 nil, "1.2.3.4", "r_test", "2m"
+    assert.is_false q.add_ip4 "10.0.0.1", nil, "r_test", "2m"
+
+  it "sanitize_timeout nil/invalide sans repli valide → 2m", ->
+    q = fresh_nft_queue!
+    assert.equals "2m", q.sanitize_timeout nil
+    package.loaded["config"].nft.ip_timeout = "pas-valide"
+    q = fresh_nft_queue!
+    assert.equals "2m", q.sanitize_timeout "encore-invalide"
+
+  it "sanitize_rule_id tronque au-delà de 126 octets", ->
+    q = fresh_nft_queue!
+    assert.equals "", q.sanitize_rule_id nil
+    long = string.rep "a", 200
+    assert.equals 126, #q.sanitize_rule_id long
+
+  it "get_set_name et element_spec couvrent sip6 et auth_ip*", ->
+    q = fresh_nft_queue!
+    assert.equals "sip_peers6", q.get_set_name "sip6", ""
+    assert.equals "r_auth_ip4", q.get_set_name "auth_ip4", "r"
+    assert.equals "r_auth_ip6", q.get_set_name "auth_ip6", "r"
+    spec = q.element_spec "sip6", "2001:db8::1", "_", "", "2m"
+    assert.equals "bridge", spec.family
+    assert.equals "2001:db8::1 timeout 2m", spec.elem
+    spec = q.element_spec "auth_ip6", "2001:db8::2", "_", "r", "2m"
+    assert.equals "r_auth_ip6", spec.set_name
+
+  it "un bloc ACK mixte (complet + fragment) reste non interprété", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    put_ack p[2], 5
+    put_ack_partial p[2], 9, 4
+    q.set_ack_rfd p[1], 0
+    q.drain_ack!
+    assert.equals 0, q.get_last_acked!
+    close_pipe p
+
+  it "tube ACK fermé : wait_ack échoue sans boucler sur POLLHUP", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_ack_rfd p[1], 0
+    ffi.C.close p[2]   -- plus aucun écrivain
+    assert.is_false q.wait_ack 1, "corr"
+    ffi.C.close p[1]

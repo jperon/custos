@@ -23,9 +23,12 @@ O_NONBLOCK = 2048
 -- toucher au noyau ni dépendre de libnftables (stubbée à {} dans busted_setup).
 nft_calls = {}
 nft_fail_first = false
+nft_fail_all = false
 nft_mock = {
   run_cmd: (cmd, opts) ->
     nft_calls[#nft_calls + 1] = cmd
+    if nft_fail_all
+      return false, "syntax error"
     if nft_fail_first and #nft_calls == 1
       return false, "syntax error"
     true, nil
@@ -47,6 +50,7 @@ describe "worker_nft helpers", ->
   before_each ->
     nft_calls = {}
     nft_fail_first = false
+    nft_fail_all = false
     wnft = fresh_worker_nft!
 
   -- ── parse_line ──────────────────────────────────────────────────────────────
@@ -294,3 +298,108 @@ describe "worker_nft helpers", ->
       assert.equals 64, tonumber a1[0]
       assert.equals 8, tonumber n2
       assert.equals 65, tonumber a2[0]
+
+describe "worker_nft branches d'erreur et build_batch", ->
+  local wnft
+  before_each ->
+    nft_calls = {}
+    nft_fail_first = false
+    nft_fail_all = false
+    wnft = fresh_worker_nft!
+
+  it "parse_line valide chaque type de tuple", ->
+    hex = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+    rid = hex "r_test"
+    lines = {
+      "v1|ip6|2001:db8::1|2001:db8::2|#{rid}|2m|1|0|"
+      "v1|mac4|d8:d3:85:63:6b:27|1.2.3.4|#{rid}|2m|1|0|"
+      "v1|mac6|d8:d3:85:63:6b:27|2001:db8::2|#{rid}|2m|1|0|"
+      "v1|sip4|1.2.3.4|1.2.3.4|#{rid}|2m|1|0|"
+      "v1|sip6|2001:db8::1|_|#{rid}|2m|1|0|"
+    }
+    for line in *lines
+      item, err = wnft.parse_line line
+      assert.is_nil err, "ligne refusée : #{line}"
+      assert.is_table item
+
+  it "parse_line refuse kind inconnu, hex invalide et worker_idx absent", ->
+    item, err = wnft.parse_line "v1|inconnu|a|b||2m|1|0|"
+    assert.is_nil item
+    assert.equals "tuple", err
+    item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4|zz|2m|1|0|"
+    assert.is_nil item
+    assert.truthy err\match "^rule_id_"
+    item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4||2m|1|xx|"
+    assert.is_nil item
+    assert.equals "worker_idx", err
+    item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4||2m|1|0|zz"
+    assert.is_nil item
+    assert.truthy err\match "^corr_"
+
+  it "build_batch : pending vide → aucune commande", ->
+    batch = wnft.build_batch {}
+    assert.equals 0, batch.count
+    assert.equals 0, #batch.cmds
+    assert.equals 0, #batch.singles
+
+  it "build_batch : regroupe par set et ignore les éléments non nommables", ->
+    pending = {}
+    wnft.try_add_pending pending, { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_a" }
+    wnft.try_add_pending pending, { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.5", timeout: "2m", rule_id: "r_a" }
+    wnft.try_add_pending pending, { kind: "mac4", key: "d8:d3:85:63:6b:27", ip: "1.2.3.4", timeout: "2m", rule_id: "r_b" }
+    pending["invalide"] = { kind: "inconnu", key: "a", ip: "b", timeout: "2m", rule_id: "r_a" }
+    batch = wnft.build_batch pending
+    assert.equals 3, batch.count
+    assert.equals 2, #batch.cmds
+    assert.equals 3, #batch.singles
+
+  it "send_ack ignore un worker_idx négatif (pas de fd destinataire)", ->
+    wnft.flush_batch {}, { { widx: -1, seq: 2 } }, {}
+    assert.equals 0, #nft_calls
+
+  it "un échec des reprises élément par élément est journalisé", ->
+    nft_fail_all = true
+    pending = {}
+    wnft.try_add_pending pending, { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "r_test" }
+    wnft.try_add_pending pending, { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.5", timeout: "2m", rule_id: "r_test" }
+    wnft.flush_batch pending, {}, {}
+    -- 1 commande groupée + 2 replis, tous en échec.
+    assert.equals 3, #nft_calls
+
+  it "flush_batch journalise la branche DEBUG rule_11 sans erreur", ->
+    stub = {
+      log_info: -> nil
+      log_warn: -> nil
+      log_debug: -> nil
+      set_action_prefix: -> nil
+      level_enabled: -> true
+    }
+    saved = package.loaded["log"]
+    package.loaded["log"] = stub
+    package.loaded["worker_nft"] = nil
+    w = dofile "lua/worker_nft.lua"
+    pending = {}
+    w.try_add_pending pending, { kind: "ip4", key: "10.0.0.1", ip: "1.2.3.4", timeout: "2m", rule_id: "rule_11" }
+    w.flush_batch pending, {}, {}
+    package.loaded["log"] = saved
+    assert.equals 1, #nft_calls
+
+  it "run ignore les lignes vides et journalise une ligne invalide", ->
+    inp = ffi.new "int[2]"
+    assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+    data = "\n\nv1|inconnu|a|b||2m|1|0|\n"
+    libc.write inp[1], data, #data
+    libc.close inp[1]
+    assert.is_nil wnft.run inp[0], {}
+    libc.close inp[0]
+    assert.equals 0, #nft_calls
+
+  it "run vide un fragment géant sans newline au lieu de le laisser croître", ->
+    inp = ffi.new "int[2]"
+    assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+    data = string.rep "x", 5000
+    libc.write inp[1], data, #data
+    libc.close inp[1]
+    assert.is_nil wnft.run inp[0], {}
+    libc.close inp[0]
+    assert.equals 0, #nft_calls

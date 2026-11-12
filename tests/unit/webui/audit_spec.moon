@@ -92,6 +92,18 @@ describe "webui/audit", ->
     assert.is_nil lines[1]\find(secret, 1, true)
     assert.truthy lines[1]\find("section=auth", 1, true)
 
+  it "conserve les métadonnées autorisées numériques (pid)", ->
+    audit.change make_req!, "webui_reload_requested", { pid: 4242 }
+    assert.equals 1, #lines
+    assert.truthy lines[1]\find("pid=4242", 1, true)
+
+  it "req absente → user=? et peer=unknown (jamais nil)", ->
+    audit.refused nil, "forbidden"
+    warns = only_lines "WARN"
+    assert.equals 1, #warns
+    assert.truthy warns[1]\find("user=?", 1, true)
+    assert.truthy warns[1]\find("peer=unknown", 1, true)
+
   it "assainit un code d'erreur (pas de saut de ligne ni d'espace)", ->
     audit.fail make_req!, "webui_list_saved", { list: "domain" }, "bad value\ncode"
     assert.equals 1, #lines

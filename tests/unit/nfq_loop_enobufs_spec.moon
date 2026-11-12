@@ -31,6 +31,15 @@ handled = {}
 destroyed = 0
 closed = 0
 idle_calls = 0
+-- Callback C : nfq_create_queue en conserve une référence, nfq_handle_packet
+-- l'invoque quand invoke_cb est vrai (sinon le wrapper C n'est jamais exercé).
+captured_cb = nil
+invoke_cb = false
+open_fails = false
+create_queue_fails = false
+verdict_calls = {}
+pcall ffi.cdef, "typedef struct { uint32_t packet_id; } nfqnl_msg_packet_hdr;"
+fake_hdr = ffi.new "nfqnl_msg_packet_hdr"
 
 package.loaded["ffi_defs"] = {
   :ffi
@@ -46,16 +55,27 @@ package.loaded["ffi_defs"] = {
       r = poll_script[poll_idx] or { rv: 0 }
       errno_box[0] = r.errno or 0
       r.rv
+    ntohl: (x) -> tonumber x
     __errno_location: -> errno_box
   }
   libnfq: {
-    nfq_open: -> ffi.cast "nfq_handle*", 0x1000
+    nfq_open: ->
+      return nil if open_fails
+      ffi.cast "nfq_handle*", 0x1000
     nfq_bind_pf: (h, pf) -> 0
-    nfq_create_queue: (h, num, cb, data) -> ffi.cast "nfq_q_handle*", 0x2000
+    nfq_get_msg_packet_hdr: (nfad) -> fake_hdr
+    nfq_set_verdict: (qh, id, verdict, datalen, buf) ->
+      verdict_calls[#verdict_calls + 1] = { :id, :verdict, :datalen, buf_is_nil: buf == nil }
+      0
+    nfq_create_queue: (h, num, cb, data) ->
+      return nil if create_queue_fails
+      captured_cb = cb
+      ffi.cast "nfq_q_handle*", 0x2000
     nfq_set_mode: (qh, mode, range) -> 0
     nfq_fd: (h) -> 99
     nfq_handle_packet: (h, buf, len) ->
       handled[#handled + 1] = tonumber len
+      captured_cb nil, nil, ffi.cast("nfq_data*", fake_hdr), nil if invoke_cb and captured_cb
       0
     nfq_destroy_queue: (qh) ->
       destroyed += 1
@@ -83,6 +103,11 @@ describe "nfq_loop.run_queue ENOBUFS/EINTR", ->
     destroyed = 0
     closed = 0
     idle_calls = 0
+    captured_cb = nil
+    invoke_cb = false
+    open_fails = false
+    create_queue_fails = false
+    verdict_calls = {}
 
   it "ENOBUFS ne fait pas sortir la boucle (poursuite jusqu'à EOF)", ->
     reads = {
@@ -146,6 +171,93 @@ describe "nfq_loop.run_queue ENOBUFS/EINTR", ->
     assert.equals 1, destroyed
     assert.equals 1, closed
 
+  it "timeout de poll (rv=0) → continue après on_idle, puis lit le paquet", ->
+    poll_script = {
+      { rv: 0 }    -- rien à lire : on_idle, pas de read
+      { rv: 1 }    -- paquet prêt
+      { rv: 1 }    -- prêt pour la lecture suivante (EOF)
+    }
+    reads = { { rv: 10 }, { rv: 0 } }
+    nfq.run_queue 0, (-> 1), { idle_ms: 10, on_idle: -> idle_calls += 1 }
+    assert.equals 3, poll_idx
+    assert.equals 3, idle_calls
+    assert.equals 2, read_idx
+    assert.same { 10 }, handled
+
+  it "erreur de lecture autre que EINTR/ENOBUFS → sortie (flush final du lot)", ->
+    batch = {}
+    reads = { { rv: -1, errno: 5 } }   -- EIO
+    nfq.run_queue 0, (-> 1), { on_batch_end: -> batch[#batch + 1] = #handled }
+    -- Le flush final doit être posé même sur erreur, avant de détruire la queue.
+    assert.same { 0 }, batch
+    assert.equals 1, destroyed
+    assert.equals 1, closed
+
+  it "échec de nfq_open → erreur remontée, aucune queue créée", ->
+    open_fails = true
+    assert.has_error (-> nfq.run_queue 0, -> 1), "nfq_open() échoué"
+    assert.equals 0, destroyed
+    assert.equals 0, closed
+
+  it "échec de nfq_create_queue → erreur remontée", ->
+    create_queue_fails = true
+    assert.has_error (-> nfq.run_queue 7, -> 1), "nfq_create_queue(7) échoué"
+    assert.equals 0, destroyed
+    assert.equals 0, closed
+
+describe "nfq_loop.run_queue callback C (verdicts et exception)", ->
+  teardown ->
+    package.loaded["ffi_defs"] = orig_defs
+    package.loaded["nfq_loop"] = orig_nfq
+
+  before_each ->
+    reads = {}
+    read_idx = 0
+    poll_script = {}
+    poll_idx = 0
+    handled = {}
+    destroyed = 0
+    closed = 0
+    captured_cb = nil
+    invoke_cb = true
+    open_fails = false
+    create_queue_fails = false
+    verdict_calls = {}
+    fake_hdr.packet_id = 1
+
+  it "pose le verdict renvoyé par le callback avec l'id décodé", ->
+    reads = { { rv: 10 }, { rv: 0 } }
+    nfq.run_queue 0, -> nfq.NF_ACCEPT
+    assert.equals 1, #verdict_calls
+    assert.equals 1, verdict_calls[1].id
+    assert.equals nfq.NF_ACCEPT, verdict_calls[1].verdict
+    assert.equals 0, verdict_calls[1].datalen
+    assert.is_true verdict_calls[1].buf_is_nil
+
+  it "VERDICT_DONE ne repose pas de verdict (le callback l'a déjà posé)", ->
+    reads = { { rv: 10 }, { rv: 0 } }
+    nfq.run_queue 0, -> nfq.VERDICT_DONE
+    assert.equals 0, #verdict_calls
+
+  it "exception du callback → NF_DROP (fail-closed), la boucle continue", ->
+    reads = { { rv: 10 }, { rv: 0 } }
+    nfq.run_queue 0, -> error "boom"
+    assert.equals 1, #verdict_calls
+    assert.equals nfq.NF_DROP, verdict_calls[1].verdict
+    assert.equals 1, closed
+
+  it "ENOBUFS pendant le drain → fin du lot, hook appelé, boucle poursuivie", ->
+    batch = {}
+    reads = {
+      { rv: 10 }                -- lecture bloquante
+      { rv: -1, errno: 105 }    -- drain : ENOBUFS
+      { rv: 0 }                 -- lecture suivante : EOF
+    }
+    poll_script = { { rv: 1 } }
+    nfq.run_queue 0, (-> nfq.NF_ACCEPT), { on_batch_end: -> batch[#batch + 1] = #handled }
+    assert.same { 1, 1 }, batch
+    assert.same { 10 }, handled
+
 describe "nfq_loop.run_queue on_batch_end (verdicts différés)", ->
   teardown ->
     package.loaded["ffi_defs"] = orig_defs
@@ -160,6 +272,11 @@ describe "nfq_loop.run_queue on_batch_end (verdicts différés)", ->
     destroyed = 0
     closed = 0
     idle_calls = 0
+    captured_cb = nil
+    invoke_cb = false
+    open_fails = false
+    create_queue_fails = false
+    verdict_calls = {}
 
   it "regroupe en un seul lot les paquets déjà présents dans le socket (drain)", ->
     batch = {}

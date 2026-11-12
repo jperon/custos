@@ -248,3 +248,146 @@ describe "worker_tls réassemblage TLS fragmenté (feed_tls_segment)", ->
     ok_hs, hdr = pcall -> hs.parse buf, rec.data_off
     assert.is_true ok_hs
     assert.not_equal hs.message_types.client_hello, hdr.type
+
+describe "worker_tls extract_sni_from_tls (repli tolérant, paquets tronqués)", ->
+  full = -> build_client_hello make_sni_ext "fallback.example"
+
+  it "payload trop court avant le random → fallback_short_random", ->
+    host, reason = sni.extract_sni_from_tls (full!)\sub(1, 20)
+    assert.is_nil host
+    assert.equals "fallback_short_random", reason
+
+  it "longueur de session_id incohérente → fallback_short_session_id", ->
+    p = (full!)\sub(1, 50)
+    p = p\sub(1, 43) .. string.char(200) .. p\sub(45)
+    host, reason = sni.extract_sni_from_tls p
+    assert.is_nil host
+    assert.equals "fallback_short_session_id", reason
+
+  it "cipher suites tronquées → fallback_short_cipher_len/cipher_suites", ->
+    _, r1 = sni.extract_sni_from_tls (full!)\sub(1, 44)
+    assert.equals "fallback_short_cipher_len", r1
+    _, r2 = sni.extract_sni_from_tls (full!)\sub(1, 47)
+    assert.equals "fallback_short_cipher_suites", r2
+
+  it "compression et extensions tronquées → raisons dédiées", ->
+    _, r1 = sni.extract_sni_from_tls (full!)\sub(1, 49)
+    assert.equals "fallback_short_compression", r1
+    _, r2 = sni.extract_sni_from_tls (full!)\sub(1, 51)
+    assert.equals "fallback_short_extensions_len", r2
+
+  it "extension SNI trop courte → fallback_short_sni_ext", ->
+    short_ext = table.concat { u16(0x0000), u16(3), "abc" }
+    host, reason = sni.extract_sni_from_tls build_client_hello short_ext
+    assert.is_nil host
+    assert.equals "fallback_short_sni_ext", reason
+
+  it "nomme les versions TLS 1.0/1.1 et une version inconnue", ->
+    -- Mutation directe des octets 10-11 (legacy_version du ClientHello).
+    for case in *{
+      { 0x0301, "TLS1.0" }
+      { 0x0302, "TLS1.1" }
+      { 0x0300, "0x0300" }
+    }
+      p = full!
+      p = p\sub(1, 9) .. string.char(rshift(case[1], 8), band(case[1], 0xFF)) .. p\sub(12)
+      _, _, meta = sni.extract_sni_from_tls p
+      assert.equals case[2], meta.tls_client_hello_version
+
+describe "worker_tls sni_action_for (décision pure)", ->
+  it "fail-open si le filtre est absent ou lève", ->
+    assert.equals "accept", sni.sni_action_for nil
+    assert.equals "accept", sni.sni_action_for {}
+
+  it "mappe verdict et modificateurs vers l'action symbolique", ->
+    assert.equals "block", sni.sni_action_for { verdict: false }
+    assert.equals "dnsonly", sni.sni_action_for { verdict: "dnsonly" }
+    assert.equals "redirect", sni.sni_action_for { verdict: true, redirects_destination: true }
+    assert.equals "validate", sni.sni_action_for { verdict: true, allow_modifiers: { validate: true } }
+    assert.equals "allow", sni.sni_action_for { verdict: true }
+
+describe "worker_tls sessions QUIC (seams)", ->
+  it "seed/count/prune/reset suivent les sessions et leur TTL", ->
+    sni.reset_quic_sessions!
+    assert.equals 0, sni.quic_session_count!
+    assert.equals 1, sni.seed_quic_session "k1", 100
+    assert.equals 2, sni.seed_quic_session "k2", 100
+    -- Le seed d'une clé existante ne recompte pas.
+    assert.equals 2, sni.seed_quic_session "k1", 150
+    assert.equals 1, sni.prune_quic_sessions 151
+    assert.equals 1, sni.quic_session_count!
+    sni.reset_quic_sessions!
+    assert.equals 0, sni.quic_session_count!
+
+describe "worker_tls validate_sni et cache de verdict", ->
+  before_each ->
+    sni.reset_sni_verdicts!
+
+  after_each ->
+    sni.reset_sni_verdicts!
+    sni.set_validator_state { validator_mod: nil, cname_mod: nil, second_opinion_cfg: nil }
+
+  it "sans domaine ou sans résolveur → non bloqué avec raison", ->
+    assert.same { false, nil }, { sni.validate_sni nil, true }
+    sni.set_validator_state { second_opinion_cfg: { resolvers: {} } }
+    blocked, reason = sni.validate_sni "x.test", true
+    assert.is_false blocked
+    assert.equals "no_validator_resolvers", reason
+
+  it "interroge le validateur puis sert le cache pendant le TTL", ->
+    calls = 0
+    sni.set_validator_state {
+      second_opinion_cfg: { resolvers: { "1.1.1.1" }, verdict_ttl_s: 30 }
+      validator_mod: {
+        query_verdict: (dns_raw, resolvers, budget, doh_budget) ->
+          calls += 1
+          true, "malware"
+      }
+    }
+    blocked, reason = sni.validate_sni "bad.test", true
+    assert.is_true blocked
+    assert.equals "malware", reason
+    assert.equals 1, calls
+    blocked2, reason2 = sni.validate_sni "bad.test", true
+    assert.is_true blocked2
+    assert.equals "malware", reason2
+    assert.equals 1, calls
+
+  it "une exception du validateur est fail-open et n'empoisonne pas le cache", ->
+    sni.set_validator_state {
+      second_opinion_cfg: { resolvers: { "1.1.1.1" } }
+      validator_mod: { query_verdict: -> error "boom" }
+    }
+    blocked, reason = sni.validate_sni "err.test", true
+    assert.is_false blocked
+    assert.is_nil reason
+    -- Entrée cachée non bloquante : pas de nouvel appel nécessaire.
+    blocked2 = sni.validate_sni "err.test", true
+    assert.is_false blocked2
+
+  it "prune_sni_verdicts purge les entrées expirées", ->
+    sni.set_validator_state {
+      second_opinion_cfg: { resolvers: { "1.1.1.1" }, verdict_ttl_s: 0 }
+      validator_mod: { query_verdict: -> true, "x" }
+    }
+    sni.validate_sni "ttl.test", true
+    removed = sni.prune_sni_verdicts os.time! + 10
+    assert.is_true removed >= 1
+
+describe "worker_tls build_validator_query et CNAME", ->
+  it "construit une requête DNS A wire-format pour le domaine", ->
+    q = sni.build_validator_query "sub.example.test"
+    assert.equals 1, q\byte(3)                     -- flags hi: RD
+    assert.equals 1, q\byte(6)                     -- qdcount = 1
+    assert.equals 3, q\byte 13
+    assert.equals "sub", q\sub 14, 16
+    assert.equals 7, q\byte 17
+    assert.equals "example", q\sub 18, 24
+    assert.equals "test", q\sub 26, 29
+    assert.equals 0, q\byte 30
+    assert.equals 0x00, q\byte(#q - 3)             -- QTYPE A
+    assert.equals 0x01, q\byte(#q - 2)
+
+  it "dst_matches_cname échoue sans cible ou sans IP connue", ->
+    assert.same { false, false }, { sni.dst_matches_cname nil, "1.2.3.4", 4 }
+    assert.same { false, false }, { sni.dst_matches_cname "target.test", "unknown", 4 }
