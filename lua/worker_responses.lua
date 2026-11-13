@@ -30,10 +30,10 @@ do
   local _obj_0 = require("ipc")
   drain_pipe, is_pending, get_pending_entry, consume, purge_pending = _obj_0.drain_pipe, _obj_0.is_pending, _obj_0.get_pending_entry, _obj_0.consume, _obj_0.purge_pending
 end
-local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
+local add_ip4_many, add_ip6_many, add_mac4_many, add_mac6_many, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack
 do
   local _obj_0 = require("nft_queue")
-  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
+  add_ip4_many, add_ip6_many, add_mac4_many, add_mac6_many, add_mac4, add_mac6, get_last_seq, wait_ack, drain_ack = _obj_0.add_ip4_many, _obj_0.add_ip6_many, _obj_0.add_mac4_many, _obj_0.add_mac6_many, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.wait_ack, _obj_0.drain_ack
 end
 local run_queue, NF_ACCEPT, NF_DROP, MAX_BATCH_PKTS, packet_age_ms
 do
@@ -552,12 +552,12 @@ resolve_client_family = function(ip_str, want)
   return nil
 end
 local ADD_IP = {
-  ipv4 = add_ip4,
-  ipv6 = add_ip6
+  ipv4 = add_ip4_many,
+  ipv6 = add_ip6_many
 }
 local ADD_MAC = {
-  ipv4 = add_mac4,
-  ipv6 = add_mac6
+  ipv4 = add_mac4_many,
+  ipv6 = add_mac6_many
 }
 local client_addr_of
 client_addr_of = function(ctx, fam)

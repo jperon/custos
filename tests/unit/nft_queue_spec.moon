@@ -58,6 +58,18 @@ read_pipe = (fd) ->
   assert n and n > 0, "pipe vide"
   ffi.string buf, n
 
+--- Lit tout ce qui est disponible dans un tube non bloquant (jusqu'à EAGAIN).
+-- @tparam number fd Descripteur de lecture
+-- @treturn string Données lues (concaténées)
+read_all = (fd) ->
+  parts = {}
+  buf = ffi.new "char[4096]"
+  while true
+    n = ffi.C.read fd, buf, 4096
+    break unless n and n > 0
+    parts[#parts + 1] = ffi.string buf, n
+  table.concat parts
+
 split_fields = (line) ->
   line = line\gsub "\n+$", ""
   out = {}
@@ -316,6 +328,148 @@ describe "nft_queue element_spec (regroupement par set)", ->
     lines = q.cmd_lines_for "ip4", "10.0.0.1", "1.2.3.4", "r_test", "2m"
     assert.same { "add element bridge dns-filter-bridge r_test_ip4 { 10.0.0.1 . 1.2.3.4 timeout 2m }" }, lines
 
+describe "nft_queue enqueue_many (insertion groupée par set)", ->
+  it "regroupe N adresses en UNE ligne IPC (champ 4 = liste séparée par espaces)", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+
+    n = q.add_ip4_many "192.168.1.42", { "10.0.0.1", "10.0.0.2", "10.0.0.3" },
+      "dns_workhours", "240s", "corr-123"
+    assert.equals 3, n
+    -- Une seule ligne ⇒ un seul seq.
+    assert.equals 1, q.get_last_seq!
+
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.equals 1, #lines
+    fields = split_fields lines[1]
+    assert.equals 9, #fields
+    assert.equals "v1", fields[1]
+    assert.equals "ip4", fields[2]
+    assert.equals "192.168.1.42", fields[3]
+    assert.equals "10.0.0.1 10.0.0.2 10.0.0.3", fields[4]
+    assert.equals hex("dns_workhours"), fields[5]
+    assert.equals "240s", fields[6]
+    assert.equals "1", fields[7]
+    assert.equals hex("corr-123"), fields[9]
+
+    close_pipe p
+
+  it "une adresse seule produit exactement la ligne de add_ip4", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    q.add_ip4 "192.168.1.42", "10.0.0.1", "r_test", "2m", "c"
+    assert.equals 1, q.get_last_seq!
+    q.add_ip4_many "192.168.1.42", { "10.0.0.1" }, "r_test", "2m", "c"
+    assert.equals 2, q.get_last_seq!
+
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.equals 2, #lines
+    -- Mêmes champs, seul le seq (7e) diffère : format unique pour le consommateur.
+    f1, f2 = split_fields(lines[1]), split_fields(lines[2])
+    assert.equals "1", f1[7]
+    assert.equals "2", f2[7]
+    f1[7], f2[7] = nil, nil
+    assert.same f1, f2
+
+    close_pipe p
+
+  it "rend le nombre d'adresses enfilées, 0 sans tube ou liste vide", ->
+    q = fresh_nft_queue!
+    assert.equals 0, q.add_ip4_many "10.0.0.1", { "1.2.3.4" }, "r_test", "2m", "c"
+    p = make_pipe!
+    q.set_wfd p[2]
+    assert.equals 0, q.add_ip4_many "10.0.0.1", {}, "r_test", "2m", "c"
+    assert.equals 0, q.add_ip4_many nil, { "1.2.3.4" }, "r_test", "2m", "c"
+    assert.is_nil q.get_last_seq!
+    close_pipe p
+
+  it "découpe une longue liste en lignes ≤ PIPE_BUF_SAFE, rien n'est perdu", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    addrs = [ "2001:db8::#{i}" for i = 1, 40 ]
+    n = q.add_ip6_many "fd00::5", addrs, "r_test", "2m", "c"
+    assert.equals 40, n
+    last_seq = q.get_last_seq!
+
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.is_true #lines >= 2
+    -- Un seq par ligne (la dernière ligne porte le seq rendu).
+    assert.equals #lines, last_seq
+    got = {}
+    for line in *lines
+      assert.is_true #line <= 512
+      fields = split_fields line
+      assert.equals 9, #fields
+      for addr in fields[4]\gmatch "[^ ]+"
+        got[#got + 1] = addr
+    -- Toutes les adresses, dans l'ordre, sans doublon.
+    assert.equals 40, #got
+    for i = 1, 40
+      assert.equals addrs[i], got[i]
+
+    close_pipe p
+
+  it "add_many écrit le même champ worker_idx qu'une ligne unitaire", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    -- Sans set_ack_rfd, build_line écrit -1 (worker_idx absent) : add_many passe
+    -- par build_line via enqueue, donc produit la même valeur (et non "nil", que
+    -- worker_nft.parse_line rejette avec worker_idx).
+    q.add_ip4 "192.168.1.42", "10.0.0.1", "r_test", "2m", "c"
+    q.add_ip4_many "192.168.1.42", { "10.0.0.1", "10.0.0.2" }, "r_test", "2m", "c"
+    q.get_last_seq!
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.equals 2, #lines
+    assert.equals "-1", (split_fields lines[1])[8]
+    assert.equals "-1", (split_fields lines[2])[8]
+    close_pipe p
+
+  it "découpe aussi quand rule_id/corr réduisent le budget d'une tranche", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    rule_id = string.rep "r", 40
+    corr    = string.rep "c", 80
+    addrs   = [ "10.0.0.#{i}" for i = 1, 30 ]
+    n = q.add_ip4_many "192.168.1.42", addrs, rule_id, "2m", corr
+    assert.equals 30, n
+    last_seq = q.get_last_seq!
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.is_true #lines >= 2
+    -- Un seq par tranche : la dernière ligne porte le seq rendu.
+    assert.equals #lines, last_seq
+    got = {}
+    for line in *lines
+      assert.is_true #line <= 512
+      fields = split_fields line
+      assert.equals hex(rule_id), fields[5]
+      assert.equals hex(corr), fields[9]
+      for addr in fields[4]\gmatch "[^ ]+"
+        got[#got + 1] = addr
+    assert.equals 30, #got
+    for i = 1, 30
+      assert.equals addrs[i], got[i]
+    close_pipe p
+
+  it "add_mac4_many groupe les adresses du client MAC (même set)", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    assert.equals 2, q.add_mac4_many "d8:d3:85:63:6b:27", { "10.0.0.1", "10.0.0.2" },
+      "r_test", "660s", "c"
+    assert.equals 1, q.get_last_seq!
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.equals 1, #lines
+    fields = split_fields lines[1]
+    assert.equals "mac4", fields[2]
+    assert.equals "d8:d3:85:63:6b:27", fields[3]
+    assert.equals "10.0.0.1 10.0.0.2", fields[4]
+    close_pipe p
+
 describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
   saved_defs = nil
   saved_timeout = nil
@@ -473,10 +627,10 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     close_pipe p
 
   it "enqueue alloue < 300 o par ligne (build_line sans table intermédiaire)", ->
-    -- Le hot path enfile 16 lignes par réponse Tailscale (cf. docs/agents/perf.md
-    -- §19) : build_line allouait une table de 9 champs + une string concat par
-    -- ligne. Seuil calibré sur la mesure GC arrêté dans ce spec (avant correctif 373 o,
-    -- après 225 o) avec marge des deux côtés.
+    -- Le hot path enfilait 16 lignes par réponse Tailscale (cf.
+    -- docs/agents/perf.md §19) : build_line allouait une table de 9 champs +
+    -- une string concat par ligne. Seuil calibré sur la mesure GC arrêté dans
+    -- ce spec (avant correctif 373 o, après 225 o) avec marge des deux côtés.
     q = fresh_with_libc ((fd, data, len) ->
       writes += 1
       len

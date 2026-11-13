@@ -335,16 +335,20 @@ measure_alloc = function(wnft, nq, o)
     local base = (r - 1) * lines_per_response
     local pending_count = 0
     for k = 1, lines_per_response do
-      local item = wnft.parse_line(lines[base + k])
-      if item then
+      local items = wnft.parse_line(lines[base + k])
+      if items then
+        local first = items[1]
         ack_queue[#ack_queue + 1] = {
-          widx = item.widx,
-          seq = item.seq,
-          corr = item.corr,
-          rule_id = item.rule_id
+          widx = first.widx,
+          seq = first.seq,
+          corr = first.corr,
+          rule_id = first.rule_id
         }
-        if wnft.try_add_pending(pending, item, cache) then
-          pending_count = pending_count + 1
+        for _index_0 = 1, #items do
+          local item = items[_index_0]
+          if wnft.try_add_pending(pending, item, cache) then
+            pending_count = pending_count + 1
+          end
         end
       end
     end

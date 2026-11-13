@@ -261,6 +261,57 @@ local add_mac6
 add_mac6 = function(mac, ip_str, rule_id, timeout, corr)
   return enqueue("mac6", mac, ip_str, rule_id, timeout, corr)
 end
+local GROUP_FIXED_RESERVE = 20 + 20 + 9 + 1 + 16
+local add_many
+add_many = function(kind, key, addrs, rule_id, timeout, corr)
+  if not (pipe_wfd) then
+    return 0
+  end
+  if not (kind and key and addrs) then
+    return 0
+  end
+  local n = #addrs
+  if n == 0 then
+    return 0
+  end
+  local budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key + 2 * #(rule_id or "") + 2 * #(corr or "") + GROUP_FIXED_RESERVE)
+  local queued = 0
+  local i = 1
+  while i <= n do
+    local parts = { }
+    local bytes = 0
+    while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget) do
+      parts[#parts + 1] = addrs[i]
+      bytes = bytes + #addrs[i] + 1
+      i = i + 1
+    end
+    local joined = parts[1]
+    if #parts > 1 then
+      joined = table.concat(parts, " ")
+    end
+    if not (enqueue(kind, key, joined, rule_id, timeout, corr)) then
+      break
+    end
+    queued = queued + #parts
+  end
+  return queued
+end
+local add_ip4_many
+add_ip4_many = function(client_ip, addrs, rule_id, timeout, corr)
+  return add_many("ip4", client_ip, addrs, rule_id, timeout, corr)
+end
+local add_ip6_many
+add_ip6_many = function(client_ip, addrs, rule_id, timeout, corr)
+  return add_many("ip6", client_ip, addrs, rule_id, timeout, corr)
+end
+local add_mac4_many
+add_mac4_many = function(mac, addrs, rule_id, timeout, corr)
+  return add_many("mac4", mac, addrs, rule_id, timeout, corr)
+end
+local add_mac6_many
+add_mac6_many = function(mac, addrs, rule_id, timeout, corr)
+  return add_many("mac6", mac, addrs, rule_id, timeout, corr)
+end
 local add_sip4
 add_sip4 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip4", ip_str, ip_str, rule_id, timeout, corr)
@@ -457,6 +508,11 @@ return {
   add_ip6 = add_ip6,
   add_mac4 = add_mac4,
   add_mac6 = add_mac6,
+  add_ip4_many = add_ip4_many,
+  add_ip6_many = add_ip6_many,
+  add_mac4_many = add_mac4_many,
+  add_mac6_many = add_mac6_many,
+  add_many = add_many,
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
   cmd_for = cmd_for,

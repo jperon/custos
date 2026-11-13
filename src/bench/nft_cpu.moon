@@ -381,10 +381,14 @@ measure_alloc = (wnft, nq, o) ->
     base = (r - 1) * lines_per_response
     pending_count = 0
     for k = 1, lines_per_response
-      item = wnft.parse_line lines[base + k]
-      if item
-        ack_queue[#ack_queue + 1] = { widx: item.widx, seq: item.seq, corr: item.corr, rule_id: item.rule_id }
-        pending_count += 1 if wnft.try_add_pending pending, item, cache
+      items = wnft.parse_line lines[base + k]
+      if items
+        -- Une ligne = un seq ; elle peut porter plusieurs adresses (ici une
+        -- seule par ligne, format historique, pour rester comparable).
+        first = items[1]
+        ack_queue[#ack_queue + 1] = { widx: first.widx, seq: first.seq, corr: first.corr, rule_id: first.rule_id }
+        for item in *items
+          pending_count += 1 if wnft.try_add_pending pending, item, cache
     if pending_count > 0 or #ack_queue > 0
       wnft.flush_batch pending, ack_queue, {}, cache
   after = collectgarbage "count"

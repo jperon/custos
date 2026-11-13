@@ -59,16 +59,34 @@ describe "worker_nft helpers", ->
 
     valid_line = "v1|ip4|10.0.0.1|1.2.3.4||2m|5|0|"
 
-    it "ligne valide → item structuré", ->
-      item, err = wnft.parse_line valid_line
+    it "ligne valide → liste d'un item structuré", ->
+      items, err = wnft.parse_line valid_line
       assert.is_nil err
-      assert.is_table item
+      assert.is_table items
+      assert.equals 1, #items
+      item = items[1]
       assert.equals "ip4", item.kind
       assert.equals "10.0.0.1", item.key
       assert.equals "1.2.3.4", item.ip
       assert.equals "2m", item.timeout
       assert.equals 5, item.seq
       assert.equals 0, item.widx
+
+    it "ligne groupée → un item par adresse, même seq/rule/timeout", ->
+      -- Format produit par nft_queue.add_ip4_many : le champ ip porte la liste.
+      items, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4 1.2.3.5 1.2.3.6||2m|5|0|"
+      assert.is_nil err
+      assert.equals 3, #items
+      assert.same { "1.2.3.4", "1.2.3.5", "1.2.3.6" }, [ item.ip for item in *items ]
+      for item in *items
+        assert.equals 5, item.seq
+        assert.equals "10.0.0.1", item.key
+        assert.equals "2m", item.timeout
+
+    it "ligne groupée avec une adresse invalide → nil, tuple (tout ou rien)", ->
+      items, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4 pasunip||2m|5|0|"
+      assert.is_nil items
+      assert.equals "tuple", err
 
     it "nombre de champs incorrect → nil, field_count", ->
       item, err = wnft.parse_line "v1|ip4|10.0.0.1"
@@ -82,6 +100,11 @@ describe "worker_nft helpers", ->
 
     it "tuple invalide (ip4 avec clé non-IPv4) → nil, tuple", ->
       item, err = wnft.parse_line "v1|ip4|pasunip|1.2.3.4||2m|5|0|"
+      assert.is_nil item
+      assert.equals "tuple", err
+
+    it "champ ip vide → nil, tuple", ->
+      item, err = wnft.parse_line "v1|ip4|10.0.0.1|||2m|5|0|"
       assert.is_nil item
       assert.equals "tuple", err
 
@@ -267,6 +290,34 @@ describe "worker_nft helpers", ->
       assert.equals 8, tonumber n
       assert.equals 2, tonumber ack_val[0]
 
+    it "une ligne groupée insère toutes ses adresses en une instruction et un ACK", ->
+      inp = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+      ack = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 ack, O_NONBLOCK
+
+      hex = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+      rid = hex "r_test"
+      -- Format de nft_queue.add_ip4_many : 3 adresses dans le même set.
+      line = "v1|ip4|10.0.0.1|1.2.3.4 1.2.3.5 1.2.3.6|#{rid}|2m|1|0|\n"
+      libc.write inp[1], line, #line
+      libc.close inp[1]
+
+      wnft.run inp[0], { ack[1] }
+      libc.close inp[0]
+
+      -- Une seule instruction nft, portant les trois éléments.
+      assert.equals 1, #nft_calls
+      for addr in *{ "1.2.3.4", "1.2.3.5", "1.2.3.6" }
+        assert.is_true nft_calls[1]\find("10.0.0.1 . #{addr} timeout 2m", 1, true) != nil
+
+      ack_val = ffi.new "uint64_t[1]"
+      n = libc.read ack[0], ack_val, 8
+      libc.close ack[0]
+      libc.close ack[1]
+      assert.equals 8, tonumber n
+      assert.equals 1, tonumber ack_val[0]
+
     it "plafonne le batch à MAX_BATCH (65 items distincts → 2 flushes, 2 ACK séquencés)", ->
       inp = ffi.new "int[2]"
       assert.equals 0, libc.pipe2 inp, O_NONBLOCK
@@ -369,9 +420,10 @@ describe "worker_nft branches d'erreur et build_batch", ->
       "v1|sip6|2001:db8::1|_|#{rid}|2m|1|0|"
     }
     for line in *lines
-      item, err = wnft.parse_line line
+      items, err = wnft.parse_line line
       assert.is_nil err, "ligne refusée : #{line}"
-      assert.is_table item
+      assert.equals 1, #items
+      assert.is_table items[1]
 
   it "parse_line refuse kind inconnu, hex invalide et worker_idx absent", ->
     item, err = wnft.parse_line "v1|inconnu|a|b||2m|1|0|"
@@ -490,15 +542,15 @@ describe "worker_nft cache d'upsert", ->
   describe "parse_line et timeouts", ->
 
     it "ligne avec timeout → has_timeout true", ->
-      item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4||2m|5|0|"
+      items, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4||2m|5|0|"
       assert.is_nil err
-      assert.is_true item.has_timeout
+      assert.is_true items[1].has_timeout
 
     it "ligne sans timeout → has_timeout false (timeout de repli appliqué)", ->
-      item, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4|||5|0|"
+      items, err = wnft.parse_line "v1|ip4|10.0.0.1|1.2.3.4|||5|0|"
       assert.is_nil err
-      assert.is_false item.has_timeout
-      assert.equals "2m", item.timeout
+      assert.is_false items[1].has_timeout
+      assert.equals "2m", items[1].timeout
 
     it "timeout_to_seconds convertit les formes nft", ->
       assert.equals 120, wnft.timeout_to_seconds "2m"

@@ -84,6 +84,8 @@ describe "worker_responses.finalize_a", ->
     }
     package.loaded["nft_queue"] = {
       add_ip4: (-> nil), add_ip6: (-> nil)
+      add_ip4_many: (-> 0), add_ip6_many: (-> 0)
+      add_mac4_many: (-> 0), add_mac6_many: (-> 0)
       add_mac4: (mac, ip, rule_id, timeout, corr) ->
         probe_calls[#probe_calls + 1] = {
           family: "mac4", :mac, :ip, :rule_id, :timeout, :corr

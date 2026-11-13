@@ -46,15 +46,6 @@ detect_wildcards = function(rules_metadata)
   end
   return out
 end
-local add_to_wildcards
-add_to_wildcards = function(add_fn, wildcard_ids, key, dest, timeout, corr)
-  local any_ok = false
-  for _, rid in ipairs(wildcard_ids or { }) do
-    local ok = add_fn(key, dest, rid, timeout, corr)
-    any_ok = any_ok or ok
-  end
-  return any_ok
-end
 local inject
 inject = function(answers, opts)
   local records_to_add = 0
@@ -75,6 +66,27 @@ inject = function(answers, opts)
   local mac_valid = opts.mac_valid
   local use_wild = opts.user and opts.wildcard_ids and #opts.wildcard_ids > 0
   local mac_ok = mac_valid(opts.client_mac)
+  local order = { }
+  local add_addr
+  add_addr = function(add_fn, rule_id, key, addr, timeout)
+    for _index_0 = 1, #order do
+      local g = order[_index_0]
+      if g.add_fn == add_fn and g.rule_id == rule_id and g.key == key and g.timeout == timeout then
+        g.addrs[#g.addrs + 1] = addr
+        return 
+      end
+    end
+    order[#order + 1] = {
+      add_fn = add_fn,
+      rule_id = rule_id,
+      key = key,
+      timeout = timeout,
+      addrs = {
+        addr
+      }
+    }
+    return nil
+  end
   for _index_0 = 1, #answers do
     local ans = answers[_index_0]
     local fam = ans.family
@@ -84,25 +96,36 @@ inject = function(answers, opts)
     local timeout = timeout_of(ans.ttl)
     if client then
       records_to_add = records_to_add + 1
-      local ok = add_ip(client, ans.addr, opts.rule_id, timeout, opts.ack_corr)
-      if ok then
-        ip_count = ip_count + 1
-      end
-      success_any = success_any or ok
+      add_addr(add_ip, opts.rule_id, client, ans.addr, timeout)
       if use_wild then
-        local w_ok = add_to_wildcards(add_ip, opts.wildcard_ids, client, ans.addr, timeout, opts.ack_corr)
-        success_any = success_any or w_ok
+        local _list_0 = opts.wildcard_ids
+        for _index_1 = 1, #_list_0 do
+          local rid = _list_0[_index_1]
+          add_addr(add_ip, rid, client, ans.addr, timeout)
+        end
       end
     else
       local tbl = fam == "ipv4" and no_v4 or no_v6
       tbl[#tbl + 1] = ans.addr
     end
     if mac_ok then
-      local m_ok = add_mac(opts.client_mac, ans.addr, opts.rule_id, timeout, opts.ack_corr)
-      success_any = success_any or m_ok
+      add_addr(add_mac, opts.rule_id, opts.client_mac, ans.addr, timeout)
       if use_wild then
-        local wm_ok = add_to_wildcards(add_mac, opts.wildcard_ids, opts.client_mac, ans.addr, timeout, opts.ack_corr)
-        success_any = success_any or wm_ok
+        local _list_0 = opts.wildcard_ids
+        for _index_1 = 1, #_list_0 do
+          local rid = _list_0[_index_1]
+          add_addr(add_mac, rid, opts.client_mac, ans.addr, timeout)
+        end
+      end
+    end
+  end
+  for _index_0 = 1, #order do
+    local g = order[_index_0]
+    local n = g.add_fn(g.key, g.addrs, g.rule_id, g.timeout, opts.ack_corr)
+    if n and n > 0 then
+      success_any = true
+      if g.rule_id == opts.rule_id and (g.add_fn == opts.add_ip.ipv4 or g.add_fn == opts.add_ip.ipv6) then
+        ip_count = ip_count + n
       end
     end
   end
@@ -117,6 +140,5 @@ end
 return {
   rr_timeout = rr_timeout,
   detect_wildcards = detect_wildcards,
-  add_to_wildcards = add_to_wildcards,
   inject = inject
 }

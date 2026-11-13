@@ -200,7 +200,8 @@ reset_ack_state = ->
 build_line = (kind, key, ip, rule_id, timeout, corr, item_seq, widx) ->
   -- Concaténation directe plutôt que table.concat + `.. "\n"` : la forme à
   -- table allouait un tableau de 9 champs + une string intermédiaire par
-  -- ligne (16 lignes par réponse Tailscale, cf. docs/agents/perf.md §22).
+  -- ligne (cf. docs/agents/perf.md §22 ; les réponses groupées n'en émettent
+  -- plus qu'une par set, cf. add_many).
   -- Le "\n" est le dernier opérande : une seule string allouée par ligne.
   LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. ip .. "|" ..
     to_hex(rule_id or "") .. "|" .. timeout .. "|" .. tostring(item_seq) ..
@@ -232,6 +233,62 @@ add_ip4  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip4",  client
 add_ip6  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip6",  client_ip, ip_str, rule_id, timeout, corr
 add_mac4 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac4", mac,       ip_str, rule_id, timeout, corr
 add_mac6 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac6", mac,       ip_str, rule_id, timeout, corr
+
+-- Réserve forfaitaire (octets) de la partie non-adresses d'une ligne groupée :
+-- seq et worker_idx au pire cas (20 chiffres chacun), les 9 séparateurs "|", le
+-- "\n" final et le timeout le plus long accepté (16 o, cf. is_valid_timeout).
+GROUP_FIXED_RESERVE = 20 + 20 + 9 + 1 + 16
+
+--- Enfile plusieurs adresses d'un même set, en lignes IPC groupées.
+-- Une réponse DNS insère N adresses dans le set de la règle (clé = IP client)
+-- et N dans le set MAC : une ligne par enregistrement serait un gaspillage, le
+-- contenu ne différant que par l'adresse. Cette variante porte la liste des
+-- adresses dans le champ `ip` (séparateur espace, format accepté par
+-- `worker_nft.parse_line`), une ligne par tranche et un `seq` par tranche
+-- (l'ACK couvre tout le groupe) — cf. docs/agents/perf.md §29a.
+-- Ne fait QUE découper : chaque tranche jointe par " " est confiée à `enqueue`,
+-- qui construit la ligne, la valide et l'empile (une adresse ⇒ une tranche ⇒
+-- ligne identique à add_ip4/add_mac4, sans cas spécial).
+-- @tparam string kind    ip4|ip6|mac4|mac6
+-- @tparam string key     Clé du tuple (IP client, MAC…), commune aux adresses
+-- @tparam table  addrs   Adresses à insérer (liste de chaînes)
+-- @tparam string rule_id Identifiant de règle (nom du set)
+-- @tparam string|nil timeout Timeout nft commun aux adresses
+-- @tparam string|nil corr Corrélateur (cf. build_line)
+-- @treturn number Nombre d'adresses enfilées (0 si aucun tube, tuple
+--   incomplet, liste vide, ou ligne trop longue pour PIPE_BUF_SAFE)
+add_many = (kind, key, addrs, rule_id, timeout, corr) ->
+  return 0 unless pipe_wfd
+  return 0 unless kind and key and addrs
+  n = #addrs
+  return 0 if n == 0
+  -- Budget d'octets pour les adresses d'une tranche : la ligne complète doit
+  -- tenir dans PIPE_BUF_SAFE. Les champs constants sont mesurés sans les
+  -- encoder (`to_hex` double exactement la longueur) ; GROUP_FIXED_RESERVE
+  -- couvre seq, worker_idx, timeout et les séparateurs.
+  budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key +
+    2 * #(rule_id or "") + 2 * #(corr or "") + GROUP_FIXED_RESERVE)
+  queued = 0
+  i = 1
+  while i <= n
+    parts = {}
+    bytes = 0
+    -- Au moins une adresse par tranche : une adresse plus longue que le budget
+    -- part seule et enqueue rejette alors la ligne, comme une ligne unitaire.
+    while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget)
+      parts[#parts + 1] = addrs[i]
+      bytes += #addrs[i] + 1
+      i += 1
+    joined = parts[1]
+    joined = table.concat parts, " " if #parts > 1
+    break unless enqueue kind, key, joined, rule_id, timeout, corr
+    queued += #parts
+  queued
+
+add_ip4_many  = (client_ip, addrs, rule_id, timeout, corr) -> add_many "ip4",  client_ip, addrs, rule_id, timeout, corr
+add_ip6_many  = (client_ip, addrs, rule_id, timeout, corr) -> add_many "ip6",  client_ip, addrs, rule_id, timeout, corr
+add_mac4_many = (mac, addrs, rule_id, timeout, corr)       -> add_many "mac4", mac,       addrs, rule_id, timeout, corr
+add_mac6_many = (mac, addrs, rule_id, timeout, corr)       -> add_many "mac6", mac,       addrs, rule_id, timeout, corr
 add_sip4 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip4", ip_str,    ip_str, rule_id, timeout, corr
 add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str,    ip_str, rule_id, timeout, corr
 
@@ -399,4 +456,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state, :build_line }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_ip4_many, :add_ip6_many, :add_mac4_many, :add_mac6_many, :add_many, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state, :build_line }

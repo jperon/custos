@@ -83,15 +83,13 @@ parse_line = function(line)
   if not (parts[1] == LINE_VERSION) then
     return nil, "version"
   end
-  local kind, key, ip = parts[2], parts[3], parts[4]
-  if not (validate_item(kind, key, ip)) then
-    return nil, "tuple"
-  end
+  local kind, key = parts[2], parts[3]
   local rule_id, err_rule = from_hex(parts[5])
   if err_rule then
     return nil, "rule_id_" .. tostring(err_rule)
   end
   local timeout = sanitize_timeout(parts[6])
+  local has_timeout = is_valid_timeout(parts[6])
   local seq = tonumber(parts[7])
   if not (seq and seq >= 0) then
     return nil, "seq"
@@ -104,17 +102,27 @@ parse_line = function(line)
   if err_corr then
     return nil, "corr_" .. tostring(err_corr)
   end
-  return {
-    kind = kind,
-    key = key,
-    ip = ip,
-    rule_id = rule_id,
-    timeout = timeout,
-    has_timeout = is_valid_timeout(parts[6]),
-    seq = seq,
-    widx = widx,
-    corr = corr
-  }, nil
+  local items = { }
+  for ip in parts[4]:gmatch("[^ ]+") do
+    if not (validate_item(kind, key, ip)) then
+      return nil, "tuple"
+    end
+    items[#items + 1] = {
+      kind = kind,
+      key = key,
+      ip = ip,
+      rule_id = rule_id,
+      timeout = timeout,
+      has_timeout = has_timeout,
+      seq = seq,
+      widx = widx,
+      corr = corr
+    }
+  end
+  if #items == 0 then
+    return nil, "tuple"
+  end
+  return items
 end
 local send_ack
 send_ack = function(ack_wfds, widx, seq)
@@ -501,16 +509,20 @@ run = function(rfd, ack_wfds, cache, gc, opts)
             _continue_0 = true
             break
           end
-          local item, parse_err = parse_line(line)
-          if item then
+          local items, parse_err = parse_line(line)
+          if items then
+            local first = items[1]
             ack_queue[#ack_queue + 1] = {
-              widx = item.widx,
-              seq = item.seq,
-              corr = item.corr,
-              rule_id = item.rule_id
+              widx = first.widx,
+              seq = first.seq,
+              corr = first.corr,
+              rule_id = first.rule_id
             }
-            if try_add_pending(pending, item, cache) then
-              pending_count = pending_count + 1
+            for _index_0 = 1, #items do
+              local item = items[_index_0]
+              if try_add_pending(pending, item, cache) then
+                pending_count = pending_count + 1
+              end
             end
           else
             log_warn(function()

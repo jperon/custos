@@ -13,7 +13,7 @@ dns_mod = require "ipparse.l7.dns"
 parse = dns_mod.parse
 { types: QTYPE } = require "ipparse.l7.dns"
 { :decide_meta, :run_on_response } = require "filter"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack } = require "nft_queue"
+{ :add_ip4_many, :add_ip6_many, :add_mac4_many, :add_mac6_many, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack } = require "nft_queue"
 { :with_lock } = require "lib.filelock"
 pidfile = require "lib.pidfile"
 { :build_blocked_response, :build_nxdomain_response, :build_sinkhole_response, :build_cname_response, :build_captive_response, :add_ede, :patch_modified_dns } = require "dns_ede"
@@ -297,8 +297,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
                     ack_corr:   string.format "%04x:%s", dns.txid or 0, client_ip or "unknown"
                     inject_nft: true
                     :mac_valid
-                    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
-                    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+                    add_ip:  { ipv4: add_ip4_many, ipv6: add_ip6_many }
+                    add_mac: { ipv4: add_mac4_many, ipv6: add_mac6_many }
                   }
                 return new_dns
               return build_blocked_response(dns, dns_raw, v_reason)
@@ -335,8 +335,8 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
     :ack_corr
     inject_nft:   resp_ctx.inject_nft
     :mac_valid
-    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
-    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+    add_ip:  { ipv4: add_ip4_many, ipv6: add_ip6_many }
+    add_mac: { ipv4: add_mac4_many, ipv6: add_mac6_many }
   }
 
   -- ── Fail-closed : injection demandée mais aucune insertion réussie ──

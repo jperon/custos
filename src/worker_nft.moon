@@ -60,34 +60,52 @@ validate_item = (kind, key, ip) ->
     return false
   true
 
+--- Décode une ligne d'insertion nft en items prêts pour le cache d'upsert.
+-- Le champ `ip` porte une ou plusieurs adresses d'un MÊME set, séparées par un
+-- espace (`nft_queue.add_ip4_many` : une réponse DNS n'émet plus qu'une ligne
+-- par set et par timeout). Chaque adresse devient un item distinct pour que le
+-- cache d'upsert, la déduplication et le regroupement par set restent par
+-- élément. Une adresse invalide rejette la ligne entière (`tuple`) : la
+-- transaction nft aurait de toute façon échoué en bloc.
+-- @tparam string line Ligne IPC (sans le "\n")
+-- @treturn table|nil Liste d'items { kind, key, ip, rule_id, timeout,
+--   has_timeout, seq, widx, corr } ; nil sur ligne invalide
+-- @treturn string|nil Motif du refus (field_count, version, tuple,
+--   rule_id_*, seq, worker_idx, corr_*)
 parse_line = (line) ->
   parts = split_fields line
   return nil, "field_count" unless #parts == 9
   return nil, "version" unless parts[1] == LINE_VERSION
-  kind, key, ip = parts[2], parts[3], parts[4]
-  return nil, "tuple" unless validate_item kind, key, ip
+  kind, key = parts[2], parts[3]
   rule_id, err_rule = from_hex parts[5]
   return nil, "rule_id_#{err_rule}" if err_rule
   timeout = sanitize_timeout parts[6]
+  -- La ligne porte-t-elle elle-même un timeout valide ? Sans lui, le saut du
+  -- cache d'upsert est désactivé (le repli de sanitize_timeout s'applique).
+  has_timeout = is_valid_timeout parts[6]
   seq = tonumber parts[7]
   return nil, "seq" unless seq and seq >= 0
   widx = tonumber parts[8]
   return nil, "worker_idx" unless widx
   corr, err_corr = from_hex parts[9]
   return nil, "corr_#{err_corr}" if err_corr
-  {
-    :kind
-    :key
-    :ip
-    :rule_id
-    :timeout
-    -- La ligne porte-t-elle elle-même un timeout valide ? Sans lui, le saut du
-    -- cache d'upsert est désactivé (le repli de sanitize_timeout s'applique).
-    has_timeout: is_valid_timeout parts[6]
-    :seq
-    :widx
-    :corr
-  }, nil
+
+  items = {}
+  for ip in parts[4]\gmatch "[^ ]+"
+    return nil, "tuple" unless validate_item kind, key, ip
+    items[#items + 1] = {
+      :kind
+      :key
+      :ip
+      :rule_id
+      :timeout
+      :has_timeout
+      :seq
+      :widx
+      :corr
+    }
+  return nil, "tuple" if #items == 0
+  items
 
 -- Acquitte le traitement du batch pour un worker : enregistrement de taille
 -- fixe (ACK_SIZE octets) portant le plus grand `seq` que ce flush a appliqué
@@ -461,14 +479,20 @@ run = (rfd, ack_wfds, cache, gc, opts) ->
         line = partial\sub 1, nl - 1
         partial = partial\sub nl + 1
         continue if #line == 0
-        item, parse_err = parse_line line
-        if item
-          ack_queue[#ack_queue + 1] = { widx: item.widx, seq: item.seq, corr: item.corr, rule_id: item.rule_id }
+        items, parse_err = parse_line line
+        if items
+          -- Un ACK par ligne (le seq est commun aux adresses qu'elle porte).
+          first = items[1]
+          ack_queue[#ack_queue + 1] = { widx: first.widx, seq: first.seq, corr: first.corr, rule_id: first.rule_id }
           -- Le seq est acquitté même si l'ajout est sauté ou est un doublon :
           -- l'ACK porte le traitement de la ligne, pas son insertion.
-          pending_count += 1 if try_add_pending pending, item, cache
+          for item in *items
+            pending_count += 1 if try_add_pending pending, item, cache
         else
           log_warn -> { action: "nft_invalid_message", reason: parse_err or "parse_failed", raw: line\sub(1, 220) }
+        -- Une ligne peut porter plusieurs adresses : la borne du lot est
+        -- dépassée d'au plus #items-1 éléments (MAX_BATCH reste un ordre de
+        -- grandeur du nombre d'instructions nft par transaction).
         if pending_count >= MAX_BATCH
           batch_full = true
           break

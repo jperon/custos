@@ -61,6 +61,19 @@ read_pipe = function(fd)
   assert(n and n > 0, "pipe vide")
   return ffi.string(buf, n)
 end
+local read_all
+read_all = function(fd)
+  local parts = { }
+  local buf = ffi.new("char[4096]")
+  while true do
+    local n = ffi.C.read(fd, buf, 4096)
+    if not (n and n > 0) then
+      break
+    end
+    parts[#parts + 1] = ffi.string(buf, n)
+  end
+  return table.concat(parts)
+end
 local split_fields
 split_fields = function(line)
   line = line:gsub("\n+$", "")
@@ -313,6 +326,228 @@ describe("nft_queue element_spec (regroupement par set)", function()
     return assert.same({
       "add element bridge dns-filter-bridge r_test_ip4 { 10.0.0.1 . 1.2.3.4 timeout 2m }"
     }, lines)
+  end)
+end)
+describe("nft_queue enqueue_many (insertion groupée par set)", function()
+  it("regroupe N adresses en UNE ligne IPC (champ 4 = liste séparée par espaces)", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    local n = q.add_ip4_many("192.168.1.42", {
+      "10.0.0.1",
+      "10.0.0.2",
+      "10.0.0.3"
+    }, "dns_workhours", "240s", "corr-123")
+    assert.equals(3, n)
+    assert.equals(1, q.get_last_seq())
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.equals(1, #lines)
+    local fields = split_fields(lines[1])
+    assert.equals(9, #fields)
+    assert.equals("v1", fields[1])
+    assert.equals("ip4", fields[2])
+    assert.equals("192.168.1.42", fields[3])
+    assert.equals("10.0.0.1 10.0.0.2 10.0.0.3", fields[4])
+    assert.equals(hex("dns_workhours"), fields[5])
+    assert.equals("240s", fields[6])
+    assert.equals("1", fields[7])
+    assert.equals(hex("corr-123"), fields[9])
+    return close_pipe(p)
+  end)
+  it("une adresse seule produit exactement la ligne de add_ip4", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    q.add_ip4("192.168.1.42", "10.0.0.1", "r_test", "2m", "c")
+    assert.equals(1, q.get_last_seq())
+    q.add_ip4_many("192.168.1.42", {
+      "10.0.0.1"
+    }, "r_test", "2m", "c")
+    assert.equals(2, q.get_last_seq())
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.equals(2, #lines)
+    local f1, f2 = split_fields(lines[1]), split_fields(lines[2])
+    assert.equals("1", f1[7])
+    assert.equals("2", f2[7])
+    f1[7], f2[7] = nil, nil
+    assert.same(f1, f2)
+    return close_pipe(p)
+  end)
+  it("rend le nombre d'adresses enfilées, 0 sans tube ou liste vide", function()
+    local q = fresh_nft_queue()
+    assert.equals(0, q.add_ip4_many("10.0.0.1", {
+      "1.2.3.4"
+    }, "r_test", "2m", "c"))
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    assert.equals(0, q.add_ip4_many("10.0.0.1", { }, "r_test", "2m", "c"))
+    assert.equals(0, q.add_ip4_many(nil, {
+      "1.2.3.4"
+    }, "r_test", "2m", "c"))
+    assert.is_nil(q.get_last_seq())
+    return close_pipe(p)
+  end)
+  it("découpe une longue liste en lignes ≤ PIPE_BUF_SAFE, rien n'est perdu", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    local addrs
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for i = 1, 40 do
+        _accum_0[_len_0] = "2001:db8::" .. tostring(i)
+        _len_0 = _len_0 + 1
+      end
+      addrs = _accum_0
+    end
+    local n = q.add_ip6_many("fd00::5", addrs, "r_test", "2m", "c")
+    assert.equals(40, n)
+    local last_seq = q.get_last_seq()
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.is_true(#lines >= 2)
+    assert.equals(#lines, last_seq)
+    local got = { }
+    for _index_0 = 1, #lines do
+      local line = lines[_index_0]
+      assert.is_true(#line <= 512)
+      local fields = split_fields(line)
+      assert.equals(9, #fields)
+      for addr in fields[4]:gmatch("[^ ]+") do
+        got[#got + 1] = addr
+      end
+    end
+    assert.equals(40, #got)
+    for i = 1, 40 do
+      assert.equals(addrs[i], got[i])
+    end
+    return close_pipe(p)
+  end)
+  it("add_many écrit le même champ worker_idx qu'une ligne unitaire", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    q.add_ip4("192.168.1.42", "10.0.0.1", "r_test", "2m", "c")
+    q.add_ip4_many("192.168.1.42", {
+      "10.0.0.1",
+      "10.0.0.2"
+    }, "r_test", "2m", "c")
+    q.get_last_seq()
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.equals(2, #lines)
+    assert.equals("-1", (split_fields(lines[1]))[8])
+    assert.equals("-1", (split_fields(lines[2]))[8])
+    return close_pipe(p)
+  end)
+  it("découpe aussi quand rule_id/corr réduisent le budget d'une tranche", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    local rule_id = string.rep("r", 40)
+    local corr = string.rep("c", 80)
+    local addrs
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for i = 1, 30 do
+        _accum_0[_len_0] = "10.0.0." .. tostring(i)
+        _len_0 = _len_0 + 1
+      end
+      addrs = _accum_0
+    end
+    local n = q.add_ip4_many("192.168.1.42", addrs, rule_id, "2m", corr)
+    assert.equals(30, n)
+    local last_seq = q.get_last_seq()
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.is_true(#lines >= 2)
+    assert.equals(#lines, last_seq)
+    local got = { }
+    for _index_0 = 1, #lines do
+      local line = lines[_index_0]
+      assert.is_true(#line <= 512)
+      local fields = split_fields(line)
+      assert.equals(hex(rule_id), fields[5])
+      assert.equals(hex(corr), fields[9])
+      for addr in fields[4]:gmatch("[^ ]+") do
+        got[#got + 1] = addr
+      end
+    end
+    assert.equals(30, #got)
+    for i = 1, 30 do
+      assert.equals(addrs[i], got[i])
+    end
+    return close_pipe(p)
+  end)
+  return it("add_mac4_many groupe les adresses du client MAC (même set)", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    assert.equals(2, q.add_mac4_many("d8:d3:85:63:6b:27", {
+      "10.0.0.1",
+      "10.0.0.2"
+    }, "r_test", "660s", "c"))
+    assert.equals(1, q.get_last_seq())
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.equals(1, #lines)
+    local fields = split_fields(lines[1])
+    assert.equals("mac4", fields[2])
+    assert.equals("d8:d3:85:63:6b:27", fields[3])
+    assert.equals("10.0.0.1 10.0.0.2", fields[4])
+    return close_pipe(p)
   end)
 end)
 return describe("nft_queue écriture IPC et variantes (branches d'erreur)", function()

@@ -4271,3 +4271,84 @@ règle « pas de gain, pas de code ».
 (`tmp/ipp-perf/final-test.log`) : **3 275 succès / 0 échec / 0 erreur /
 0 pending**. Aucun changement observable de l'API ni des messages d'erreur ;
 pas de `make test-e2e`, aucune connexion distante, aucun `git push`.
+
+## 29a. Lignes nft par réponse : une ligne par set et par timeout (2026-11-13, branche `d-nftq`)
+
+Objectif : le premier poste du classement §26.2 — **16 appels
+`nft_queue.add_ip4`/`add_mac4` par réponse `mixed_o2` (8 A), 11,2 µs/req, 15 %
+du cycle** — et le levier 1 de §26.5. Le coût ne venait pas du nombre
+d'instructions nft (déjà regroupées par set dans `worker_nft.build_batch`,
+§8) mais de la **construction des lignes IPC** : une ligne par enregistrement,
+alors que seule l'adresse change d'une ligne à l'autre (même clé, même règle,
+même timeout, même corrélateur).
+
+### 29a.1 Correctifs (un commit par étape)
+
+| Correctif | Fichier | Effet mesuré |
+|---|---|---|
+| Ligne IPC multi-adresses : le champ `ip` porte la liste (séparateur espace, 9 champs inchangés) ; `add_many` + `add_ip{4,6}_many`/`add_mac{4,6}_many`, une validation de timeout et un `seq` pour N éléments ; découpage en lignes ≤ `PIPE_BUF_SAFE` pour un RRset AAAA volumineux | `src/nft_queue.moon:237-302` | une ligne par set au lieu d'une par adresse |
+| `add_many` ne fait plus que **découper** les adresses en tranches jointes par `" "` et appelle `enqueue` pour chacune : une adresse ⇒ une tranche ⇒ ligne unitaire, sans cas spécial ni construction de ligne dupliquée ; budget d'une tranche = `PIPE_BUF_SAFE` − champs constants mesurés par longueur (`to_hex` double exactement) − réserve forfaitaire `GROUP_FIXED_RESERVE` (seq/worker_idx pire cas, séparateurs, `\n`, timeout) | `src/nft_queue.moon:240-287` | +1,0 µs/set → +0,1 µs (mesuré) ; simplification (2026-11-13) : médiane A/B des rapports par paire +0,0 % (moyenne) / −1,5 % (lot-min) sur `mixed_o2`, 0 % / −10 % sur `micro_add_group` |
+| `worker_nft.parse_line` rend la **liste** des items d'une ligne (un par adresse, même `seq`), cache d'upsert/déduplication/regroupement restant par élément ; une adresse invalide rejette la ligne entière ; `run` n'émet qu'un ACK par ligne | `src/worker_nft.moon:63-108,489-491` | parse de 16 lignes → 2 |
+| `response_inject.inject` accumule par `(fonction d'ajout, règle, clé client, timeout)` et émet un groupe par set ; un TTL hétérogène crée un groupe de plus (timeouts par élément préservés) ; `add_to_wildcards` (seul appelant : `inject`) supprimé, les recopies wildcard passent par le même accumulateur | `src/response_inject.moon:63-146` | 16 lignes → 2 pour 8 A |
+| Appelants : `worker_responses` (`ADD_IP`/`ADD_MAC`, `src/worker_responses.moon:33,671-672`) et `doh/query` (`src/doh/query.moon:16,300-301,338-339`) passent les variantes groupées ; banc : micro-cas `micro_add_group` (`src/bench/hotpath.moon:645-647,679`) | — | — |
+
+Le format de ligne reste `v1|kind|clé|adresses|hex(rule_id)|timeout|seq|worker_idx|hex(corr)` :
+une ligne à une adresse est **identique octet pour octet** à l'ancienne (test
+dédié dans `tests/unit/nft_queue_spec.moon`), donc `worker_sip`, `worker_tls`
+et les autres producteurs sont inchangés. Les sets, les timeouts par élément,
+les exclusions de cache et la sémantique d'ACK (« batch traité », seq de la
+dernière ligne) ne changent pas : `MAX_BATCH` peut seulement être dépassé de
+`#items-1` éléments quand une ligne groupée franchit la borne.
+
+### 29a.2 Mesures
+
+**Micro-cas** (`HP_ITERS=200000 HP_REPEAT=3 HP_TASKSET=1`, même passage pour
+les deux lignes, `tmp/ntq/group8.log`) :
+
+| étape | µs/appel | o/appel |
+|---|---|---|
+| `nft_queue.add_ip4` (1 adresse) | 1,4 | 703 |
+| `nft_queue.add_ip4_many` (1 adresse) | 1,5 | 705 |
+| `nft_queue.add_ip4_many` (8 adresses) | **3,2** | 1 030 |
+
+Soit, par réponse de 8 A : **22,4 µs → 6,4 µs** pour les deux sets (16 lignes →
+2). Le cas « une adresse » est neutre (1,5 vs 1,4 µs, même allocation) : les
+réponses à un seul enregistrement ne paient pas le regroupement.
+
+**A/B alterné** (`HP_ITERS=100000 HP_REPEAT=3 HP_TASKSET=1`, A = `7639bc2`,
+B = branche, 5 paires, `tmp/ntq/ab-*.log`) — médiane des **rapports par paire**
+(la machine est partagée avec d'autres agents : deux paires sur cinq montrent
+une inversion de +38 % et +82 %, attribuable à leur charge, cf. 29a.3) :
+
+| cas | lot-min | moyenne | allocation |
+|---|---|---|---|
+| `mixed_o2` | **−12,5 %** (médiane) | **−8,1 %** (médiane) | 30 327 → 26 526 o (**−12,5 %**) |
+| `mixed_plain` | −3,1 % (médiane) | +1,1 % (médiane) | 14 805 → 15 741 o (+6,3 %) |
+
+`mixed_plain` est neutre par construction (un seul A → une ligne par set avant
+comme après) ; l'allocation y augmente de ≈ 0,9 Kio, part des tables de
+l'accumulateur de `inject` (2 groupes + listes). Sur la cible (§26.5), la même
+économie de 16 µs de construction de lignes par réponse `mixed_o2` représente
+≈ 0,3 ms/requête des 3,1 ms estimées.
+
+### 29a.3 Vérifications, non fait, douteux
+
+- `nix develop --command bash -c "make all && make check && make test"` :
+  **3 284 succès / 0 échec / 0 erreur / 0 pending** (`tmp/ntq/test_final1.log`) ;
+  `.lua` compilés commités avec leurs `.moon`. Pas de `make test-e2e` (consigne),
+  aucune connexion distante.
+- Tests ajoutés : ligne groupée (format, seq unique, découpage ≤ 512 o sans
+  perte, une adresse = ligne unitaire, liste vide), `parse_line` multi-adresses
+  (item par adresse, rejet tout-ou-rien, champ vide), regroupement d'`inject`
+  (8 A → 1 appel par set, timeouts distincts → un groupe de plus), boucle `run`
+  de bout en bout sur une ligne groupée (une instruction nft, un ACK).
+- **Douteux** : les µs absolues sont gonflées par la charge d'autres agents
+  pendant la campagne (moyenne `mixed_o2` 80-147 µs selon le passage, contre
+  57,4 µs isolés en §26.4) ; seules les **médianes de rapports par paire** et
+  les micro-cas (mesurés dans le même passage) sont transposables. Le gain sur
+  le worker `nft` lui-même (parse de 2 lignes au lieu de 16) n'a pas été mesuré
+  au banc `bench-nftcpu`.
+- **Non fait** : la sonde de portail captif de `worker_responses.finalize_a`
+  (`src/worker_responses.moon:838-842`, chemin `dnsonly`) insère encore une
+  ligne par enregistrement dans `CAPTIVE_PROBE_SET` (chemin rare, hors du cycle
+  `mixed`).
