@@ -4210,3 +4210,64 @@ make test"` → **3 281 succès / 0 échec / 0 erreur / 0 pending**
 (`tmp/d-decide/test-1.log`), dont 6 cas ajoutés à
 `tests/unit/filter/filter_spec.moon` (messages, nom sans domaine, match par
 labels et non par sous-chaîne, liste de 200 domaines, `_any`, `_none`).
+
+## 29b. Parse DNS des réponses : champs fixes lus sans `su` (2026-11-13, branche `d-ippdns`)
+
+Objectif : réduire les 2 × 5,0 µs/req de `parse_dns_packet` sur les réponses A et
+B (§26.2 lignes 2-3) et les 2,2 µs de la question (ligne 8). Le sous-module
+`src/lib/moontastik` (branche `ipp-perf`, commit `81ab99d`) est modifié ; custos
+ne fait que déplacer le pointeur et ses `.lua` compilés.
+
+**Ce qui était réellement consommé.** Dans `worker_responses`, le message parsé
+ne sert que par `header` (`qr`, `id`, `rcode`, `ra_z_rcode`, `qdcount`),
+`questions[i].name/.qtype`, et `answers[i].rtype/.rdata/.ttl/.end_off` (via
+`lib.dns_response.parse_answers:80-88`, `dns_classify.classify:107-125`,
+`is_sinkhole`, `cname_targets`, `decode_cname_target:44-50`). `rname`, `rclass`,
+`off` des RR et les sections authority/additional ne sont pas lus ;
+`dns_ede` re-parse `dns_raw` de son côté. Le poste dominant du profil
+(`HP_PROFILE=f`, `micro_parse_a`) était le décodage générique : `parse_rrs`
+32,5 %, `parse_rr` 8,4 %, `su` 4,0 %, `parse_question` 8,8 % — et avant
+correctif `su` 13,9 % + `read_uint` 2,8 %.
+
+**Correctif retenu (1 optimisation, 1 commit).** `ipparse/l7/dns.moon:85-99`
+ajoute `u16`/`u32`, qui lisent un entier big-endian en **un** `string.byte`
+multi-octets, et remplacent `su ">H B B H H H H"` (`parse_header:153-165`),
+`su ">H H"` (`parse_question:394-396`) et `su ">H H I4 H"`
+(`parse_rr:430-434`). Mêmes entiers, mêmes erreurs (les contrôles de longueur
+`need_bytes`/`len < 12` sont inchangés), aucune allocation : `su` émulait
+`string.unpack` via une table de résultats et un `unpack` final, pour quatre
+champs par RR. Test ajouté : TTL `0xFFFFFFFF` (`tests/l7/test_dns.moon:98-114`),
+qui verrouille la borne non signée du champ 32 bits ; les tests de round-trip
+TCP couvrent le champ `size` (chemin `u16` de `parse_header`).
+
+**Mesures.** Machine partagée par d'autres agents : les cœurs 0-1 tournaient à
+3 000 MHz (occupés), les cœurs 2-5 à 2 200 MHz (`powersave`), d'où des valeurs
+absolues supérieures à §26 et une dispersion inter-runs de ±30 %. Deux
+protocoles A/B **alternés** :
+
+- micro-banc ipparse, **variantes chargées dans le même processus** (même
+  fréquence, même JIT ; 5 passages, minimum, 2 exécutions) :
+  `dns_parse_resp8` **5,07 → 2,90 µs/appel** (−43 %), `dns_parse_query`
+  1,80 → 0,91 (−49 %), `dns_parse_question` 0,557 → 0,449 (−19 %),
+  `dns_parse_rr` 0,60 → 0,21-0,52 (minimum bruité par l'interning).
+- `HP_ITERS=100000 HP_REPEAT=3 HP_ONLY=mixed_o2,mixed_plain`, `HP_TASKSET=5`,
+  2 paires A/B (lot-min) : `mixed_o2` **99,5 → 93,8 µs** (−5,7 µs, −5,7 %) et
+  `mixed_plain` **56,6 → 55,2 µs** (−1,4 µs, −2,5 %). Le cycle `mixed_o2`
+  contient deux parses de réponse et une question ; `mixed_plain` un seul
+  parse de réponse, d'où un gain moindre.
+- Micro-cas custos (mêmes paires, cœur 1 avant saturation) : `micro_parse_a`
+  3,7-4,0 → 1,9-2,2 µs, `micro_parse_b` 3,7-3,9 → 1,9-2,2, `micro_parse_q`
+  1,4-1,5 → 1,2.
+
+**Écarté après mesure.** Passer `parse_question` de `labels` + `concat` au
+constructeur `walk_name` à une passe (réutilisé par `name_string`) a été
+mesuré **neutre** (`dns_parse_question` 0,567 vs 0,641 puis 0,628 vs 0,547
+selon l'exécution, `dns_parse_query` sans écart significatif) : le gain de
+`u16` domine et JIT inline déjà `label`/`labels`. Retiré, conformément à la
+règle « pas de gain, pas de code ».
+
+**Vérifications.** Suite ipparse : **572/572** (`tmp/ipp-perf/ipp-tests*.log`).
+`nix develop --command bash -c "make all && make check && make test"`
+(`tmp/ipp-perf/final-test.log`) : **3 275 succès / 0 échec / 0 erreur /
+0 pending**. Aucun changement observable de l'API ni des messages d'erreur ;
+pas de `make test-e2e`, aucune connexion distante, aucun `git push`.

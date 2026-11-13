@@ -19,6 +19,16 @@ do
   local _obj_0 = require("ipparse.lib.bit_compat")
   band, bor, bnot, lshift, rshift = _obj_0.band, _obj_0.bor, _obj_0.bnot, _obj_0.lshift, _obj_0.rshift
 end
+local u16
+u16 = function(s, off)
+  local a, b = byte(s, off, off + 1)
+  return a * 256 + b
+end
+local u32
+u32 = function(s, off)
+  local a, b, c, d = byte(s, off, off + 3)
+  return a * 16777216 + b * 65536 + c * 256 + d
+end
 local pack_header
 pack_header = function(self)
   return (self.size and sp(">H", self.size) or "") .. sp(">H B B H H H H", self.id, self.qr_opcode_aa_tc_rd, self.ra_z_rcode, self.qdcount, self.ancount, self.nscount, self.arcount)
@@ -96,13 +106,21 @@ parse_header = function(self, off, is_tcp)
     if len < 2 then
       return nil, "No DNS data"
     end
-    size, off = su(">H", self, off)
+    size = u16(self, off)
+    off = off + 2
     len = len - 2
   end
   if len < 12 then
     return nil, "No DNS data"
   end
-  local id, qr_opcode_aa_tc_rd, ra_z_rcode, qdcount, ancount, nscount, arcount, data_off = su(">H B B H H H H", self, off)
+  local id = u16(self, off)
+  local qr_opcode_aa_tc_rd = byte(self, off + 2)
+  local ra_z_rcode = byte(self, off + 3)
+  local qdcount = u16(self, off + 4)
+  local ancount = u16(self, off + 6)
+  local nscount = u16(self, off + 8)
+  local arcount = u16(self, off + 10)
+  local data_off = off + 12
   return setmetatable({
     id = id,
     qr_opcode_aa_tc_rd = qr_opcode_aa_tc_rd,
@@ -317,8 +335,9 @@ parse_question = function(self, off, l7_off, cache)
     return nil, off, "truncated DNS question fields"
   end
   local qname = sub(self, off, _off - 1)
-  local qtype, qclass
-  qtype, qclass, _off = su(">H H", self, _off)
+  local qtype = u16(self, _off)
+  local qclass = u16(self, _off + 2)
+  _off = _off + 4
   local name = concat(lbls, ".")
   if cache then
     cache[off] = name
@@ -364,8 +383,11 @@ parse_rr = function(self, off, l7_off, cache)
     return nil, off, "truncated DNS resource record header"
   end
   local rname = sub(self, off, _off - 1)
-  local rtype, rclass, ttl, rdlen
-  rtype, rclass, ttl, rdlen, _off = su(">H H I4 H", self, _off)
+  local rtype = u16(self, _off)
+  local rclass = u16(self, _off + 2)
+  local ttl = u32(self, _off + 4)
+  local rdlen = u16(self, _off + 8)
+  _off = _off + 10
   if not (need_bytes(self, _off, rdlen)) then
     return nil, off, "truncated DNS resource record data"
   end
