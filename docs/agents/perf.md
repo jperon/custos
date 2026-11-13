@@ -4801,3 +4801,103 @@ dessous de ~1300 q/s (§30), il n'y a aucun délestage et le seuil est sans effe
 - **Aucun palier entre 1300 et 1500 q/s** : le point de bascule n'est pas cerné.
 - Une seule source (`servus`), deux destinations IPv4, pas d'IPv6 temporaire,
   pas de client réel multiple ; résidu noyau non décomposé (pas de `perf`).
+
+---
+
+## 32. Optimisation de ipparse sur le hot path DNS (2026-11-13, branche `d-ipp`)
+
+Section rédigée lors de la branche `d-ipp` (antérieure à §19-§31), retrouvée non commitée et intégrée le 2026-11-13.
+
+Réponse directe à §18.6 / `tmp/prof_report.md` §5.2, qui classaient les deux
+gros postes résiduels comme « sous-module moontastik non modifiable ici » :
+`parse_rr`/`labels`/`label`/`need_bytes` (40-50 % de `so_a`, ~15 % de
+`response`) et `sp`/`su`/`checksum` (5-11 % de `question`). Le mainteneur de
+**moontastik ayant autorisé la modification**, une branche `ipp-perf` du
+dépôt moontastik (sous-dossier `ipparse/`) porte **5 optimisations, un commit
+chacune, chacune mesurée avant/après** ; le sous-module de custos y est
+basculé par le commit `3c3bc20`. Rapport complet (protocole, chiffres par
+commit, limites) : **`tmp/ipp_report.md`**.
+
+### 32.1 Banc de mesure ajouté
+
+`make bench-hotpath` (récupéré de `d-prof`, commit `c312961`) + un micro-banc
+ipparse `ipparse/tests/bench_hot.moon` (commit `c3b1321`) qui mesure, par
+appel, le temps (µs, minimum de N passages) **et** l'allocation (octets, GC
+arrêté) de `l7.dns`, `lib.pack_compat`, `l3.lib.checksum`, la décapsulation
+IP/UDP et `ip4.pack` (duplication validateur). Machine x86-64 partagée :
+dispersion ±15 % en isolé et jusqu'à ×2 en banc complet chargé — **toutes les
+décisions d'optimisation reposent sur un A/B alterné**
+(`orig, new, orig, new`) dans la même fenêtre, avec témoins lus dans les
+mêmes exécutions.
+
+### 32.2 Les 5 optimisations (dépôt moontastik, branche `ipp-perf`)
+
+| # | Commit | Correctif | Gain mesuré (avant → après) |
+|---|---|---|---|
+| 1 | `18feea7` | `l3.lib.checksum` : `string.byte` par mot au lieu d'un `unpack ">H"` par mot, plus de copie `@ ..= "\0"` (`ipparse/l3/lib.moon:17-42`) | `checksum_20` 0,590 → **0,047 µs (−92 %)**, `checksum_udp` 2,397 → **0,095 (−96 %)**, `ip4_pack_udp` −51 % |
+| 2 | `6c7e481` | `l7.dns` : cœur `label_parts`/`walk_name` — un seul tableau de segments et un seul `table.concat` par nom, table `visited` reportée à défaut d'un second saut ; `label`/`labels` inchangés en signature/sortie/erreurs | `dns.parse_rr` 0,675 → **0,496 (−27 %)**, `dns.parse` réponse 8 A 7,550 → **5,808 (−23 %)** ; allocation −27 % (5897 → 4297 o) |
+| 3 | `6d84084` | `lib.pack_compat` : table d'arguments réutilisée jusqu'à 16 valeurs (l'en-tête IPv4 en consomme 10) | `sp_ip4hdr` −21 % (allocation −73 %), `ip4_pack_udp` −12 % (allocation −62 %) |
+| 4 | `7541f1e` | `lib.pack_compat` : champs `cN` ≤ 64 o écrits dans le tampon (plus de table `parts` ni de sous-chaînes intermédiaires) | `sp_ip4hdr` −32 %, `sp_pseudo` −41 %, `ip4_pack_udp` −34 % |
+| 5 | `237a93a` | `l7.dns` : mémoïsation des noms déjà résolus dans un message (les RRs pointent sur le QNAME), table créée seulement si la réponse contient des RR | `dns.parse` réponse 8 A **−42 %** en isolé (−20 % en banc complet), allocation −23 % ; les8 answers coûtent une lecture |
+
+Le gain cumulé sur le banc **ipparse** est net ; côté **custos**, voir §32.3.
+`parse_question` a été volontairement **laissé** sur `labels` + `concat`
+(le constructeur unique y mesurait +3,7 % : les QNAME ne sont pas compressés).
+Les nouveaux paramètres `cache` ajoutés à `parse`/`parse_rrs`/`parse_rr`/
+`parse_questions`/`parse_question` sont **optionnels** : API publique et
+formes de sortie inchangées (custos et doh n'ont rien à modifier).
+
+### 32.3 Effet dans custos (`make bench-hotpath`, A/B alterné)
+
+Sous-module `265876b` → `237a93a`, `.lua` compilés basculés
+(`tmp/ipa_old/` / `tmp/ipa_new/`), minimum des 2 passages par état :
+
+| cas | µs/paq avant | après | gain | o/paq avant | après | gain |
+|---|---|---|---|---|---|---|
+| `question` | 47,0 | **42,9** | **−8,7 %** | 6784 | **5952** | **−12,3 %** |
+| `response` | 52,1 | **46,6** | **−10,6 %** | 13387 | 13003 | −2,9 % |
+| `so_a` | 29,6 | **20,3** | **−31,4 %** | 8994 | **6674** | **−25,8 %** |
+| `so_cycle` | 115,9 | **98,2** | **−15,3 %** | 40465 | **35633** | **−11,9 %** |
+| `ipc_drain` (témoin) | 11,9 | 12,1 | +1,7 % (bruit) | 2634 | 2634 | **0** |
+| `setup_control` (témoin) | 1,4 | 1,3 | bruit | 890 | 890 | **0** |
+
+Les allocations sont déterministes (identiques sur les 4 exécutions) : c'est
+la mesure la plus solide. Un couple de runs **non** alterné avait donné
+`question` −59 % **et** `ipc_drain` (témoin pur) −35 % : état de machine
+différent, chiffres invalidés — seul l'A/B alterné est rapporté.
+
+### 32.4 Tests
+
+- ipparse `make test` → **`==> Total: 571/571`** (560 au départ ; +3 tests
+  d'équivalence de `checksum` contre une référence RFC 1071 écrite à la main,
+  +6 tests d'équivalence des noms DNS contre des **copies littérales du code
+  d'avant** exécutées d'abord contre ce code d'origine (6/6) pour prouver
+  qu'elles n'étaient pas vides, +5 tests `pack_compat` sur les nouvelles
+  voies) ;
+- **ipparse sous Lua 5.4.7** (proxy de la cible Lunatik : Lua 5.4 noyau, sans
+  FFI) → `==> Total: 591/591` : les5 commits n'introduisent ni FFI ni
+  construct LuaJIT-specific ;
+- custos `make all && make check && make test` →
+  **`3164 successes / 0 failures / 0 errors / 0 pending`** ;
+- custos `make test-e2e` : lancé en fin de tâche (voir `tmp/test_e2e.log`) ;
+- `make test-lunatik` / `vm-test` **non exécutés** (exigent root, la commande
+  `lunatik` et un arbre Lunatik construit).
+
+### 32.5 Non fait / douteux
+
+- **`su`/`unpack` non optimisé** (encore 5,3 % de `question`, 2,9 % de
+  `so_a` dans le profil §18.3) : pistes identifiées (chemins rapides par
+  format, suppression de la déstructuration par itération) mais gain non
+  mesuré → non revendiqué. Candidat suivant.
+  *Voir aussi §29b*
+- **Aucune mesure aarch64** (consigne : aucun accès distant) : les **parts**
+  sont transposables, pas les µs (rapport ≈ 25×, §18.2).
+- **Fragilité JIT** : appeler `label_parts` directement depuis la boucle de
+  `labels` donnait une `dns_labels` instable en banc complet (0,10 à 0,48 µs
+  selon l'exécution contre 0,18 constant) ; l'implémentation finale rappelle
+  `label` depuis `labels` et est stable, mais ce réglage est à re-mesurer si
+  le code de `labels` change.
+- **Part du GC non re-mesurée** : la baisse d'allocation est mesurée (§32.3),
+  l'effet sur les 29-47 % d'échantillons GC de §18.4 ne l'est pas (aucune
+  nouvelle campagne `jit.profile`).
+
