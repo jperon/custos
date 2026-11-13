@@ -480,6 +480,28 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     assert.equals(0, q.get_last_acked())
     return close_pipe(p)
   end)
+  it("enqueue alloue < 300 o par ligne (build_line sans table intermédiaire)", function()
+    local q = fresh_with_libc((function(fd, data, len)
+      writes = writes + 1
+      return len
+    end), nil)
+    q.set_wfd(1)
+    for _ = 1, 1000 do
+      q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m", "corr")
+    end
+    q.get_last_seq()
+    local N = 300
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    for _ = 1, N do
+      q.add_ip4("10.0.0.1", "1.2.3.4", "r_test", "2m", "corr")
+    end
+    local after = collectgarbage("count")
+    collectgarbage("restart")
+    local per_line = (after - before) * 1024 / N
+    return assert.is_true(per_line < 300, "enqueue alloue " .. tostring(math.floor(per_line)) .. " o/ligne (seuil 300)")
+  end)
   it("un lot de N éléments produit un seul write", function()
     local q = fresh_with_libc((function(fd, data, len)
       writes = writes + 1

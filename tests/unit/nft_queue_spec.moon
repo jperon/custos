@@ -472,6 +472,34 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     assert.equals 0, q.get_last_acked!
     close_pipe p
 
+  it "enqueue alloue < 300 o par ligne (build_line sans table intermédiaire)", ->
+    -- Le hot path enfile 16 lignes par réponse Tailscale (cf. docs/agents/perf.md
+    -- §19) : build_line allouait une table de 9 champs + une string concat par
+    -- ligne. Seuil calibré sur la mesure GC arrêté dans ce spec (avant correctif 373 o,
+    -- après 225 o) avec marge des deux côtés.
+    q = fresh_with_libc ((fd, data, len) ->
+      writes += 1
+      len
+    ), nil
+    q.set_wfd 1
+    -- Échauffement : JIT + cache to_hex, hors mesure.
+    for _ = 1, 1000
+      q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m", "corr"
+    q.get_last_seq!
+    N = 300
+    collectgarbage "collect"
+    collectgarbage "stop"
+    before = collectgarbage "count"
+    for _ = 1, N
+      -- Pas d'assert dans la boucle : luassert alloue à chaque appel et
+      -- fausserait la mesure (constaté : +1100 o/ligne).
+      q.add_ip4 "10.0.0.1", "1.2.3.4", "r_test", "2m", "corr"
+    after = collectgarbage "count"
+    collectgarbage "restart"
+    per_line = (after - before) * 1024 / N
+    assert.is_true per_line < 300,
+      "enqueue alloue #{math.floor per_line} o/ligne (seuil 300)"
+
   it "un lot de N éléments produit un seul write", ->
     q = fresh_with_libc ((fd, data, len) ->
       writes += 1
