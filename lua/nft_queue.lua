@@ -273,17 +273,21 @@ add_many = function(kind, key, addrs, rule_id, timeout, corr)
   if n == 0 then
     return 0
   end
+  if n == 1 then
+    if enqueue(kind, key, addrs[1], rule_id, timeout, corr) then
+      return 1
+    end
+    return 0
+  end
   timeout = sanitize_timeout(timeout)
   local rule_hex = to_hex(rule_id or "")
   local corr_hex = to_hex(corr or "")
   local widx_str = tostring(worker_idx or -1)
+  local budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key + #rule_hex + #timeout + #corr_hex + 9 + 40)
   local queued = 0
   local i = 1
   while i <= n do
     seq = seq + 1
-    local prefix = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|"
-    local suffix = "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) .. "|" .. widx_str .. "|" .. corr_hex .. "\n"
-    local budget = PIPE_BUF_SAFE - #prefix - #suffix
     local parts = { }
     local bytes = 0
     while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget) do
@@ -291,7 +295,13 @@ add_many = function(kind, key, addrs, rule_id, timeout, corr)
       bytes = bytes + #addrs[i] + 1
       i = i + 1
     end
-    local line = prefix .. table.concat(parts, " ") .. suffix
+    local joined
+    if #parts == 1 then
+      joined = parts[1]
+    else
+      joined = table.concat(parts, " ")
+    end
+    local line = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. joined .. "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) .. "|" .. widx_str .. "|" .. corr_hex .. "\n"
     if #line > PIPE_BUF_SAFE then
       return queued
     end

@@ -256,19 +256,25 @@ add_many = (kind, key, addrs, rule_id, timeout, corr) ->
   return 0 unless kind and key and addrs
   n = #addrs
   return 0 if n == 0
+  -- Un seul élément : ligne unitaire, exactement comme add_ip4/add_mac4 (pas de
+  -- table ni de concaténation de liste pour une réponse à un enregistrement).
+  if n == 1
+    return 1 if enqueue kind, key, addrs[1], rule_id, timeout, corr
+    return 0
   timeout  = sanitize_timeout timeout
   rule_hex = to_hex rule_id or ""
   corr_hex = to_hex corr or ""
   widx_str = tostring worker_idx or -1
+  -- Octets que la ligne peut consacrer aux adresses : borne d'une ligne moins
+  -- les champs fixes, les 9 séparateurs et la place pire cas du seq (20
+  -- chiffres) et du worker_idx (20) — évite de construire préfixe et suffixe
+  -- pour mesurer la place restante.
+  budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key + #rule_hex + #timeout +
+    #corr_hex + 9 + 40)
   queued = 0
   i = 1
   while i <= n
     seq += 1
-    -- Le seq courbe la taille du suffixe : il est donc construit par tranche.
-    prefix = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|"
-    suffix = "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) ..
-      "|" .. widx_str .. "|" .. corr_hex .. "\n"
-    budget = PIPE_BUF_SAFE - #prefix - #suffix
     parts = {}
     bytes = 0
     -- Au moins une adresse par tranche (une adresse plus longue que le budget
@@ -277,7 +283,10 @@ add_many = (kind, key, addrs, rule_id, timeout, corr) ->
       parts[#parts + 1] = addrs[i]
       bytes += #addrs[i] + 1
       i += 1
-    line = prefix .. table.concat(parts, " ") .. suffix
+    joined = if #parts == 1 then parts[1] else table.concat parts, " "
+    line = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. joined ..
+      "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) ..
+      "|" .. widx_str .. "|" .. corr_hex .. "\n"
     return queued if #line > PIPE_BUF_SAFE
     flush! if pending_bytes + #line > PIPE_BUF_ATOMIC
     pending_lines[#pending_lines + 1] = line
