@@ -4184,3 +4184,96 @@ question DNS (une ligne TSV vers `worker_events`, un message de 22 octets vers
   `worker_tls`, `worker_responses.write_block_event`, `worker_arp_sniffer` et
   `worker_auth_queue` écrivent toujours message par message dans ces mêmes
   pipes (peuvent réutiliser `lib.pipe_batch` sans changer le format).
+
+### Campagne de charge après les optimisations du hot path (branche `d-bench6`, 2026-11-13)
+
+Campagne de mesure demandée après le déploiement d'un build `dev` contenant
+`d-prof` (§18), `d-gctune` (§19), les optimisations ipparse (`d-ipp`) et
+`d-batchev` (§20). **Aucune modification de code** ; la configuration de la
+cible n'a **pas** été changée (déjà `nfqueue: { responses: "14-15" }`, questions
+`"0-1"`, `rcvbuf` 4 Mio, `maxlen` 4096, `pending_max` 20 000, `max_age_ms`
+1 500, GC `pause 200`/`stepmul 400` par défaut). Sauvegarde
+`/etc/custos/config.moon.dbench6` prise avant la première mesure et restaurée à
+la fin (identité `md5` `bddc79b5…` vérifiée, sauvegarde supprimée). Détail,
+tableaux et analyse : `docs/agents/perf.md` §21 ; rapport de campagne
+`tmp/bench6_report.md` ; harnais `tmp/tune6/` (`dnsload5.py` copié de `d-bench5`
+sans modification, `runphase6.sh`, `analyse6.py`) et résultats bruts
+`tmp/tune6/results6/` (ignorés par git).
+
+**Build vérifié** : `md5sum` égaux entre `lua/` de la branche et
+`/usr/share/custos/` pour les 14 fichiers du hot path (`nfq_loop`,
+`worker_nft`, `nft_queue`, `dup_query`, `worker_responses`, `nft_rules`,
+`worker_questions`, `lib/ipc_hex`, `lib/gc_tune`, `lib/pipe_batch`,
+`worker_events`, `mac_learner`, `filter/conditions/to_domain`, `config`) et
+pour les **95** fichiers `lua/ipparse/**/*.lua`. Réglage GC constaté :
+`action=gc_tuning pause=200 stepmul=400 idle_step=100 max_heap_mb=32`.
+
+**Protocole** : `servus` authentifié (`dig controlplane.tailscale.com` → 8
+adresses avant **chaque** palier, jamais en échec) ; générateur `dnsload5.py`
+(une IP source, 128 ports, 2 destinations) ; 30 s par palier, drain 45 s,
+repos vérifié, compteurs nft+NFQUEUE dans le même instantané ; séries arrêtées
+au premier palier > 5 % de perte ; CPU sur la fenêtre de 32 s ; **RSS par
+worker avant / pendant / après** ; latence à vide mesurée à 20 q/s.
+
+**Résultats (comparaison à §17.3, même profil)** :
+
+| palier | d-bench5 | d-bench6 |
+|---|---|---|
+| 200 `mixed` | 0 %, p50 22,7 / p99 42,5 ms | 0 %, p50 20,6 / p99 35,5 ms |
+| 350 `mixed` | 0 %, p50 37,6 / p99 333,7 ms | 0 %, p50 22,1 / p99 87,5 ms |
+| 500 `mixed` | 14,9 %, p50 3,87 s | **0 %**, p50 42,5 / p99 217 ms |
+| 700 `mixed` | 31,7 %, p50 9,39 s | 7,8 %, p50 0,60 / p99 1,79 s |
+| 800 `up` | 0 %, p50 0,83 s | 0 %, p50 17,3 / p99 107 ms |
+| 1000 `up` | 34,1 %, p50 4,53 s | **0 %**, p50 22,4 / p99 176 ms |
+| 1300 `up` | 63,0 %, `qdrop` 687 | **0 %**, p50 297 / p99 966 ms |
+| 1600 `up` | non mesuré | 16,1 %, `qdrop` 1 846 (q14) |
+
+À vide (20 q/s `mixed`) : 0 %, p50 23,3 / p99 56,4 ms.
+
+**Plafonds** : `mixed` **≈ 500 q/s** sans perte (premier palier en perte : 700
+à 7,8 %) contre ≈ 350 en §17 ; `up` **≈ 1 300 q/s** sans perte contre ≈ 800.
+Sur `up`, la cible 1000 q/s est tenue avec 15,4 % d'idle.
+
+**Nouveau goulot** : CPU agrégé, réparti à plat (à 700 `mixed` : `dns` 105,2 %
+pour les 2 workers, `resp` 94,9 %, `nft` 46,4 %, `events` 5,5 %, `mac-lrn`
+1,0 %, `idle` 5,3 %). À 1600 `up`, `idle` 2,3 % et la file q14 déborde
+(`qdrop` 1 846, profondeur 4 036 ≈ `maxlen`) à cause du déséquilibre `jhash`
+(25 218 contre 18 641 paquets) ; `question_shed` = 0 partout (profondeur
+questions ≤ 1 312 < 1,5 s) et `response_orphan_dropped` n'apparaît qu'à 1600
+(`suppressed=2 383`, `response_entry_ms` p99 5 477 ms > `pending_ttl` 5 s).
+
+**GC / RSS** : aucun `gc_heap_guard` sur toute la campagne ; `dns-q*` plat
+(23,4 → 24,5 Mio pour deux workers), `resp-q*` de 20,1 → 58,8 Mio (max) puis
+50,0 Mio après 1600 ; `MemAvailable` ≥ 3 566 828 Kio (3,4 Gio). Comparé à §17.3, le RSS est
+plus bas à faible charge (200 : 28,5 contre 36,1 Mio) et un peu plus haut
+au-delà de 700 (1300 : 46,9 contre 41,0 Mio), cohérent avec `pause: 200`
+(tas +1,4 Mio/worker au micro-banc, §19.2). Marge mince pour `resp-q14` à 1600
+(32,8 Mio de RSS pour un seuil de tas de 32 Mio).
+
+**Point à instruire** : le CPU `nft` **augmente** de +8 à +11 points à
+200-350 `mixed` (18,0 → 29,3 puis 34,5 → 43,0) et reste ~46 % à 500-700
+(contre 36-38,5 en §17), sans changement du profil d'upserts mesuré alors
+(1,70-1,71). Non expliqué par cette campagne (pas de variante GC déployable
+sur la cible, compteurs du cache en DEBUG, niveau INFO conservé) : à mesurer
+avant de conclure à une régression.
+
+**Vérifications finales** : configuration restaurée (`grep` : seule la ligne
+`nfqueue: { responses: "14-15" }`, `md5` identique, `.dbench6` absent,
+`status` running) ; sonde DNS finale `controlplane.tailscale.com` → 8
+adresses (toujours authentifié) et `vpn.stemarie.dynv6.net` servie (NODATA :
+le nom n'a plus d'enregistrement A, vérifié via `dns.google` ; `reseau` n'a
+qu'un AAAA — §17 avait un CNAME sans A) ; `servus` sans IPv6 temporaire
+(`ip -6 addr show dev wan` inchangé) et sans générateur résiduel ; aucune
+capture AF_PACKET. `make all && make check && make test` : **3219 succès /
+0 échec / 0 erreur / 0 pending** (47,9 s, `tmp/test.log`) ; aucun `.lua`
+régénéré. Un run intermédiaire de `make test` seul a échoué une fois sur la
+mesure mémoire par `collectgarbage` de `tests/unit/ipc/ipc_spec.moon:1024-1038`
+(`per_entry` négatif) : le spec passe seul (63/0) et le run final est à 0
+échec — flottement préexistant, aucun code modifié. Pas de `make test-e2e`.
+
+**Non fait / douteux** : scénario « défauts » non rejoué (consigne) ;
+`d-valspread` et compteurs du cache d'upsert non isolables (comme §17.8) ;
+perte à 700 `mixed` non attribuée (aucun `qdrop`/`udrop`/orpheline, 20 249
+réponses journalisées contre 19 365 reçues) — à rejouer en 2-3 runs ; une
+seule mesure par palier ; `events`/`mac-lrn` sous-estimés aux paliers saturés
+(leur traitement se termine pendant le drain, hors fenêtre CPU).
