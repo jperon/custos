@@ -110,6 +110,52 @@ describe "filter.conditions.to_domains", ->
     f = (to_domains {}) {}
     assert.is_false (f {domain: "github.com"})
 
+  it "messages de correspondance (comme to_domain)", ->
+    f = (to_domains {}) {"github.com", "debian.org"}
+    v, r = f {domain: "github.com"}
+    assert.is_true v
+    assert.equals "Exact match", r
+    v, r = f {domain: "api.github.com"}
+    assert.is_true v
+    assert.equals "Subdomain matched", r
+    v, r = f {domain: "evil.com"}
+    assert.is_false v
+    assert.equals "Not matched by any domain", r
+
+  it "nom sans domaine → faux (aucune valeur spéciale)", ->
+    f = (to_domains {}) {"github.com"}
+    v, r = f {domain: nil}
+    assert.is_false v
+    assert.equals "Not matched by any domain", r
+
+  it "matche par labels, pas par sous-chaîne", ->
+    f = (to_domains {}) {"example.com"}
+    for name in *{"notexample.com", "example.com.evil.net", "example.co", "xexample.com"}
+      assert.is_false (f {domain: name}), "#{name} ne doit pas matcher"
+
+  it "liste de 200 domaines : dernier élément de la liste atteignable", ->
+    -- Régression : l'index par suffixe ne doit pas perdre les entrées de la fin
+    -- de la liste (cf. docs/agents/perf.md §29c).
+    domains = {}
+    for i = 1, 200
+      domains[i] = "site#{i}.example#{i}.net"
+    f = (to_domains {}) domains
+    v, r = f {domain: "www.site200.example200.net"}
+    assert.is_true v
+    assert.equals "Subdomain matched", r
+    assert.is_false (f {domain: "site201.example201.net"})
+
+  it "_any dans la liste → vrai si un domaine est présent", ->
+    f = (to_domains {}) {"_any", "github.com"}
+    assert.is_true (f {domain: "nimporte.quoi.net"})
+    assert.is_false (f {domain: nil})
+
+  it "_none dans la liste → vrai si le domaine est absent", ->
+    f = (to_domains {}) {"_none", "github.com"}
+    assert.is_true (f {domain: nil})
+    assert.is_true (f {domain: "github.com"})
+    assert.is_false (f {domain: "evil.com"})
+
 describe "filter.conditions.to_domainlist", ->
   to_domainlist = (require "filter.conditions.to_domainlist").factory
   TMPDIR = "./tmp"
