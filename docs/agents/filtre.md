@@ -294,3 +294,13 @@ des cibles de chaîne — parité DoH non implémentée (hors périmètre actuel
 
 ---
 
+## Détection paresseuse de l'IP du portail captif (`src/captive_ips.moon`)
+
+`detect` lit l'IP du bridge une seule fois au démarrage, quand le bridge peut ne
+pas encore être adressé. `new_detector` conserve l'échec et `ensure` retente au
+plus toutes les `RETRY_INTERVAL` (10 s) secondes pour les familles manquantes ;
+dès qu'une adresse apparaît elle est mémorisée et loguée (INFO) une fois. Tant
+qu'aucune IP n'est connue pour le type demandé (A sans ip4, AAAA sans ip6), on
+ne forge pas de réponse vide : la question suit le chemin normal. Facteur commun
+aux workers UDP (`worker_questions`) et DoH (`worker_doh` + `doh.query`).
+

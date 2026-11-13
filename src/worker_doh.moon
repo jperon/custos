@@ -632,6 +632,11 @@ run = (doh_cfg, filter_data) ->
   -- Configure le canal ACK bidirectionnel si le superviseur en a alloué un.
   nft_q.set_ack_rfd doh_cfg.ack_rfd, doh_cfg.worker_idx if doh_cfg.ack_rfd and doh_cfg.worker_idx != nil
 
+  captive_detector = nil
+  cap_domain = nil
+  cap_ip4 = nil
+  cap_ip6 = nil
+  set_captive = nil
   -- Initialize filter with data passed from main.moon
   if filter_data
     filter = require "filter"
@@ -639,14 +644,23 @@ run = (doh_cfg, filter_data) ->
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
     -- Détecte les règles wildcard d'auth pour l'injection nft (cf. doh.query).
-    { :set_wildcard_rules, :set_captive } = require "doh.query"
+    doh_query = require "doh.query"
+    set_wildcard_rules = doh_query.set_wildcard_rules
+    set_captive = doh_query.set_captive
     set_wildcard_rules filter_data.rules and filter_data.rules.rules_metadata
     -- Vol DNS du portail captif en DoH (parité avec worker_questions).
-    { :detect, :domain_from_url } = require "captive_ips"
+    { :domain_from_url, :new_detector } = require "captive_ips"
     auth = filter.get_auth_cfg!
     cap_domain = domain_from_url auth.redirect_url
-    cap_ip4, cap_ip6 = detect auth
+    captive_detector = new_detector auth
+    cap_ip4, cap_ip6 = captive_detector\get!
     set_captive cap_domain, cap_ip4, cap_ip6
+    if cap_domain
+      ifname = auth.bridge_ifname or "br0"
+      if not cap_ip4
+        log_warn -> { action: "captive_ip4_not_detected", ifname: ifname }
+      if not cap_ip6
+        log_warn -> { action: "captive_ip6_not_detected", ifname: ifname }
   unless doh_cfg.enabled
     log_info -> { action: "worker_disabled" }
     return
@@ -741,6 +755,13 @@ run = (doh_cfg, filter_data) ->
     while true
       dead_pid = reap_one!
       break unless dead_pid and dead_pid > 0
+
+    -- Détection paresseuse des IP captives (bridge adressé après le boot).
+    if captive_detector and cap_domain
+      new4, new6 = captive_detector\ensure!
+      if new4 != cap_ip4 or new6 != cap_ip6
+        cap_ip4, cap_ip6 = new4, new6
+        set_captive cap_domain, cap_ip4, cap_ip6
 
     readable, _ = socket.select all_servers, nil, 0.1
     if readable

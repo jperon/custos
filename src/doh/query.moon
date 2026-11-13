@@ -173,6 +173,10 @@ process_query = (dns_raw, client_ip, client_mac, upstream, client_vlan) ->
     for q in *questions
       norm = (q.name or q.qname or "")\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA)
+        -- Pas d'IP pour la famille demandée : ne pas forger de réponse vide.
+        has_ip = (q.qtype == QTYPE_A and captive_ip4) or (q.qtype == QTYPE_AAAA and captive_ip6)
+        if not has_ip
+          continue
         forged = build_captive_response dns, dns_raw, captive_ip4, captive_ip6
         if forged
           -- Par requête DoH : DEBUG, jamais INFO.

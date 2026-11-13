@@ -195,33 +195,45 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
   } or { })
   if captive_domain then
     for _index_0 = 1, #questions do
-      local q = questions[_index_0]
-      local norm = (q.name or q.qname or ""):lower():gsub("%.+$", "")
-      if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
-        local forged = build_captive_response(dns, dns_raw, captive_ip4, captive_ip6)
-        if forged then
-          if level_enabled("DEBUG") then
-            log_debug(function()
-              return {
-                action = "dns_stolen",
-                worker = "doh",
-                domain = q.name or q.qname,
-                qtype = q.qtype_name or tostring(q.qtype),
-                client_ip = client_ip,
-                client_mac = client_mac
-              }
-            end)
+      local _continue_0 = false
+      repeat
+        local q = questions[_index_0]
+        local norm = (q.name or q.qname or ""):lower():gsub("%.+$", "")
+        if norm == captive_domain and (q.qtype == QTYPE_A or q.qtype == QTYPE_AAAA) then
+          local has_ip = (q.qtype == QTYPE_A and captive_ip4) or (q.qtype == QTYPE_AAAA and captive_ip6)
+          if not has_ip then
+            _continue_0 = true
+            break
           end
-          return forged
+          local forged = build_captive_response(dns, dns_raw, captive_ip4, captive_ip6)
+          if forged then
+            if level_enabled("DEBUG") then
+              log_debug(function()
+                return {
+                  action = "dns_stolen",
+                  worker = "doh",
+                  domain = q.name or q.qname,
+                  qtype = q.qtype_name or tostring(q.qtype),
+                  client_ip = client_ip,
+                  client_mac = client_mac
+                }
+              end)
+            end
+            return forged
+          end
+          log_warn(function()
+            return {
+              action = "dns_steal_forge_failed",
+              worker = "doh",
+              domain = q.name or q.qname,
+              client_ip = client_ip
+            }
+          end)
         end
-        log_warn(function()
-          return {
-            action = "dns_steal_forge_failed",
-            worker = "doh",
-            domain = q.name or q.qname,
-            client_ip = client_ip
-          }
-        end)
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
       end
     end
   end

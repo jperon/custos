@@ -228,6 +228,8 @@ describe "worker_questions", ->
     package.loaded["captive_ips"] = {
       detect: (-> nil, nil)
       domain_from_url: -> nil
+      new_detector: (auth) ->
+        { get: (self) -> nil, nil, ensure: (self, now) -> nil, nil }
     }
     package.loaded["bridge_raw"] = {}
     package.loaded["dup_query"] = { pick_resolver: -> nil, get_picker: -> -> nil }
