@@ -66,7 +66,6 @@ inject = function(answers, opts)
   local mac_valid = opts.mac_valid
   local use_wild = opts.user and opts.wildcard_ids and #opts.wildcard_ids > 0
   local mac_ok = mac_valid(opts.client_mac)
-  local groups = { }
   local order = { }
   local add_addr
   add_addr = function(add_fn, rule_id, key, addr, timeout)

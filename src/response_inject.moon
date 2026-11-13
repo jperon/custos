@@ -98,8 +98,7 @@ inject = (answers, opts) ->
   -- client, timeout). `order` fixe l'ordre d'émission (`pairs` n'en garantit
   -- aucun) ; le nombre d'entrées est celui des sets touchés, donc le parcours
   -- linéaire reste court.
-  groups = {}
-  order  = {}
+  order = {}
   add_addr = (add_fn, rule_id, key, addr, timeout) ->
     for g in *order
       if g.add_fn == add_fn and g.rule_id == rule_id and g.key == key and g.timeout == timeout
