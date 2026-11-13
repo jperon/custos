@@ -2355,3 +2355,265 @@ les producteurs secondaires de ces pipes (`worker_tls`,
 `worker_responses.write_block_event`, `worker_arp_sniffer`,
 `worker_auth_queue`) écrivent toujours message par message — ils peuvent
 réutiliser `lib.pipe_batch` sans changement de format.
+
+
+## 21. Campagne de charge après les optimisations du hot path (2026-11-13, branche `d-bench6`)
+
+Campagne demandée après le déploiement sur `custos.lan` d'un build `dev`
+contenant les optimisations de §18 (`d-prof`), §19 (`d-gctune`), du sous-module
+ipparse (`d-ipp`, commit `265876b` — `docs/agents/divers.md`) et §20
+(`d-batchev`). **Aucune modification de code** ; la configuration de la cible
+n'a **pas** été changée (elle était déjà celle du §17.3 : `nfqueue:
+{ responses: "14-15" }`, donc `questions` = défaut `"0-1"`, `rcvbuf` 4 Mio,
+`maxlen` 4096, `pending_max` 20 000, `max_age_ms` 1 500,
+`gc` = défauts `pause 200` / `stepmul 400` / `max_heap_mb 32`, cf.
+`src/config.moon:217-235,634-660` et `doc/CONFIG.md:378-380`). Une sauvegarde
+`/etc/custos/config.moon.dbench6` a néanmoins été prise avant la première
+mesure et restaurée à la fin (identité `md5` vérifiée, §21.8). Le scénario
+« défauts du code » (B de §17.4) n'a **pas** été rejoué, comme demandé.
+
+### 21.1 Dispositif et protocole
+
+- **Build déployé identique à la branche** : `md5sum` égaux pour
+  `nfq_loop.lua`, `worker_nft.lua`, `nft_queue.lua`, `dup_query.lua`,
+  `worker_responses.lua`, `nft_rules.lua`, `worker_questions.lua`,
+  `lib/ipc_hex.lua`, `lib/gc_tune.lua`, `lib/pipe_batch.lua`,
+  `worker_events.lua`, `mac_learner.lua`, `filter/conditions/to_domain.lua`,
+  `config.lua`, et les **95** fichiers `lua/ipparse/**/*.lua`
+  (`LC_ALL=C sort` + `diff` : identiques). Réglage GC effectif constaté au
+  démarrage : `action=gc_tuning pause=200 stepmul=400 idle_step=100
+  max_heap_mb=32` (`src/main.moon:57-71`, `src/lib/gc_tune.moon`).
+- **Générateur** : `tmp/tune6/dnsload5.py` (copie de `d-bench5`, aucune
+  modification), une seule IP source (10.35.1.2), 128 sockets = 128 ports
+  source, 2 destinations (`10.35.1.1`, `10.35.4.1`), `mixed` = 30 % NXDOMAIN
+  + 70 % noms cacheables, `up` = 100 % `vpn.stemarie.dynv6.net` (A).
+- **Authentification** : contrôle `dig controlplane.tailscale.com
+  @10.35.1.1` avant **chaque** palier (8 adresses à chaque fois, jamais en
+  échec — le harnais `runphase6.sh` s'arrête sinon). Aucune IPv6 temporaire
+  n'a été créée sur `servus` (aucune n'était nécessaire : la variation de
+  couple se fait par le port source et la destination).
+- **Paliers** : 30 s de charge ; repos vérifié avant (profondeur nulle sur
+  q0/q1/q14/q15) ; un seul générateur ; compteurs nft **avant** NFQUEUE dans
+  le même instantané ; sonde DNS après chaque palier ; **drain 45 s** pour
+  distinguer une file en retard d'une perte réelle. Séries arrêtées au premier
+  palier > 5 % de perte, comme demandé.
+- **CPU** : jiffies `/proc/<pid>/stat`, ramenés à la fenêtre de **32 s**
+  (30 s de charge + 2 s) et non au drain ; `idle/user/sys/softirq` par
+  Δ`/proc/stat` sur la même fenêtre. **RSS** : `VmRSS` par worker relevé à
+  1 Hz, agrégé en trois phases — *avant* (dernier échantillon ≤ début),
+  *pendant* (maximum sur la fenêtre), *après* (dernier échantillon, ~4 s
+  après la fin du drain). Ces deux derniers points diffèrent de §17 (RSS de
+  fin de fenêtre seulement) : les chiffres de RSS ne sont donc pas
+  strictement superposables à ceux de §17.3.
+- **Journal** : `response_dns_benchmark` (p50/p99 de `q_to_response_ms`,
+  `response_entry_ms`, `ack_wait_us`), `question_shed`,
+  `response_orphan_dropped` (avec `suppressed=`), `gc_heap_guard`,
+  `pipe_batch_write_failed`, WARN/ERROR de la fenêtre. Niveau de log **non
+  changé** (INFO).
+
+### 21.2 Résultats — `mixed` (128 ports, 2 destinations, 30 s, drain 45 s)
+
+`resp`/`dns` = somme des workers de la plage, `nft` = worker nft ; % d'un
+vCPU sur 32 s. Comparaison à §17.3 (configuration A de `d-bench5`).
+
+| palier | d-bench5 perte | d-bench6 perte | d-bench5 p50/p99 (ms) | d-bench6 p50/p99 (ms) | b5 resp/dns/nft | b6 resp/dns/nft |
+|---|---|---|---|---|---|---|
+| 200 | 0 % | 0 % | 22,7 / 42,5 | **20,6 / 35,5** | 62,6 / 41,3 / 18,0 | 44,5 / 36,6 / **29,3** |
+| 350 | 0 % | 0 % | 37,6 / 333,7 | **22,1 / 87,5** | 104,6 / 76,5 / 34,5 | 64,6 / 59,1 / **43,0** |
+| 500 | **14,9 %** | **0 %** | 3 866 / 6 170 | **42,5 / 217,1** | 115,9 / 110,2 / 38,5 | 78,0 / 81,3 / **46,1** |
+| 700 | **31,7 %** | **7,8 %** | 9 394 / 14 677 | **600,3 / 1 794,8** | 115,8 / 115,9 / 36,0 | 94,9 / 105,2 / **46,4** |
+| 850 | non mesuré en §17 | série arrêtée | — | — | — | — |
+| 1000 | non mesuré en §17 | série arrêtée | — | — | — | — |
+
+À vide (**20 q/s `mixed`**, 600 requêtes, 128 ports) : **0 % de perte, p50
+23,3 ms / p99 56,4 ms** (pas de référence §17 pour ce palier). C'est le RTT
+DNS de bout en bout (~20 ms de résolveur amont), pas un coût du filtre.
+
+### 21.3 Résultats — `up` (100 % `vpn.stemarie.dynv6.net` A)
+
+| palier | d-bench5 perte | d-bench6 perte | d-bench5 p50/p99 (ms) | d-bench6 p50/p99 (ms) | b5 resp/dns/nft | b6 resp/dns/nft |
+|---|---|---|---|---|---|---|
+| 800 | 0 % | 0 % | 832 / 4 605 | **17,3 / 107,0** | 124,5 / 91,2 / 0,0 | 75,2 / 64,3 / 0,2 |
+| 1000 | **34,1 %** | **0 %** | 4 526 / 6 800 | **22,4 / 175,7** | 124,1 / 113,3 / 0,0 | 86,7 / 77,9 / 0,1 |
+| 1300 | **63,0 %** | **0 %** | 5 806 / 9 817 | **297,0 / 965,9** | 125,9 / 133,8 / 0,0 | 101,0 / 94,5 / 0,2 |
+| 1600 | non mesuré | **16,1 %** | — | 1 712,6 / 6 965,3 | — | 108,5 / 109,5 / 0,1 |
+
+`nft` reste ~0 sur ce profil : le nom est servi par le cache du résolveur et
+la réponse ne contient **aucun enregistrement** (voir §21.8), donc pas
+d'upsert d'adresse.
+
+### 21.4 Comparaison chiffrée et plafonds
+
+- **Mixed** : le plafond sans perte passe de **≈ 350 à 500 q/s** (0 % à 500
+  contre 14,9 % en §17) ; le premier palier en perte est **700** (7,8 %
+  contre 31,7 %, soit ÷4). La latence à 500 s'effondre : p50 3,9 s → **42 ms**
+  (÷92), p99 6,2 s → **217 ms** (÷28). À 350, p99 334 → **87,5 ms** (÷3,8).
+- **Up** : le plafond sans perte passe de **≈ 800** (avec une marge de
+  latence déjà consommée) à **≈ 1 300 q/s** ; 1000 et 1300, qui perdaient
+  34 % et 63 %, sont à **0 %** ; p50 4,5 s → 22 ms à 1000 et 5,8 s → 297 ms
+  à 1300. Le palier **1600** (nouveau, absent de §17) perd 16,1 %.
+- **CPU par requête** : à charge égale, `resp` baisse de 32-40 % (62,6 → 44,5
+  à 200 ; 124,5 → 75,2 à 800 `up`) et `dns` de 8-25 % (41,3 → 36,6 ; 91,2 →
+  64,3). Ces gains sont cohérents avec §18 (−46 à −49 % de coût par paquet
+  sur le micro-banc x86, partiellement amortis par les postes hors hot path).
+- **`nft` augmente** au contraire de **+8 à +11 points** à 200-350 `mixed`
+  (18,0 → 29,3 puis 34,5 → 43,0) et reste ~46 % à 500-700 (contre 36-38,5).
+  Le profil `mixed` n'a pourtant pas changé et le nombre d'upserts par question
+  (1,70-1,71, §17.5) n'est pas mesuré ici. C'est le seul poste qui régresse ;
+  il n'est pas expliqué par les mesures de cette campagne (voir §21.8).
+
+### 21.5 Nouveau goulot
+
+À 500 `mixed`, `idle` = **13,1 %** (`user` 54,9 %, `sys` 26,3 %, `softirq`
+4,2 %) ; à 700, `idle` = **5,3 %** (user 62,8, sys 25,6, sirq 4,9) : les
+quatre cœurs sont saturés et la répartition est **plate** — `dns-q0` 51,3 % +
+`dns-q1` 53,9 % (105,2 % au total), `resp-q14` 48,9 % + `resp-q15` 46,0 %
+(94,9 %), `nft` 46,4 %, `events` 5,5 %, `mac-lrn` 1,0 %. Aucun worker isolé
+ne plafonne à 100 % : c'est la **somme** qui sature, comme en §17.6, mais avec
+un plafond repoussé de 350 à 500.
+
+En `up`, même chose à 1300 : `resp` 101,0 %, `dns` 94,5 %, `events` 3,4 %,
+`mac-lrn` 2,1 %, `idle` 7,2 %. À **1600**, la limite change de nature :
+`idle` 2,3 %, `resp` 108,5 %, `dns` 109,5 %, et la file réponses déborde —
+**`qdrop` 1 846 sur q14**, profondeur max **4 036** (≈ `maxlen` 4096), alors
+que q15 reste à 302 et `qdrop` 0 : le déséquilibre de `jhash` (25 218 contre
+18 641 paquets traités) fait déborder **une seule** file avant l'autre. La
+profondeur des files questions monte aussi (q1 1 312 à 1600 ; 576 à 700
+`mixed`) : c'est elle qui explique le p50 client (600 ms à 700) alors que
+`q_to_response_ms` p50 n'est que de 26 ms.
+
+`question_shed` = **0** sur **tous** les paliers : le plus vieux paquet en
+file questions est resté sous `max_age_ms` = 1 500 ms (profondeur 1 312 à
+1 600 q/s ≈ 1 s d'attente au plus). `response_orphan_dropped` n'apparaît qu'à
+**1600 `up`** (2 lignes rate-limitées, `suppressed=2 383`), en cohérence avec
+`response_entry_ms` p99 = **5 477 ms** > `ipc.pending_ttl` 5 s ; `qdrop` et
+`udrop` sont **0** partout ailleurs, et il n'y a **aucune** orpheline à
+500-1300.
+
+### 21.6 RSS et effet du GC
+
+`gc_heap_guard` = **0** sur toute la campagne : le plafond `max_heap_mb` = 32
+n'a jamais été atteint. RSS par worker (Kio, somme des 2 `resp-q*` puis des 2
+`dns-q*`, avant / max pendant / après) :
+
+| palier | resp avant | resp max | resp après | dns avant | dns max | dns après | tous max |
+|---|---|---|---|---|---|---|---|
+| 20 `mixed` | 20 064 | 24 264 | 24 264 | 23 376 | 23 952 | 23 952 | 147 912 |
+| 200 `mixed` | 24 264 | 28 524 | 28 516 | 23 952 | 24 284 | 24 284 | 152 672 |
+| 350 `mixed` | 28 524 | 31 540 | 31 544 | 24 288 | 24 324 | 24 324 | 155 804 |
+| 500 `mixed` | 31 544 | 35 416 | 35 288 | 24 324 | 24 448 | 24 448 | 160 000 |
+| 700 `mixed` | 35 288 | 39 584 | 39 456 | 24 448 | 24 492 | 24 492 | 164 400 |
+| 800 `up` | 39 456 | 39 456 | 39 456 | 24 492 | 24 492 | 24 492 | 164 284 |
+| 1000 `up` | 39 448 | 39 456 | 39 456 | 24 492 | 24 492 | 24 492 | 164 288 |
+| 1300 `up` | 39 456 | 46 984 | 44 416 | 24 492 | 24 492 | 24 492 | 172 068 |
+| 1600 `up` | 44 416 | 58 840 | 50 008 | 24 500 | 24 504 | 24 504 | 184 328 |
+
+Lecture :
+
+1. **Pas de gonflement anormal** : le RSS des `dns-q*` est plat (23,4 →
+   24,5 Mio pour deux workers) et celui des `resp-q*` croît avec la charge
+   (20 → 58,8 Mio pour deux workers au pic de 1600), puis redescend
+   partiellement (50,0). `MemAvailable` reste ≥ 3 566 828 Kio (3,4 Gio) ; la machine n'est
+   jamais sous pression mémoire.
+2. **Comparaison à §17.3** (RSS de fin de fenêtre, `pause` 110 à l'époque) :
+   à 200 `mixed` 36,1 Mio → **28,5** ici, à 350 36,1 → **31,5**, à 500 36,1
+   → **35,3**, à 700 35,8 → **39,6**, à 800 `up` 35,8 → **39,5**, à 1000
+   38,0 → **39,5**, à 1300 41,0 → **46,9 (max)**. Le RSS est donc **plus bas
+   à faible charge et un peu plus haut au-delà de 700**, ce qui est le
+   compromis attendu de `pause: 200` (tas +1,4 Mio/worker sur le micro-banc,
+   §19.2) : le plancher monte, mais la croissance sous charge reste bornée.
+   Ces chiffres mêlent le tas GC, la table `pending` (`pending_max` 20 000 ≈
+   16 Mio/worker potentiels, §15.5) et l'historique des paliers — le RSS
+   n'isole pas le GC (aucune variante `pause 110` n'a été déployée, la
+   configuration n'était pas modifiable au-delà de `nfqueue`/`pending_max`).
+3. **Marge du garde-fou** : au pic de 1600, `resp-q14` atteint **32 840 Kio
+   de RSS** alors que le seuil du garde-fou est un **tas** de 32 Mio
+   (`gc_heap_guard` n'a pas tiré). La marge est mince : c'est un point à
+   surveiller avant de viser > 1 300 q/s (§21.7).
+
+### 21.7 Recommandations chiffrées vers 1000 q/s
+
+1. **Le plafond `mixed` est désormais le CPU agrégé, pas un réglage
+   `nfqueue`** : à 500, `idle` 13,1 % ; à 700, 5,3 % avec `qdrop`=`udrop`=0.
+   Pour tenir 1000 `mixed` avec la même marge, il faudrait gagner ~50 % de CPU
+   par requête (700 → 1000 à idle constant). Les postes à viser, dans
+   l'ordre mesuré : `dns` + `resp` (200 % cumulés à 700) puis **`nft` 46 %**
+   — ce dernier est le seul poste qui a *augmenté* depuis §17 et mérite une
+   mesure dédiée avant tout autre correctif.
+2. **`up` tient 1000 q/s sans perte avec 15,4 % d'idle**, et 1300 avec 7,2 % :
+   la cible 1000 q/s est déjà atteinte sur ce profil. La limite suivante est
+   **1600**, où une file réponses déborde (`qdrop` 1 846, profondeur 4 036).
+   Deux leviers chiffrés : (a) borner/équilibrer `jhash` (q14 25 218 contre
+   q15 18 641 paquets, soit 57/43) ; (b) `maxlen` > 4096 échangerait du
+   retard contre moins de jets, mais le CPU est déjà à 2,3 % d'idle — sans
+   gain de débit.
+3. **GC** : garder `pause 200`/`stepmul 400`/`max_heap_mb 32`. Aucun
+   `gc_heap_guard`, RSS total ≤ 184 328 Kio (180 Mio) sur 4 Gio, `dns` plat. Si la cible
+   doit dépasser 1300 `up`, remonter `max_heap_mb` (p. ex. 48) **ou** borner
+   `ipc.pending_max` : `resp-q14` est à 32,8 Mio de RSS pour un seuil de tas
+   de 32 Mio.
+4. **`mixed` 700** : la perte (7,8 %) n'est **pas** expliquée par les
+   compteurs custos (`qdrop`=`udrop`=0, aucune orpheline, `q_to_response_ms`
+   p50 26 ms) ; le client a reçu 19 365 réponses sur 20 999 questions alors
+   que 20 249 lignes `response_dns_benchmark` ont été émises dans la fenêtre.
+   Une partie est le retard de la file questions (profondeur 576), le reste
+   est à localiser (émission `raw_send`, pont, ou client). Avant d'annoncer
+   500-700 comme plafond ferme, rejouer 600-700 (2-3 runs, comme §17.8).
+5. **Ne rien changer aux défauts** : la configuration mesurée est celle du
+   code (hors `responses: "14-15"`, sans effet) ; les gains viennent des
+   branches, pas d'un réglage.
+
+### 21.8 Vérifications finales, non fait, douteux
+
+**Vérifications finales**
+
+- **Configuration restaurée** : `cp /etc/custos/config.moon.dbench6
+  /etc/custos/config.moon`, `rm` de la sauvegarde, `/etc/init.d/custos
+  restart`, puis `grep -n -E "^[[:space:]]*(nfqueue|ipc|gc):"` :
+  **ligne 2 = `nfqueue: { responses: "14-15" }`, aucune autre clé** ;
+  `md5sum` de `config.moon` = `bddc79b591badfc94c17e9380759d8e0`, identique à
+  la sauvegarde ; `.dbench6` absent ; `status` = `running`. Aucune clé n'a
+  été modifiée pendant la campagne (la configuration était déjà la cible),
+  la sauvegarde/restauration n'a donc servi qu'à garantir l'état initial.
+- **Sonde DNS finale** (servus → 10.35.1.1) : `controlplane.tailscale.com A`
+  → **8 adresses** (rc=0) ⇒ toujours authentifié ; sonde de transfert sur
+  `vpn.stemarie.dynv6.net` : requête servie (rc=0, réponse NODATA — voir
+  ci-dessous). Aucun générateur résiduel (`pgrep`), aucune IPv6 temporaire
+  créée sur `servus` (`ip -6 addr show dev wan` : 2 adresses globales
+  existantes + 1 lien-local, inchangées).
+- `make all && make check && make test` : **3219 succès / 0 échec / 0 erreur /
+  0 pending** (47,9 s, `tmp/test.log`) ; aucun `.lua` régénéré.
+
+**Non fait / douteux**
+
+- **Scénario « défauts » (B)** non rejoué (consigne) ; `d-valspread`,
+  compteurs du cache d'upsert : mêmes limites qu'en §17.8.
+- **Le nom du profil `up` n'a plus d'enregistrement A** : au moment de la
+  campagne, `vpn.stemarie.dynv6.net` et `reseau.stemarie.dynv6.net` rendent
+  `NOERROR` sans réponse en A (vérifié via `dns.google`, NS `ns3.dynv6.org`) ;
+  `reseau` n'a qu'un AAAA. En §17.3 la réponse était un CNAME sans A
+  (`reseau.stemarie.dynv6.net.`) : le profil `up` mesure donc toujours un
+  **NODATA cacheable**, avec un enregistrement de moins qu'en §17 — la
+  comparaison reste valable pour le chemin cache/NODATA, pas pour une réponse
+  A complète.
+- **Perte à 700 `mixed`** : non attribuée (voir §21.7 point 4) ; une seule
+  mesure par palier, pas de répétition A/B.
+- **`nft` CPU en hausse** (+8 à +11 points à faible charge) : non expliqué par
+  cette campagne (aucune variante GC testée sur la cible, compteurs du cache
+  invisibles au niveau INFO). À vérifier par une mesure dédiée avant de
+  conclure à une régression.
+- **Orphelines / retard** : seules les lignes rate-limitées sont visibles ;
+  le partage exact entre réponse jamais délivrée et réponse tardive reste non
+  instrumenté.
+- **`events`/`mac-lrn` sous-estimés aux paliers saturés** : leurs tampons
+  groupés (§20) ne sont vidés qu'en fin de lot, et une partie du traitement
+  peut se produire pendant le drain, hors de la fenêtre CPU de 32 s (p. ex.
+  `events` 8,5 % à 350 mais 3,4 % à 1300 `up`).
+- Une seule source (servus), deux destinations IPv4, pas d'IPv6 temporaire ;
+  `perf` absent de la cible ; aucune capture AF_PACKET.
+- **Flottement de la suite de tests** : un run intermédiaire de `make test` a
+  donné 3218 succès / **1 échec** sur `tests/unit/ipc/ipc_spec.moon:1024-1038`
+  (mesure mémoire d'une entrée `pending` par `collectgarbage` : `per_entry`
+  négatif). Le spec passe seul (63/0) et le run final
+  `make all && make check && make test` redonne **3219 / 0** ; flottement
+  préexistant, sans rapport avec la campagne (aucun code modifié).
