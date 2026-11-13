@@ -3872,3 +3872,223 @@ mesure directe : `benchmark` n'est pas dans les clés modifiables autorisées.
   log par paquet.
 - **L'échantillonneur coûte 0,13–0,16 ms/req** (mesuré) ; il est retiré du
   budget propre. Pas de `make test-e2e` (consigne), pas de test IPv6.
+
+## 28. Campagne de charge après `d-prof2`, sans journal benchmark ni lecteurs logread (2026-11-13, branche `d-bench9`)
+
+Campagne demandée après le déploiement du build `dev` courant (merge `d-sys`,
+donc `d-prof2`, `d-nftcpu`, `d-qhash`, `d-multi`), dans l'état préparé par
+l'orchestrateur : **`runtime.benchmark: false`** dans
+`/etc/custos/config.moon` et **6 `logread -f` orphelins + le serveur `tmux`
+tués**. Objectif : mesurer ce que valent réellement les leviers 1-2 de §27.7
+(« supprimer le volume de log benchmark », « retirer les lecteurs logread »)
+sur la cible, et vérifier l'estimation §27.7 (**≈ 1 019-1 060 q/s** après
+`3,77-3,93 ms/req`). **Aucune modification de code** ; aucune clé de
+configuration n'a été modifiée. Rapport complet : **`tmp/bench9_report.md`** ;
+harnais `tmp/bench9/`, résultats bruts `tmp/bench9/results9/` (ignorés).
+
+### 28.1 Dispositif et protocole
+
+- **Build déployé identique à la branche** : `md5sum` égaux pour **les 296**
+  fichiers `lua/**/*.lua` de l'arbre et de `/usr/share/custos/` (`LC_ALL=C
+  sort` + `diff`, zéro écart). Noyau 6.12.74, nft 1.1.6, 4 × Cortex-A55.
+  §25 comptait 294 fichiers et §27 295, l'arbre en compte 296 aujourd'hui :
+  l'essentiel est l'égalité **locale/cible** fichier par fichier, vérifiée.
+- **Configuration** : ligne 2 `nfqueue: { responses: "14-15" }`, ligne 164
+  `benchmark: false` ; `questions` `"0-1"`, `rcvbuf` 4 Mio, `maxlen` 4096,
+  `pending_max` 20 000, `max_age_ms` 1 500 **aux défauts**. `md5` =
+  **`d31244ecaf360611e17ce873b8299513`** (diffère de `bddc79b5…` de §25/§27 ;
+  d'après l'état posé pour la campagne, la bascule `benchmark: false` en est
+  le seul changement). GC constaté au démarrage :
+  `action=gc_tuning pause=200 stepmul=400 idle_step=100 max_heap_mb=32`.
+  Sauvegarde `.dbench9` prise avant la première mesure et restaurée à la fin
+  (§28.6).
+- **Harnais** `tmp/bench9/` : `dnsload5.py` et `counters.sh` **copies
+  identiques** de `tmp/tune8/` (128 sockets, 2 destinations, `mixed` = 30 %
+  NXDOMAIN, `up` = 100 % `vpn.stemarie.dynv6.net` A). Trois écarts imposés par
+  l'absence de journal : (a) `sampler.sh` réécrit (1 Hz, lecture seule ;
+  `/proc/stat`, NFQ, `MemAvailable`, et **une ligne `/proc/<pid>/stat` par
+  tâche** — utime/stime/rss/processor — comme `tmp/sys/sampler_sys.sh` de
+  §27) ; (b) **délestages comptés ponctuellement** (`logread -l 20000 |
+  grep -c questions_question_shed` avant, juste après le générateur, après le
+  drain — jamais `logread -f`) ; (c) fenêtre délimitée par **`/proc/uptime`**
+  et durée calculée en **jiffies**, l'horloge murale de la cible ayant été
+  vue sauter d'une seconde pendant un échantillonnage (`HZ` vérifié = 100 :
+  4 008 jiffies en 10,01 s sur 4 CPU).
+- **Paliers** : 30 s de charge, drain 45 s, 128 sockets, destinations
+  `10.35.1.1` et `10.35.4.1` ; `mixed` **700 ×1, 850 ×3, 1000 ×3** ; `up`
+  **1300 et 1600 ×1** ; référence à vide 20 q/s. `servus` authentifié avant
+  **chaque** phase (`controlplane.tailscale.com` → **8 adresses**, 10/10),
+  `status` = `running` et sonde `rc=0` après chacune (10/10), repos vérifié
+  (profondeur ≤ 3 sur q0/q1/q14/q15 — le trafic de fond maintient 0-1 — et
+  `user_dropped` figé), un seul générateur.
+- **Trafic de fond** : **≈ 19 q/s** mesuré au repos (Δ`id_sequence` q0+q1 :
+  +570 en 30 s), inclus dans les mesures (≤ 2,7 % des requêtes à 700, 1,2 % à
+  1600) ; les ms/req sont donc très légèrement pessimistes.
+- **Log de la fenêtre** : **19-49 lignes par palier** (0 `response_dns_benchmark`),
+  contre 21 177 lignes à 700 q/s en §27.4.
+
+### 28.2 Résultats — `mixed` (128 ports, 2 destinations, 30 s)
+
+`resp`/`dns` = somme des 2 workers, `nft` = worker nft ; % d'un vCPU sur la
+fenêtre. `q0/q1`, `q14/q15` = profondeur **max** à 1 Hz.
+
+| palier | perte | p50 | p90 | p99 | max | resp | dns | nft | idle | busy (4 CPU) | q0/q1 | q14/q15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 700 | 0 % | 20,0 | 31,8 | 92,8 | 141,0 | 97,7 | 90,7 | 22,2 | 35,6 | 257,6 | 2 / 3 | 24 / 40 |
+| 850 r1 | 0 % | 21,5 | 55,4 | 125,8 | 222,9 | 112,3 | 112,7 | 27,6 | 24,0 | 303,9 | 12 / 4 | 39 / 40 |
+| 850 r2 | 0 % | 21,6 | 54,5 | 125,5 | 194,2 | 112,5 | 111,5 | 27,9 | 24,9 | 300,4 | 4 / 4 | 74 / 65 |
+| 850 r3 | 0 % | 21,5 | 52,6 | 121,5 | 200,2 | 112,4 | 111,9 | 27,8 | 25,0 | 299,8 | 6 / 6 | 38 / 56 |
+| 1000 r1 | 0 % | 28,8 | 107,8 | 173,9 | 224,8 | 125,0 | 131,5 | 33,6 | 15,0 | 340,1 | 7 / 14 | 77 / 73 |
+| 1000 r2 | 0 % | 31,0 | 113,7 | 173,5 | 236,1 | 124,2 | 129,9 | 33,3 | 15,5 | 338,1 | 14 / 9 | 115 / 81 |
+| 1000 r3 | 0 % | 29,8 | 104,3 | 174,2 | 221,6 | 125,3 | 130,6 | 33,7 | 15,0 | 339,9 | 10 / 17 | 81 / 75 |
+
+À vide (**20 q/s `mixed`**) : 0 %, **p50 23,7 / p99 52,9 ms** (200/200),
+`resp` 12,7 %, `dns` 10,3 %, `nft` **4,0 %**, `idle` **90,9 %**.
+
+Relevés communs aux sept paliers : `question_shed` = **0** (comptage ponctuel
+4 → 4 sur chaque phase, aucune ligne dans les fenêtres) ; `qdrop` = `udrop` =
+**0** ; `response_orphan_dropped` = 0 ; `gc_heap_guard` = 0 ;
+`pipe_batch_write_failed` = 0 ; profondeurs maximales 2-17 (questions) et
+24-115 (réponses), très loin de `maxlen` 4 096 ; `nft` « queue to 14-15 » /
+réponses reçues = **1,72-1,73** (second avis, §4.1) ; `MemAvailable` ≥
+3 588 564 Kio ; RSS des deux `resp` 39 312 → 47 924 Kio, des deux `dns`
+23 312 → 23 696 Kio. Un seul WARN sur toute la campagne : un `doh_h2_failed`
+(1000 r1, pair IPv6 de `servus`), sans effet sur le palier.
+
+### 28.3 Résultats — `up` (100 % `vpn.stemarie.dynv6.net` A)
+
+| palier | perte | p50 | p90 | p99 | max | resp | dns | nft | idle | workers ms/req | machine ms/req | q0/q1 | q14/q15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1300 | 0 % | 14,2 | 21,0 | 59,3 | 92,0 | 82,3 | 95,6 | 0,2 | 42,9 | 1,515 | 1,712 | 4 / 6 | 46 / 13 |
+| 1600 | 0 % | 15,3 | 24,0 | 79,1 | 112,0 | 98,9 | 117,9 | 0,2 | 33,5 | 1,475 | 1,617 | 7 / 9 | 50 / 27 |
+
+`nft` reste à 0,2 % (règle `dnsonly`/`skip_nft`, §4.2) ; « queue to 14-15 » /
+reçues = **1,00** (aucun second avis) ; `qdrop` = `udrop` = 0 ; le domaine rend
+toujours **NODATA** (§21.10), sonde finale `NOERROR`, `ANSWER: 0`.
+
+### 28.4 Coût par requête et comparaison §25 / §27
+
+ms CPU par requête (identique « émise » et « servie » : perte nulle) :
+
+| palier | resp | dns | nft | events+mac | **workers** | **machine** | **non attribué** |
+|---|---|---|---|---|---|---|---|
+| 700 | 1,365 | 1,267 | 0,310 | 0,291 | **3,233** | **3,599** | **0,363** |
+| 850 (médian) | 1,299 | 1,289 | 0,319 | 0,248 | **3,148** | **3,470** | **0,321** |
+| 1000 (médian) | 1,237 | 1,297 | 0,332 | 0,188 | **3,063** | **3,367** | **0,309** |
+| 1300 `up` | 0,616 | 0,716 | 0,001 | 0,181 | 1,515 | 1,712 | 0,194 |
+| 1600 `up` | 0,601 | 0,717 | 0,001 | 0,156 | 1,475 | 1,617 | 0,140 |
+
+| palier `mixed` | §25 (b8) perte ; p50 / p99 | b9 perte ; p50 / p99 |
+|---|---|---|
+| 700 | 0 % (1 mesure) ; 210,3 / 470,2 | **0 %** ; **20,0 / 92,8** |
+| 850 | **10,0 %** médian ; 1 011-1 604 / 1 891-2 547 | **0 %** (3/3) ; **21,5 / 121,5-125,8** |
+| 1000 | **22,9 %** médian ; 1 664-1 794 / 2 014-3 177 | **0 %** (3/3) ; **29,8-31,0 / 173,5-174,2** |
+| 1300 `up` | 0 % ; 131,6 / 363,2 | 0 % ; **14,2 / 59,3** |
+| 1600 `up` | **3,9 %** ; 2 299,7 / 4 628,5 | **0 %** ; **15,3 / 79,1** |
+
+| palier | §27 machine | b9 machine | §27 workers | b9 workers | §27 non attribué | b9 non attribué |
+|---|---|---|---|---|---|---|
+| 700 | 5,260 (r2) | **3,599** | 3,564 | **3,233** | 1,697 | **0,363** |
+| 850 | 5,017 (r2) | **3,470** | 3,449 | **3,148** | 1,568 | **0,321** |
+| 1000 | — (plateau 770 q/s) | **3,367** | — | **3,063** | — | **0,309** |
+
+Lecture :
+
+1. **Le plateau de ~770 q/s de §25/§27 a disparu** : 1000 q/s `mixed` passe à
+   **0 % de perte sur 3/3** (p99 173-174 ms au lieu de 2 014-3 177) et 1600
+   `up` à **0 %** (p50 15,3 ms au lieu de 2 299,7). La limite n'était donc pas
+   le chemin DNS mais le **coût du journal benchmark et de ses lecteurs**.
+2. **Le budget est meilleur que l'estimation §27.7** (3,77-3,93 ms/req →
+   ≈ 1 019-1 060 q/s) : mesuré **3,599** (700), **3,470** (850), **3,367**
+   (1000), soit `4 000 / 3,367` ≈ **1 190 q/s** de capacité ; à 1000 q/s il
+   reste **15 % d'un cœur par CPU** (`idle` 15,0-15,5 %), ce qui recoupe
+   (`1000 / 0,85 ≈ 1 176`). En `up`, `4 000 / 1,617` ≈ **2 470 q/s**
+   (extrapolation, pas un palier mesuré).
+3. **Workers** : 3,564 → **3,233 ms** à 700 (−9,2 %), cohérent avec
+   l'estimation d-prof2 de §26.5 (≈ 3,1 ms) ; `resp` + `dns` = **2,63 ms**
+   (3,07 en §25.5 à 700), `nft` **0,31** (0,37 en §25.5) : le gain d-prof2 est
+   bien là,
+   mais il ne suffisait pas à lui seul (3,2 ms de workers n'autorisent que
+   ~1 250 q/s et le non attribué de §27 aurait ramené à ~770).
+4. **Aucun worker n'est saturé à 1000** : `resp-q14/q15` 56,0-68,2 % et
+   `dns-q0/q1` 59,0-71,6 % d'un vCPU chacun (**124-132 %** pour les deux),
+   `nft` 33,5 % ; c'est la **somme des 4 cœurs** qui est à 85 %.
+
+### 28.5 Ventilation du non attribué — les postes de §27.3 ont disparu
+
+850 r2 et 1000 r2, ms CPU par requête servie :
+
+| poste | §27 (850 r2) | b9 (850 r2) | b9 (1000 r2) |
+|---|---|---|---|
+| **machine (4 cœurs)** | **5,017** | **3,470** | **3,367** |
+| workers (resp+dns+nft+events+mac) | 3,449 | 3,149 | 3,050 |
+| **non attribué** | **1,568** | **0,321** | **0,317** |
+| dont `logread` (6 lecteurs) | 0,495 | **0** (aucun) | **0** |
+| dont `tmux` | 0,208 | **0** (tué) | **0** |
+| dont `logd` | 0,166 | ≤ 0,006 (0,0 %) | ≤ 0,006 (0,0 %) |
+| dont `procd` | 0,125 | ≤ 0,006 (0,0 %) | ≤ 0,006 (0,0 %) |
+| dont échantillonneur | 0,143 | 0,007 | 0,005 |
+| dont `sshd` | 0,008 | 0,004 | 0,004 |
+| **résidu `irq+softirq`** | **0,390** | **0,28-0,32** | **0,29-0,30** |
+
+La décomposition est directe (mesure), pas une soustraction : chaque processus
+est relevé par `utime+stime` dans `/proc/<pid>/stat`. Le **volume de log**
+passe de 21 177 lignes `response_dns_benchmark` par fenêtre de 30 s (§27.4) à
+**19-49 lignes** toutes causes confondues : c'est ce qui supprime `logread`,
+`tmux`, `logd` et la part de `procd`. Le non attribué restant est désormais
+**presque exclusivement du noyau** (`irq+softirq` 0,28-0,32 ms/req, contre
+0,33-0,43 en §27.5), cohérent avec les 2,4 paquets NFQUEUE/requête de §27.5.
+
+### 28.6 Vérifications finales, non fait / douteux
+
+**Vérifications finales**
+
+- **Configuration restaurée** : `cp /etc/custos/config.moon.dbench9
+  /etc/custos/config.moon && rm …dbench9 && /etc/init.d/custos restart` ;
+  `md5sum` = **`d31244ecaf360611e17ce873b8299513`** (identique à la
+  sauvegarde), `.dbench9` absent, `grep` : ligne 2 `nfqueue: { responses:
+  "14-15" }`, ligne 164 `benchmark: false` ; `status` = `running`.
+  **Aucune clé n'a été modifiée** (même pas les clés autorisées
+  `questions`/`responses`/`rcvbuf`/`maxlen`/`pending_max`) et `benchmark`
+  n'est **pas** remis à `true`.
+- **Sonde DNS finale** (`servus` → 10.35.1.1, après redémarrage) :
+  `controlplane.tailscale.com A` → **8 adresses** (toujours authentifié) ;
+  `vpn.stemarie.dynv6.net A` → `NOERROR`, `ANSWER: 0` (NODATA, comme §25.3).
+  Sonde post-palier `rc=0` sur les 10 phases.
+- **`servus`** : aucune `ip -6 addr add` n'a été exécutée ; `ip -6 addr show
+  dev wan` final = **2 adresses globales**
+  (`2001:470:ca35:1:dad3:85ff:fe63:6b27/64`,
+  `2001:470:ca35:1::bede/64`) + 1 lien-local, identique à l'état initial ;
+  aucun générateur résiduel.
+- **Cible** : aucun `logread` ni `tmux` avant/après (`pgrep`), aucun
+  `logread -f` lancé ; files q0/q1/q14/q15 à profondeur 0, workers présents,
+  `nft_rules_applied` au redémarrage.
+- Aucune capture AF_PACKET, aucun fichier de code modifié, rien installé,
+  pas de `git remote`/`git push`. Pas de `make test-e2e` (consigne).
+- `nix develop --command bash -c "make all && make check && make test"` :
+  **3 273 succès / 0 échec / 0 erreur / 0 pending** ; aucun `.lua` régénéré
+  (aucun code touché).
+
+**Non fait / douteux**
+
+- **`benchmark: true` non re-mesuré** (clé hors du périmètre autorisé) :
+  l'attribution du gain entre « journal coupé » et « lecteurs retirés » est une
+  comparaison à §25/§27, pas un A/B ; le non attribué baisse de 1,25-1,33
+  ms/req, du même ordre que les 1,05-1,10 + 0,45-0,55 ms/req chiffrés en
+  §27.7 (les deux leviers ne sont pas additifs).
+- **700 `mixed` mesuré une seule fois** (série demandée) : dispersion
+  700-850 non cernée ; 850 et 1000 le sont (3/3, 0 %).
+- **Aucun palier au-delà de 1000 `mixed` / 1600 `up`** : la capacité
+  (~1 190 q/s `mixed`) est une extrapolation `4 000 / ms/req`, pas une mesure.
+- **Trafic de fond ≈ 19 q/s** inclus (≤ 2,7 % des requêtes) : ms/req
+  surestimés de ce montant ; les Δ compteurs couvrent un peu plus que la
+  fenêtre de 30 s (compteurs pris avant/après les commandes post-palier).
+- **Métriques serveur indisponibles** avec `benchmark: false` :
+  `ack_wait_us`, `response_entry_ms`, `q_to_response_ms`, `question_proc_ms`
+  et le nombre de réponses traitées n'existent plus ; le « traité » est
+  approché par les compteurs nft/NFQUEUE et les réponses reçues côté client.
+- **Résolveurs non instrumentés** (10.35.1.1, 10.35.4.1) ; **résidu noyau
+  non décomposé** (pas de `perf` sur la cible).
+- L'horloge murale de la cible a été vue sautant d'une seconde pendant un
+  échantillonnage : fenêtres et durées sont calculées en `uptime`/jiffies ;
+  les epochs du journal ne servent qu'à sélectionner les lignes (±1 s).
