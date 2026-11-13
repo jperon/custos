@@ -836,6 +836,24 @@ handle_doh_client = function(args)
     end)
   end
 end
+local doh_child_fn
+doh_child_fn = function(args)
+  local up, up_err = args.state.make_upstream()
+  if not (up) then
+    log_warn(function()
+      return {
+        action = "upstream_open_failed",
+        peer = args.peer_ip,
+        err = up_err
+      }
+    end)
+    args.client:close()
+    return 
+  end
+  args.state.upstream = up
+  handle_doh_client(args)
+  return args.state.close_upstream(up)
+end
 local run
 run = function(doh_cfg, filter_data)
   set_action_prefix("doh_")
@@ -1037,25 +1055,7 @@ run = function(doh_cfg, filter_data)
             peer_ip = peer_ip,
             state = conn_state
           }
-          local child_fn
-          child_fn = function(args)
-            local up, up_err = args.state.make_upstream()
-            if not (up) then
-              log_warn(function()
-                return {
-                  action = "upstream_open_failed",
-                  peer = args.peer_ip,
-                  err = up_err
-                }
-              end)
-              args.client:close()
-              return 
-            end
-            args.state.upstream = up
-            handle_doh_client(args)
-            return args.state.close_upstream(up)
-          end
-          local pid = fork_child("DOH-conn", child_fn, conn_arg, {
+          local pid = fork_child("DOH-conn", doh_child_fn, conn_arg, {
             log_start = false
           })
           log_debug(function()
@@ -1085,5 +1085,12 @@ return {
   json_quote = json_quote,
   rr_data_json = rr_data_json,
   dns_response_json = dns_response_json,
-  handle_doh_client = handle_doh_client
+  handle_doh_client = handle_doh_client,
+  is_doh_path = is_doh_path,
+  is_dns_message_content_type = is_dns_message_content_type,
+  dns_from_query = dns_from_query,
+  read_header_block = read_header_block,
+  make_server4 = make_server4,
+  make_server6 = make_server6,
+  doh_child_fn = doh_child_fn
 }

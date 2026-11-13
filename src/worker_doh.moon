@@ -620,6 +620,22 @@ handle_doh_client = (args) ->
 
 -- ── Worker entry point ───────────────────────────────────────────────────────
 
+--- Corps de l'enfant DOH-conn : ouvre l'amont, délègue, referme.
+-- Extrait de la boucle d'acceptation de `run` : la fonction ne dépend que de
+-- `args` (aucune fermeture sur l'état de `run`), ce qui la rend testable sans
+-- fork ni socket ; le comportement est strictement identique (fork_child
+-- reçoit les mêmes arguments).
+-- @tparam table args {client, peer_ip, state} — cf. handle_doh_client.
+doh_child_fn = (args) ->
+  up, up_err = args.state.make_upstream!
+  unless up
+    log_warn -> { action: "upstream_open_failed", peer: args.peer_ip, err: up_err }
+    args.client\close!
+    return
+  args.state.upstream = up
+  handle_doh_client args
+  args.state.close_upstream up
+
 --- Start the DoH worker.
 -- Exits immediately if DOH_ENABLED is not "1".
 -- @tparam table doh_cfg Configuration table (see load_doh_cfg in main.moon).
@@ -678,7 +694,7 @@ run = (doh_cfg, filter_data) ->
   }
 
   -- Socket UDP amont : chaque enfant DOH-conn ouvre le sien après le fork
-  -- (state.make_upstream, appelé dans child_fn). fork(2) duplique bien la table
+  -- (state.make_upstream, appelé dans doh_child_fn). fork(2) duplique bien la table
   -- des descripteurs, mais l'état du socket (flux UDP) doit rester privé à
   -- l'enfant : un socket partagé pourrait livrer une réponse au mauvais enfant.
 
@@ -779,21 +795,14 @@ run = (doh_cfg, filter_data) ->
           }
           conn_arg = { :client, :peer_ip, state: conn_state }
 
-          child_fn = (args) ->
-            up, up_err = args.state.make_upstream!
-            unless up
-              log_warn -> { action: "upstream_open_failed", peer: args.peer_ip, err: up_err }
-              args.client\close!
-              return
-            args.state.upstream = up
-            handle_doh_client args
-            args.state.close_upstream up
-
-          pid = fork_child "DOH-conn", child_fn, conn_arg, { log_start: false }
+          pid = fork_child "DOH-conn", doh_child_fn, conn_arg, { log_start: false }
 
           log_debug -> { action: "conn_started", pid: pid, peer: peer_ip }
           client\close!
 
 { :run, :b64url_decode, :query_param, :build_dns_query, :handshake_should_continue, :handle_h2,
   :url_decode, :encode_qname, :qtype_from_name, :json_escape, :json_quote,
-  :rr_data_json, :dns_response_json, :handle_doh_client }
+  :rr_data_json, :dns_response_json, :handle_doh_client,
+  -- Exports pour tests unitaires (décisions pures, sans changer le comportement) :
+  :is_doh_path, :is_dns_message_content_type, :dns_from_query,
+  :read_header_block, :make_server4, :make_server6, :doh_child_fn }
