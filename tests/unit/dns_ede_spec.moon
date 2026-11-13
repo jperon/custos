@@ -1,3 +1,4 @@
+coverage = require "coverage"
 -- tests/unit/dns_ede_spec.moon
 -- Tests unitaires des helpers DNS EDE.
 
@@ -88,9 +89,10 @@ describe "dns_ede.strip_https_rr", ->
     after = collectgarbage "count"
     collectgarbage "restart"
     assert.is_true sink > 0
-    per_call = (after - before) * 1024 / 500
-    assert.is_true per_call < 800,
-      "strip_https_rr alloue #{math.floor per_call} o/appel (seuil 800)"
+    unless coverage.active!
+      per_call = (after - before) * 1024 / 500
+      assert.is_true per_call < 800,
+        "strip_https_rr alloue #{math.floor per_call} o/appel (seuil 800)"
 
 describe "dns_ede.add_ede_modified", ->
   it "ajoute un OPT/EDE code 4 avec texte Custos vigilat", ->

@@ -1,3 +1,4 @@
+coverage = require "coverage"
 ffi = require "ffi"
 
 pcall ffi.cdef, [[
@@ -651,8 +652,9 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     after = collectgarbage "count"
     collectgarbage "restart"
     per_line = (after - before) * 1024 / N
-    assert.is_true per_line < 300,
-      "enqueue alloue #{math.floor per_line} o/ligne (seuil 300)"
+    unless coverage.active!
+      assert.is_true per_line < 300,
+        "enqueue alloue #{math.floor per_line} o/ligne (seuil 300)"
 
   it "un lot de N éléments produit un seul write", ->
     q = fresh_with_libc ((fd, data, len) ->

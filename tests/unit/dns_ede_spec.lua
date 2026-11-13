@@ -1,3 +1,4 @@
+local coverage = require("coverage")
 package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lua/?/?.lua;" .. package.path
 local strip_https_rr, strip_a_rr, strip_aaaa_rr, add_ede_modified, clear_ad_bit, build_blocked_response, build_nxdomain_response, build_cname_response, build_sinkhole_response, build_captive_response
 do
@@ -90,8 +91,10 @@ describe("dns_ede.strip_https_rr", function()
     local after = collectgarbage("count")
     collectgarbage("restart")
     assert.is_true(sink > 0)
-    local per_call = (after - before) * 1024 / 500
-    return assert.is_true(per_call < 800, "strip_https_rr alloue " .. tostring(math.floor(per_call)) .. " o/appel (seuil 800)")
+    if not (coverage.active()) then
+      local per_call = (after - before) * 1024 / 500
+      return assert.is_true(per_call < 800, "strip_https_rr alloue " .. tostring(math.floor(per_call)) .. " o/appel (seuil 800)")
+    end
   end)
 end)
 describe("dns_ede.add_ede_modified", function()

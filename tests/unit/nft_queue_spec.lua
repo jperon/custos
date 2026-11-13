@@ -1,3 +1,4 @@
+local coverage = require("coverage")
 local ffi = require("ffi")
 pcall(ffi.cdef, [[  int pipe2(int pipefd[2], int flags);
   int close(int fd);
@@ -735,7 +736,9 @@ return describe("nft_queue écriture IPC et variantes (branches d'erreur)", func
     local after = collectgarbage("count")
     collectgarbage("restart")
     local per_line = (after - before) * 1024 / N
-    return assert.is_true(per_line < 300, "enqueue alloue " .. tostring(math.floor(per_line)) .. " o/ligne (seuil 300)")
+    if not (coverage.active()) then
+      return assert.is_true(per_line < 300, "enqueue alloue " .. tostring(math.floor(per_line)) .. " o/ligne (seuil 300)")
+    end
   end)
   it("un lot de N éléments produit un seul write", function()
     local q = fresh_with_libc((function(fd, data, len)

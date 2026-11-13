@@ -1,3 +1,4 @@
+coverage = require "coverage"
 -- tests/unit/worker_responses_finalize_spec.moon
 -- T6 : finalize_a — branches d'override validateur (block/sinkhole/redirect),
 -- chemin pass et fail-closed nft. Verdict capturé via un faux nfq_set_verdict ;
@@ -279,8 +280,9 @@ describe "worker_responses.finalize_a", ->
     assert.equals 1, state.wait_calls
     us = m.take_last_ack_wait_us!
     assert.equals "number", type us
-    assert.is_true us >= 1000, "attente de 2 ms attendue, mesuré #{us} µs"
-    assert.is_true us < 150000, "mesure aberrante : #{us} µs"
+    unless coverage.active!
+      assert.is_true us >= 1000, "attente de 2 ms attendue, mesuré #{us} µs"
+      assert.is_true us < 150000, "mesure aberrante : #{us} µs"
     -- Une mesure n'est reportée qu'une fois (consommée par la ligne suivante).
     assert.equals 0, m.take_last_ack_wait_us!
 
@@ -322,5 +324,6 @@ describe "worker_responses.finalize_a", ->
     after = collectgarbage "count"
     collectgarbage "restart"
     per_call = (after - before) * 1024 / 200
-    assert.is_true per_call < 3550,
-      "finalize_a alloue #{math.floor per_call} o/appel (seuil 3550)"
+    unless coverage.active!
+      assert.is_true per_call < 3550,
+        "finalize_a alloue #{math.floor per_call} o/appel (seuil 3550)"

@@ -1,3 +1,4 @@
+coverage = require "coverage"
 -- tests/unit/lib/dns_response_spec.moon
 ffi = require "ffi"
 bit = require "bit"
@@ -132,8 +133,9 @@ describe "lib.dns_response", ->
       -- Avant réduction des champs : 3723 o/appel (mesuré) ; après : 1419.
       -- Le seuil 1800 laisse la marge à la croissance de la part hash sans
       -- laisser passer l'ancien coût.
-      assert.is_true per_call < 1800,
-        "parse_answers alloue #{math.floor per_call} o/appel pour 8 RR (seuil 1800)"
+      unless coverage.active!
+        assert.is_true per_call < 1800,
+          "parse_answers alloue #{math.floor per_call} o/appel pour 8 RR (seuil 1800)"
 
   describe "fmt_rdata", ->
     it "formate un enregistrement A", ->
