@@ -175,3 +175,33 @@ cible `make test-js`).
   sémantique serveur. Voir
   [docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md](docs/superpowers/specs/2026-06-27-portail-resilience-blip-reseau-design.md).
 
+## Rechargement des secrets sur SIGHUP (`src/lib/sighup.moon`)
+
+Le superviseur ne transmet SIGHUP qu'à AUTH (`src/main.moon:606-610`) ; AUTH
+relit son fichier de secrets (jamais son certificat). L'enfant de connexion qui
+vient d'écrire les secrets envoie aussi SIGHUP à son parent
+(`src/auth/handlers.moon:36-40`).
+
+Ce signal **ne doit pas** être capté par `ffi.C.signal` + `ffi.cast
+"sighandler_t"` d'une fonction Lua : un callback FFI appelé pendant du code
+JIT-compilé fait sortir LuaJIT en `PANIC: unprotected error in call to Lua API
+(bad callback)` puis `exit(EXIT_FAILURE)` (`lj_ccallback.c:726-730`, condition
+`jit_base` non nul), donc `worker_died exit_code=1` et redémarrage par le
+superviseur (observé sur custos.lan le 2026-11-13, cf.
+[docs/agents/audits.md](docs/agents/audits.md) § « Worker AUTH : SIGHUP sans
+callback FFI »).
+
+Le motif retenu est celui du superviseur (`src/main.moon:95-112`) et de
+`worker_events` (`src/worker_events.moon:59-73`) : `lib.sighup.create_watcher`
+bloque SIGHUP (`sigprocmask(SIG_BLOCK)`) puis ouvre un `signalfd` non bloquant.
+`watcher:pending()` vide la file et retourne `true` si au moins un SIGHUP y
+était ; `reload_fn` l'appelle à chaque tour de la boucle serveur
+(`src/auth/server.moon:271-274`, boucle `:417-418`), soit une latence bornée
+par le timeout `socket.select` (0,1 s). Une rafale est coalescée en un seul
+rechargement. Si la création du veilleur échoue, le worker logue
+`sighup_watch_failed` et sert sans rechargement à chaud — il ne réinstalle
+jamais de callback.
+
+Tests : `tests/unit/lib/sighup_spec.moon` (dont « survit à un SIGHUP reçu
+pendant une boucle chaude JIT », cas qui tuait le processus de test avec
+l'ancien motif).

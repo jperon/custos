@@ -8,9 +8,8 @@ do
   local _obj_0 = require("log")
   log_info, log_warn, log_error, set_action_prefix = _obj_0.log_info, _obj_0.log_warn, _obj_0.log_error, _obj_0.set_action_prefix
 end
-local ffi = require("ffi")
-local SIGHUP = 1
-local _reload_requested = false
+local create_watcher
+create_watcher = require("lib.sighup").create_watcher
 local run_auth_worker
 run_auth_worker = function(auth_cfg)
   set_action_prefix("auth_")
@@ -43,15 +42,21 @@ run_auth_worker = function(auth_cfg)
       users = n_users
     }
   end)
-  ffi.C.signal(SIGHUP, ffi.cast("sighandler_t", function()
-    _reload_requested = true
-  end))
+  local watcher_ok, watcher = pcall(create_watcher)
+  if not (watcher_ok) then
+    log_error(function()
+      return {
+        action = "sighup_watch_failed",
+        err = tostring(watcher)
+      }
+    end)
+    watcher = nil
+  end
   local reload_fn
   reload_fn = function()
-    if not (_reload_requested) then
+    if not (watcher and watcher:pending()) then
       return nil
     end
-    _reload_requested = false
     local new_secrets, err2 = load_secrets(secrets_path)
     if new_secrets then
       log_info(function()

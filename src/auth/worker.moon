@@ -11,16 +11,13 @@
 { :run }               = require "auth.server"
 nft_sess               = require "auth.nft_sessions"
 { :log_info, :log_warn, :log_error, :set_action_prefix } = require "log"
-
-ffi = require "ffi"
-
-SIGHUP = 1
+{ :create_watcher }    = require "lib.sighup"
 
 -- ── Rechargement à chaud ─────────────────────────────────────────
--- Le flag est positionné par le handler SIGHUP (signal POSIX simple
--- suffit ici : le worker auth n'est pas dans une boucle critique.
-
-_reload_requested = false
+-- SIGHUP est bloqué et lu par signalfd depuis la boucle du serveur
+-- (lib/sighup.moon) : aucun handler C asynchrone, donc aucun callback FFI
+-- susceptible d'être appelé pendant du code JIT (« bad callback », cf.
+-- lj_ccallback.c:726-730).
 
 -- ── Démarrage du worker ───────────────────────────────────────────
 
@@ -42,13 +39,17 @@ run_auth_worker = (auth_cfg) ->
     n_users += 1
   log_info -> { action: "secrets_loaded", path: secrets_path, users: n_users }
 
-  -- Handler SIGHUP : déclenche le rechargement des secrets
-  ffi.C.signal SIGHUP, ffi.cast "sighandler_t", -> _reload_requested = true
+  -- Veille SIGHUP : le signal est masqué et le fd ouvert avant la boucle.
+  -- Un échec n'est pas fatal : le worker sert alors sans rechargement à chaud.
+  watcher_ok, watcher = pcall create_watcher
+  unless watcher_ok
+    log_error -> { action: "sighup_watch_failed", err: tostring watcher }
+    watcher = nil
 
-  -- Closure de rechargement passée au serveur
+  -- Closure de rechargement passée au serveur : interroge le signalfd à
+  -- chaque tour de boucle (latence bornée par le timeout de socket.select).
   reload_fn = ->
-    return nil unless _reload_requested
-    _reload_requested = false
+    return nil unless watcher and watcher\pending!
     new_secrets, err2 = load_secrets secrets_path
     if new_secrets
       log_info -> { action: "secrets_reloaded", path: secrets_path }
