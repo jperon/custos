@@ -4121,8 +4121,11 @@ question DNS (une ligne TSV vers `worker_events`, un message de 22 octets vers
   `tests/unit/worker_questions_spec.moon` (comptage des `write()`, ordre,
   contenu, hook de fin de lot), `tests/unit/mac_learner_core_spec.moon` (lecture
   par blocs, message coupé), `tests/unit/worker_events_core_spec.moon` (bloc de
-  40 lignes sur deux lectures). `make check` + `make test` : 0 échec ;
-  `make test-e2e` : voir `tmp/batchev_report.md`.
+  40 lignes sur deux lectures). `make check` + `make test` : 3198 successes /
+  0 failures ; `make test-e2e` : 94 passed / 0 failed en fenêtre exclusive
+  (première tentative invalidée par un déploiement concurrent d'un autre agent
+  — le build testé ne contenait pas la branche, deux `make test-e2e`
+  simultanés).
 - **Documentation** : `perf.md` §19, `src/bench/README.md` (hook de fin de lot
   du banc). Aucune ligne ajoutée à `AGENTS.md`.
 - **Non fait** : aucune mesure sur la cible aarch64 (pas de déploiement) ;

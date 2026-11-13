@@ -2236,8 +2236,15 @@ déploiement depuis cette branche).
   capacité > un message), deux messages appris dont un coupé par une lecture
   courte (reliquat conservé) ; `tests/unit/worker_events_core_spec.moon` : bloc
   de 40 lignes réparti sur deux lectures, 20e ligne coupée, toutes agrégées.
-- `make check` + `make test` : 0 échec (total dans `tmp/test.log`) ;
-  `make test-e2e` : voir `tmp/batchev_report.md`.
+- `make check` + `make test` : **3198 successes / 0 failures / 0 errors**
+  (`tmp/test.log`) ; `make test-e2e` : **94 passed / 0 failed**, après une
+  première tentative invalidée par un déploiement concurrent d'un autre agent
+  sur le homelab partagé (le build testé n'était pas celui de la branche :
+  `worker_questions.lua` d'avant + `lib/pipe_batch.lua` absent ; deux
+  `homelab.sh test-e2e` simultanés, `PANIC` du superviseur et `worker_died
+  name=auth` dans la fenêtre). Relance en fenêtre exclusive : build de la
+  branche déployé (`worker_questions.lua` 20 412 o, `lib/pipe_batch.lua`
+  présent), 94/0 (`tmp/e2e-rerun.log`, `tmp/e2e-rerun-context.txt`).
 
 **Non fait / douteux** : gain CPU global non mesuré sur la cible (aucune
 campagne de charge ni déploiement depuis cette branche) ; l'effet des réveils
