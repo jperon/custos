@@ -4609,3 +4609,22 @@ Aucun autre fichier de production modifié. `make all && make check &&
 make test` : total dans `tmp/d-simpl2/test.log` (0 échec). Pas de
 `make test-e2e` (à la charge de l'orchestrateur).
 
+### Simplification de `nft_queue.add_many` (branche `d-nftq`, 2026-11-13)
+
+`add_many` (`src/nft_queue.moon:240-287`) ne construit plus ses lignes : il ne
+fait que découper `addrs` en tranches jointes par `" "` dont la ligne tient dans
+`PIPE_BUF_SAFE`, et appelle `enqueue` pour chacune — une adresse ⇒ une tranche ⇒
+ligne identique à `add_ip4`/`add_mac4`, sans cas spécial `n == 1` ni duplication
+de `build_line` (seq, flush, `pending_lines`/`seqs`/`bytes`). Le budget d'une
+tranche est `PIPE_BUF_SAFE` − champs constants mesurés par longueur −
+`GROUP_FIXED_RESERVE` (seq/worker_idx au pire cas, séparateurs, `\n`, timeout) ;
+`to_hex` doublant exactement la longueur, aucun encodage n'est fait pour
+mesurer. Deux tests de caractérisation ajoutés (`tests/unit/nft_queue_spec.moon`) :
+même `worker_idx` que les lignes unitaires, et découpage quand `rule_id`/`corr`
+réduisent le budget. A/B alterné (5 paires, `HP_ITERS=100000 HP_REPEAT=3
+HP_TASKSET=1`, médiane des rapports par paire) : `mixed_o2` +0,0 % (moyenne) /
+−1,5 % (lot-min), `micro_add_group` 0 % / −10 % ; aucune régression > 3 %.
+`make all && make check && make test` : 3 286 succès / 0 échec / 0 erreur
+(`tmp/test_refactor.log`). Pas de `make test-e2e` (consigne). Mesures :
+`perf.md` §29a.1.
+

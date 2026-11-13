@@ -412,6 +412,49 @@ describe "nft_queue enqueue_many (insertion groupée par set)", ->
 
     close_pipe p
 
+  it "add_many écrit le même champ worker_idx qu'une ligne unitaire", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    -- Sans set_ack_rfd, build_line écrit -1 (worker_idx absent) : add_many passe
+    -- par build_line via enqueue, donc produit la même valeur (et non "nil", que
+    -- worker_nft.parse_line rejette avec worker_idx).
+    q.add_ip4 "192.168.1.42", "10.0.0.1", "r_test", "2m", "c"
+    q.add_ip4_many "192.168.1.42", { "10.0.0.1", "10.0.0.2" }, "r_test", "2m", "c"
+    q.get_last_seq!
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.equals 2, #lines
+    assert.equals "-1", (split_fields lines[1])[8]
+    assert.equals "-1", (split_fields lines[2])[8]
+    close_pipe p
+
+  it "découpe aussi quand rule_id/corr réduisent le budget d'une tranche", ->
+    q = fresh_nft_queue!
+    p = make_pipe!
+    q.set_wfd p[2]
+    rule_id = string.rep "r", 40
+    corr    = string.rep "c", 80
+    addrs   = [ "10.0.0.#{i}" for i = 1, 30 ]
+    n = q.add_ip4_many "192.168.1.42", addrs, rule_id, "2m", corr
+    assert.equals 30, n
+    last_seq = q.get_last_seq!
+    lines = [ l for l in (read_all p[1])\gmatch "[^\n]+" ]
+    assert.is_true #lines >= 2
+    -- Un seq par tranche : la dernière ligne porte le seq rendu.
+    assert.equals #lines, last_seq
+    got = {}
+    for line in *lines
+      assert.is_true #line <= 512
+      fields = split_fields line
+      assert.equals hex(rule_id), fields[5]
+      assert.equals hex(corr), fields[9]
+      for addr in fields[4]\gmatch "[^ ]+"
+        got[#got + 1] = addr
+    assert.equals 30, #got
+    for i = 1, 30
+      assert.equals addrs[i], got[i]
+    close_pipe p
+
   it "add_mac4_many groupe les adresses du client MAC (même set)", ->
     q = fresh_nft_queue!
     p = make_pipe!

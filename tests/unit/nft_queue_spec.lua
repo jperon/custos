@@ -450,6 +450,79 @@ describe("nft_queue enqueue_many (insertion groupée par set)", function()
     end
     return close_pipe(p)
   end)
+  it("add_many écrit le même champ worker_idx qu'une ligne unitaire", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    q.add_ip4("192.168.1.42", "10.0.0.1", "r_test", "2m", "c")
+    q.add_ip4_many("192.168.1.42", {
+      "10.0.0.1",
+      "10.0.0.2"
+    }, "r_test", "2m", "c")
+    q.get_last_seq()
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.equals(2, #lines)
+    assert.equals("-1", (split_fields(lines[1]))[8])
+    assert.equals("-1", (split_fields(lines[2]))[8])
+    return close_pipe(p)
+  end)
+  it("découpe aussi quand rule_id/corr réduisent le budget d'une tranche", function()
+    local q = fresh_nft_queue()
+    local p = make_pipe()
+    q.set_wfd(p[2])
+    local rule_id = string.rep("r", 40)
+    local corr = string.rep("c", 80)
+    local addrs
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for i = 1, 30 do
+        _accum_0[_len_0] = "10.0.0." .. tostring(i)
+        _len_0 = _len_0 + 1
+      end
+      addrs = _accum_0
+    end
+    local n = q.add_ip4_many("192.168.1.42", addrs, rule_id, "2m", corr)
+    assert.equals(30, n)
+    local last_seq = q.get_last_seq()
+    local lines
+    do
+      local _accum_0 = { }
+      local _len_0 = 1
+      for l in (read_all(p[1])):gmatch("[^\n]+") do
+        _accum_0[_len_0] = l
+        _len_0 = _len_0 + 1
+      end
+      lines = _accum_0
+    end
+    assert.is_true(#lines >= 2)
+    assert.equals(#lines, last_seq)
+    local got = { }
+    for _index_0 = 1, #lines do
+      local line = lines[_index_0]
+      assert.is_true(#line <= 512)
+      local fields = split_fields(line)
+      assert.equals(hex(rule_id), fields[5])
+      assert.equals(hex(corr), fields[9])
+      for addr in fields[4]:gmatch("[^ ]+") do
+        got[#got + 1] = addr
+      end
+    end
+    assert.equals(30, #got)
+    for i = 1, 30 do
+      assert.equals(addrs[i], got[i])
+    end
+    return close_pipe(p)
+  end)
   return it("add_mac4_many groupe les adresses du client MAC (même set)", function()
     local q = fresh_nft_queue()
     local p = make_pipe()

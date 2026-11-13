@@ -261,6 +261,7 @@ local add_mac6
 add_mac6 = function(mac, ip_str, rule_id, timeout, corr)
   return enqueue("mac6", mac, ip_str, rule_id, timeout, corr)
 end
+local GROUP_FIXED_RESERVE = 20 + 20 + 9 + 1 + 16
 local add_many
 add_many = function(kind, key, addrs, rule_id, timeout, corr)
   if not (pipe_wfd) then
@@ -273,21 +274,10 @@ add_many = function(kind, key, addrs, rule_id, timeout, corr)
   if n == 0 then
     return 0
   end
-  if n == 1 then
-    if enqueue(kind, key, addrs[1], rule_id, timeout, corr) then
-      return 1
-    end
-    return 0
-  end
-  timeout = sanitize_timeout(timeout)
-  local rule_hex = to_hex(rule_id or "")
-  local corr_hex = to_hex(corr or "")
-  local widx_str = tostring(worker_idx or -1)
-  local budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key + #rule_hex + #timeout + #corr_hex + 9 + 40)
+  local budget = PIPE_BUF_SAFE - (#LINE_VERSION + #kind + #key + 2 * #(rule_id or "") + 2 * #(corr or "") + GROUP_FIXED_RESERVE)
   local queued = 0
   local i = 1
   while i <= n do
-    seq = seq + 1
     local parts = { }
     local bytes = 0
     while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget) do
@@ -295,22 +285,13 @@ add_many = function(kind, key, addrs, rule_id, timeout, corr)
       bytes = bytes + #addrs[i] + 1
       i = i + 1
     end
-    local joined
-    if #parts == 1 then
-      joined = parts[1]
-    else
+    local joined = parts[1]
+    if #parts > 1 then
       joined = table.concat(parts, " ")
     end
-    local line = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. joined .. "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) .. "|" .. widx_str .. "|" .. corr_hex .. "\n"
-    if #line > PIPE_BUF_SAFE then
-      return queued
+    if not (enqueue(kind, key, joined, rule_id, timeout, corr)) then
+      break
     end
-    if pending_bytes + #line > PIPE_BUF_ATOMIC then
-      flush()
-    end
-    pending_lines[#pending_lines + 1] = line
-    pending_seqs[#pending_seqs + 1] = seq
-    pending_bytes = pending_bytes + #line
     queued = queued + #parts
   end
   return queued
