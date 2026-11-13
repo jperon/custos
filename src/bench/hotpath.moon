@@ -591,7 +591,7 @@ MICRO_CASES = {
   "micro_add_line", "micro_parse_answers", "micro_strip",
   "micro_classify", "micro_encode_verdict", "micro_corr_key",
   "micro_ip2s", "micro_write_event", "micro_learn", "micro_user",
-  "micro_get_pending"
+  "micro_get_pending", "micro_is_valid_timeout"
 }
 
 --- Construit les micro-cas : une fonction réelle, arguments préparés par setup.
@@ -612,6 +612,7 @@ build_micro_cases = (s) ->
   { :add_ip4 } = require "nft_queue"
   { :write_msg } = require "ipc"
   { :ip2s } = require "lib.packet_parsing"
+  ipc_hex = require "lib.ipc_hex"
 
   drain_micro = ->
     drain_fd s.micro_pipe_r
@@ -692,6 +693,8 @@ build_micro_cases = (s) ->
       (user_for_mac CLIENT_MAC, CLIENT_IP, s.config.auth.sessions_file) and 1 or 2
     micro "micro_get_pending", "ipc.get_pending_entry (hit)", ->
       (ipc.get_pending_entry 0x7777, CLIENT_IP, CLIENT_PORT, RESOLVER_IP, now_fn) and 1 or 2
+    micro "micro_is_valid_timeout", "ipc_hex.is_valid_timeout (1×/ligne nft)", ->
+      (ipc_hex.is_valid_timeout "660s") and 1 or 2
   }
 
 --- Construit les cas de mesure (préparation + étapes par paquet, par lots).

@@ -606,7 +606,8 @@ local MICRO_CASES = {
   "micro_write_event",
   "micro_learn",
   "micro_user",
-  "micro_get_pending"
+  "micro_get_pending",
+  "micro_is_valid_timeout"
 }
 local build_micro_cases
 build_micro_cases = function(s)
@@ -626,6 +627,7 @@ build_micro_cases = function(s)
   write_msg = require("ipc").write_msg
   local ip2s
   ip2s = require("lib.packet_parsing").ip2s
+  local ipc_hex = require("lib.ipc_hex")
   local drain_micro
   drain_micro = function()
     drain_fd(s.micro_pipe_r)
@@ -741,6 +743,9 @@ build_micro_cases = function(s)
     end),
     micro("micro_get_pending", "ipc.get_pending_entry (hit)", function()
       return (ipc.get_pending_entry(0x7777, CLIENT_IP, CLIENT_PORT, RESOLVER_IP, now_fn)) and 1 or 2
+    end),
+    micro("micro_is_valid_timeout", "ipc_hex.is_valid_timeout (1×/ligne nft)", function()
+      return (ipc_hex.is_valid_timeout("660s")) and 1 or 2
     end)
   }
 end

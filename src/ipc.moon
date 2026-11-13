@@ -101,9 +101,35 @@ decode_modifiers = (bits) ->
 { :mac2s } = require "ipparse.l2.ethernet"
 { :ip2s }  = require "ipparse.l3.ip"
 
+-- Mémo MAC brute → texte : 6 conversions hexadécimales par message, alors
+-- qu'un LAN n'a qu'une poignée de MAC. Borné (purge en bloc), clé = les
+-- 6 octets bruts (chaîne internée par LuaJIT, donc identité stable).
+MAC_STR_MAX = 64
+_mac_str_cache = {}
+_mac_str_n     = 0
+
+--- Convertit 6 octets bruts en "aa:bb:cc:dd:ee:ff", mémoïsé.
+-- @tparam string|nil mac_raw Octets bruts
+-- @treturn string Texte (MAC nulle si l'entrée est invalide)
 mac_raw_to_str = (mac_raw) ->
   return "00:00:00:00:00:00" unless mac_raw and #mac_raw == 6
-  mac2s mac_raw
+  hit = _mac_str_cache[mac_raw]
+  return hit if hit
+  s = mac2s mac_raw
+  if _mac_str_n >= MAC_STR_MAX
+    _mac_str_cache = {}
+    _mac_str_n     = 0
+  _mac_str_cache[mac_raw] = s
+  _mac_str_n += 1
+  s
+
+-- Tables d'encodage hexadécimal des petits entiers (msg_type < 128, bits de
+-- modificateurs < 256) : évite deux `string.format` par message.
+_HEX2 = {}
+_HEX1 = {}
+for i = 0, 255
+  _HEX2[i] = string.format "%02x", i
+  _HEX1[i] = string.format "%x", i
 
 ip_raw_to_str = (ip_raw) ->
   return nil unless ip_raw and (#ip_raw == 4 or #ip_raw == 16)
@@ -252,7 +278,7 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
   -- Concaténation directe (14 champs + "\n") : la forme à table.concat
   -- allouait un tableau de 14 slots + 2 strings par question (cf.
   -- docs/agents/perf.md §22).
-  line = IPC_VERSION .. "|" .. string.format("%02x", msg_type) ..
+  line = IPC_VERSION .. "|" .. (_HEX2[msg_type] or string.format("%02x", msg_type)) ..
     "|" .. tostring(tonumber(txid) or 0) ..
     "|" .. client_ip ..
     "|" .. tostring(tonumber(src_port) or 0) ..
@@ -261,10 +287,10 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
     "|" .. to_hex(reason) ..
     "|" .. to_hex(rule_id) ..
     "|" .. timeout ..
-    "|" .. tostring(bench) ..
-    "|" .. string.format("%x", mods_bits) ..
+    "|" .. (bench == 0 and "0" or tostring(bench)) ..
+    "|" .. (_HEX1[mods_bits] or string.format("%x", mods_bits)) ..
     "|" .. response_ids_hex ..
-    "|" .. tostring(qproc) .. "\n"
+    "|" .. (qproc == 0 and "0" or tostring(qproc)) .. "\n"
 
   return nil if #line > IPC_MAX_LINE
   line
@@ -281,7 +307,9 @@ write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
 
 decode_msg = (raw) ->
   return nil, "empty" unless raw and #raw > 0
-  line  = raw\gsub "\n+$", ""
+  -- Le \n final est déjà retiré par `drain_lines` (chemin chaud) : ne payer le
+  -- motif que si l'appelant passe une ligne brute terminée par un retour.
+  line = if raw\byte(#raw) == 10 then (raw\gsub "\n+$", "") else raw
   parts = split_fields line
   return nil, "field_count" unless #parts >= 11
 

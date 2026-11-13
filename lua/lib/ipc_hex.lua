@@ -102,9 +102,37 @@ split_fields = function(line)
   end
   return out
 end
+local BYTE_0, BYTE_9 = 48, 57
+local BYTE_DOT, BYTE_COLON = 46, 58
+local is_digit
+is_digit = function(b)
+  return b >= BYTE_0 and b <= BYTE_9
+end
 local is_ipv4_str
 is_ipv4_str = function(s)
-  return s and s:match("^%d+%.%d+%.%d+%.%d+$")
+  if not (s and #s > 0) then
+    return false
+  end
+  local groups = 1
+  local digits = 0
+  local i = 1
+  local n = #s
+  while i <= n do
+    local b = s:byte(i)
+    if b == BYTE_DOT then
+      if digits == 0 or groups >= 4 then
+        return false
+      end
+      groups = groups + 1
+      digits = 0
+    elseif is_digit(b) then
+      digits = digits + 1
+    else
+      return false
+    end
+    i = i + 1
+  end
+  return groups == 4 and digits > 0
 end
 local is_ipv6_str
 is_ipv6_str = function(s)
@@ -112,17 +140,53 @@ is_ipv6_str = function(s)
 end
 local is_valid_mac
 is_valid_mac = function(s)
-  return s and s:match("^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$")
+  if not (type(s) == "string" and #s == 17) then
+    return false
+  end
+  for i = 1, 17 do
+    local b = s:byte(i)
+    if i % 3 == 0 then
+      if not (b == BYTE_COLON) then
+        return false
+      end
+    else
+      if not (HEX_VAL[b]) then
+        return false
+      end
+    end
+  end
+  return true
+end
+local is_timeout_unit
+is_timeout_unit = function(b)
+  return b == 115 or b == 109 or b == 104 or b == 100 or b == 119
 end
 local is_valid_timeout
 is_valid_timeout = function(t)
   if not (type(t) == "string") then
     return false
   end
-  if not (#t > 0 and #t <= 16) then
+  local n = #t
+  if not (n > 0 and n <= 16) then
     return false
   end
-  return t:match("^%d+[smhdw]?$") ~= nil
+  local i = 1
+  while i <= n do
+    if not (is_digit(t:byte(i))) then
+      break
+    end
+    i = i + 1
+  end
+  if i == 1 then
+    return false
+  end
+  if i > n then
+    return true
+  end
+  if i < n then
+    return false
+  end
+  return is_timeout_unit(t:byte(i))
 end
 return {
   encode_ip16 = encode_ip16,
@@ -132,5 +196,7 @@ return {
   is_valid_timeout = is_valid_timeout,
   is_ipv4_str = is_ipv4_str,
   is_ipv6_str = is_ipv6_str,
-  is_valid_mac = is_valid_mac
+  is_valid_mac = is_valid_mac,
+  is_digit = is_digit,
+  is_timeout_unit = is_timeout_unit
 }

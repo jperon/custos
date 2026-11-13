@@ -155,3 +155,42 @@ describe "lib.ipc_hex", ->
     it "rejette les valeurs invalides", ->
       for t in *{ "", "2x", "-1", "1.5m", "9999999999999999s", nil, 60 }
         assert.is_false is_valid_timeout(t), tostring t
+
+    -- Équivalence stricte avec le motif historique `^%d+[smhdw]?$` (validation
+    -- réécrite en boucle d'octets pour le hot path, cf. docs/agents/perf.md §26).
+    it "équivaut au motif ^%d+[smhdw]?$ sur un corpus", ->
+      corpus = {
+        "0", "00", "1s", "60", "660s", "2m", "1h", "5d", "1w", "2M", "2S"
+        "", "s", "2ss", "2 s", " 2s", "2s ", "1.5m", "-1", "+1", "2x", "2ms"
+        "1234567890123456", "12345678901234567", "0d0", "1w1", "12h"
+      }
+      for t in *corpus
+        -- L'ancienne implémentation bornait la longueur à 1..16 avant le motif.
+        expected = #t > 0 and #t <= 16 and t\match("^%d+[smhdw]?$") ~= nil
+        assert.is_equal expected, is_valid_timeout(t), "timeout #{t}"
+
+  describe "équivalence des validateurs réécrits", ->
+    -- Réécriture en boucle d'octets : mêmes acceptations que les motifs
+    -- historiques, vérifiées sur un corpus (y compris cas limites).
+    it "is_ipv4_str équivaut à ^%d+%.%d+%.%d+%.%d+$", ->
+      corpus = {
+        "0.0.0.0", "10.35.1.2", "255.255.255.255", "999.1.1.1", "1.1.1.1"
+        "1.1.1", "1.1.1.1.1", "1..1.1", ".1.1.1", "1.1.1.", "a.b.c.d"
+        "1.1.1.1 ", " 1.1.1.1", "1.1.1.1x", "1-1-1-1", "::1", "", "1234.5.6.7"
+      }
+      for t in *corpus
+        expected = t\match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+        assert.is_equal expected, is_ipv4_str(t), "ipv4 #{t}"
+
+    it "is_valid_mac équivaut au motif historique", ->
+      pattern = "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
+      corpus = {
+        "aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF", "00:00:00:00:00:00"
+        "a8:d3:85:63:6b:27", "aa:bb:cc:dd:ee", "aa-bb-cc-dd-ee-ff"
+        "aa:bb:cc:dd:ee:ff:00", "aaa:bb:cc:dd:ee:f", "gg:bb:cc:dd:ee:ff"
+        "", "aa:bb:cc:dd:ee:fg"
+      }
+      for t in *corpus
+        expected = t\match(pattern) ~= nil
+        assert.is_equal expected, is_valid_mac(t), "mac #{t}"
+      assert.is_falsy is_valid_mac nil

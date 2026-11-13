@@ -123,28 +123,82 @@ split_fields = (line) ->
       break
   out
 
---- Vrai si la chaîne a la forme d'une adresse IPv4 pointée.
+-- Validation par octets plutôt que par motif Lua : ces prédicats tournent une
+-- fois par message IPC (`decode_msg`) et `is_valid_timeout` une fois par LIGNE
+-- nft (`nft_queue.sanitize_timeout`, 16 lignes par réponse) — mesuré 0,067 µs
+-- par appel en motif contre 0,02 en boucle compilée (§26).
+BYTE_0, BYTE_9 = 48, 57
+BYTE_DOT, BYTE_COLON = 46, 58
+
+--- Vrai si le caractère est un chiffre décimal (octet).
+-- @tparam number b Octet
+-- @treturn boolean
+is_digit = (b) -> b >= BYTE_0 and b <= BYTE_9
+
+--- Vrai si la chaîne a la forme d'une adresse IPv4 pointée
+-- (`%d+%.%d+%.%d+%.%d+`, mêmes acceptations que l'ancien motif : aucune borne
+-- de valeur ni de longueur de groupe).
 -- @tparam string s Adresse textuelle
 -- @treturn boolean
-is_ipv4_str = (s) -> s and s\match "^%d+%.%d+%.%d+%.%d+$"
+is_ipv4_str = (s) ->
+  return false unless s and #s > 0
+  groups = 1
+  digits = 0
+  i = 1
+  n = #s
+  while i <= n
+    b = s\byte i
+    if b == BYTE_DOT
+      return false if digits == 0 or groups >= 4
+      groups += 1
+      digits = 0
+    elseif is_digit b
+      digits += 1
+    else
+      return false
+    i += 1
+  groups == 4 and digits > 0
 
 --- Vrai si la chaîne ressemble à une adresse IPv6 (présence de ":").
 -- @tparam string s Adresse textuelle
 -- @treturn boolean
 is_ipv6_str = (s) -> s and s\find ":", 1, true
 
---- Vrai si la chaîne a la forme aa:bb:cc:dd:ee:ff.
+--- Vrai si la chaîne a la forme aa:bb:cc:dd:ee:ff (17 caractères, colons aux
+-- positions 3, 6, 9, 12, 15, chiffres hexadécimaux ailleurs).
 -- @tparam string s Adresse MAC textuelle
 -- @treturn boolean
-is_valid_mac = (s) -> s and s\match "^[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]:[%x][%x]$"
+is_valid_mac = (s) ->
+  return false unless type(s) == "string" and #s == 17
+  for i = 1, 17
+    b = s\byte i
+    if i % 3 == 0
+      return false unless b == BYTE_COLON
+    else
+      return false unless HEX_VAL[b]
+  true
+
+--- Vrai si l'octet est une unité de timeout nftables (s m h d w).
+-- @tparam number b Octet
+-- @treturn boolean
+is_timeout_unit = (b) -> b == 115 or b == 109 or b == 104 or b == 100 or b == 119
 
 --- Valide un timeout nftables (ex. "30s", "2m", "1h", "5d", "1w", "60").
+-- Mêmes acceptations que `^%d+[smhdw]?$` : chiffres, puis au plus une unité.
 -- @tparam string t Valeur de timeout
 -- @treturn boolean true si la valeur est acceptée par nft
 is_valid_timeout = (t) ->
   return false unless type(t) == "string"
-  return false unless #t > 0 and #t <= 16
-  t\match("^%d+[smhdw]?$") ~= nil
+  n = #t
+  return false unless n > 0 and n <= 16
+  i = 1
+  while i <= n
+    break unless is_digit t\byte i
+    i += 1
+  return false if i == 1          -- aucun chiffre
+  return true if i > n            -- chiffres seuls
+  return false if i < n           -- reste de plus d'un caractère
+  is_timeout_unit t\byte(i)
 
 { :encode_ip16, :to_hex, :from_hex, :split_fields, :is_valid_timeout,
-  :is_ipv4_str, :is_ipv6_str, :is_valid_mac }
+  :is_ipv4_str, :is_ipv6_str, :is_valid_mac, :is_digit, :is_timeout_unit }
