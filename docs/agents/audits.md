@@ -4422,3 +4422,99 @@ motif) ; `make all && make check && make test` : **3230 succès / 0 échec /
 **Non fait** : pas de `make test-e2e` (homelab occupé, consigne) ; le PANIC
 lui-même n'a pas été rejoué sur custos.lan (aucune connexion aux hôtes
 autorisée pendant la campagne de charge) — la démonstration est locale.
+
+### Campagne de charge après le correctif CPU du worker nft (branche `d-bench8`, 2026-11-13)
+
+Campagne demandée après le déploiement d'un build `dev` contenant le correctif
+de §24 (`d-nftcpu` : plus de pas de GC par lot dans `worker_nft`). **Aucune
+modification de code** ; la configuration de la cible n'a **pas** été changée
+(déjà `nfqueue: { responses: "14-15" }`, `questions` `"0-1"`, `pending_max`
+20 000, `max_age_ms` 1 500). Sauvegarde `/etc/custos/config.moon.dbench8`
+prise avant la première mesure et restaurée à la fin (identité `md5`
+`bddc79b5…` vérifiée, sauvegarde supprimée). Détail, tableaux et analyse :
+`docs/agents/perf.md` §25 ; rapport de campagne `tmp/bench8_report.md` ;
+harnais `tmp/tune8/` (copies de `tmp/tune7/`, seul `OUT` change) et résultats
+bruts `tmp/tune8/results8/` (ignorés par git).
+
+**Build vérifié** : `md5sum` égaux entre `lua/` de la branche et
+`/usr/share/custos/` pour **les 294** fichiers `lua/**/*.lua` (dont
+`worker_nft.lua` `fb5d3840…`, correctif §24.4). Réglage GC constaté :
+`action=gc_tuning pause=200 stepmul=400 idle_step=100 max_heap_mb=32`.
+
+**Protocole** : `servus` authentifié (`dig controlplane.tailscale.com` → 8
+adresses avant **chaque** palier, 11/11 en succès) ; `dnsload5.py` inchangé
+(128 ports, 2 destinations) ; 30 s par palier, drain 45 s, repos vérifié ;
+`mixed` 700, **850 ×3**, **1000 ×3** (médiane 22,9 % > 15 % ⇒ arrêt, 1000 étant
+le dernier palier demandé) plus un 500 en complément pour comparer au 1,016
+ms/requête de §23.7 ; `up` 1300 et 1600 ; latence à vide 20 q/s.
+
+**Résultats (comparaison à §23)** :
+
+| palier | d-bench7 | d-bench8 |
+|---|---|---|
+| 500 `mixed` | 0 %, p50 31,9 / p99 223 ms | 0 %, p50 22,5 / p99 146 ms |
+| 700 `mixed` | **0 % (0/0/0)**, p50 419-455 / p99 1 567-3 131 ms | **0 %** (1 mesure), p50 210 / p99 470 ms |
+| 850 `mixed` | 9,9 %, p50 1 930 / p99 6 209 ms | **10,0 % médian** (10,9/10,0/9,5), p50 1 011-1 604 / p99 1 891-2 547 ms |
+| 1000 `mixed` | non mesuré | **22,9 % médian** (22,4/23,0/22,9), p50 1 664-1 794 / p99 2 014-3 177 ms |
+| 1300 `up` | 0 %, p50 151 / p99 441 ms | 0 %, p50 132 / p99 363 ms |
+| 1600 `up` | 7,2 %, `qdrop` 521 | **3,9 %**, `qdrop` 0, `udrop` 0 |
+
+Le **débit servi plafonne à 758-776 q/s** sur les six paliers saturés
+(850 et 1000 confondus) : même plateau qu'en §23 (766 q/s à 850), donc le
+correctif ne déplace **pas** le plafond de débit `mixed`, mais il en baisse le
+**coût** et la **latence** (à 850 : p50 1 930 → 1 011-1 604 ms, p99 6 209 →
+1 891-2 547 ; à 700 : p50 419-455 → 210 ms). À 1600 `up`, la perte est divisée
+par presque deux sans `qdrop`.
+
+**Chiffre clé — CPU du worker nft** (ms CPU/requête émise, même calcul que
+§23.7) : **1,016 → 0,368 à 500 q/s (−64 %)** et **0,674 → 0,370 à 700
+(−45 %)** ; en points de vCPU au même débit, 47,6 → 17,8 % (500) et 42,2-44,9 →
+24,3 % (700), 41,9 → 25,8-26,6 % (850). Le coût `nft` devient **quasi plat**
+avec la charge (0,35-0,37 ms) au lieu de décroître. `resp` (+0,7 à +5,9 %) et
+`dns` (+2 à +6 %) sont inchangés : le total par requête ne baisse que de
+**−5,2 % (700) à −12,9 % (500)**.
+
+**Budget restant vers 1000 q/s `mixed`** : au plateau, le coût **total** par
+requête traitée est **≈ 5,2 ms de CPU machine** (3,32-3,37 ms attribués aux
+workers — `resp` 1,43 + `dns` 1,45 + `nft` 0,35 + `events` 0,08 + `mac-lrn`
+0,01 — et **≈ 1,8 ms non attribuables** au niveau worker : pont/NFQUEUE,
+softirq, faute de `perf` sur la cible). `4 000 / 5,2 ≈ 770 q/s` = le plateau
+mesuré. Pour 1000 q/s à 0 % de perte il faut **≤ 4,0 ms/requête, soit −23 %
+(−1,2 ms)** ; si tout venait de `dns` + `resp` (2,88 ms à eux deux) il
+faudrait les réduire de **−41 %**. `nft` ramené à zéro ne rendrait que
+0,35 ms (≈ 7 % du budget) : **le worker nft n'est plus le levier** ; les 1,8 ms
+non attribués (35 % du budget) sont le poste à instrumenter. Aucun worker n'est
+individuellement saturé (52-55 % d'un vCPU chacun) : c'est la machine qui est
+pleine (`idle` 2,8-3,2 %, `sys` 27 % de 4 cœurs), donc ajouter un worker ne
+suffirait pas.
+
+**Localisation de la perte** : `qdrop` = `udrop` = **0 sur tous les paliers**
+(y compris 1600 `up`), profondeurs maximales 628-840 (questions) et 178-991
+(réponses) < `maxlen` 4 096 ; la perte est du **délestage précoce**
+(`age_ms` 1 501-1 510 > `max_age_ms` 1 500,
+`src/worker_questions.moon:267-289`) : ≈ 2 265-2 683 des 2 777 perdus à 850
+(~82 %), ≈ 4 882-6 942 des 6 875 à 1000 (73-100 %), ≈ 3 141 à 1600 `up` (pour
+1 857 perdus, estimation `suppressed=` qui inclut le drain). Le surplus
+`nft_r − journal` reste le second avis (§4.1) : 0,62/requête à 850, 0,54 à 1000.
+
+**GC / RSS** : aucun `gc_heap_guard` ; `dns-q*` plat (22,6 → 24,5 Mio pour
+deux workers) ; `resp-q*` croît de 19,6 à 56,7 Mio (max à 1600) puis 49,2 ;
+`MemAvailable` ≥ 3 572 272 Kio.
+
+**Vérifications finales** : configuration restaurée (`grep` : seule la ligne
+`nfqueue: { responses: "14-15" }`, `md5` identique, `.dbench8` absent,
+`status` running) ; sonde finale après redémarrage
+`controlplane.tailscale.com` → 8 adresses (toujours authentifié) et
+`vpn.stemarie.dynv6.net` servie en **NODATA** (`NOERROR`, `ANSWER: 0`) ;
+`servus` sans IPv6 temporaire (`ip -6 addr show dev wan` : 2 globales + 1
+lien-local, rien à retirer) et sans générateur résiduel ; aucune capture
+AF_PACKET. `make all && make check && make test` : total exact dans
+`tmp/test.log` ; aucun code modifié, aucun `.lua` régénéré. Pas de
+`make test-e2e`.
+
+**Non fait / douteux** : 700 `mixed` mesuré **une seule fois** (dispersion du
+plafond 700-850 non cernée, contrairement à §23) ; 600 `mixed` et 1000 `up`
+non mesurés (hors série) ; les 1,8 ms/requête non attribués ne sont pas
+identifiés ; valeur de délestage exacte inconnue à l'unité (rate-limiting,
+`shed_total` par worker) ; résolveurs non instrumentables ;
+`events`/`mac-lrn` sous-estimés aux paliers saturés.
