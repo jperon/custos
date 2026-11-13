@@ -30,7 +30,7 @@ clients_cfg = config.clients or {}
 { :skip_ipv6_ext_hdrs, :new_dns_tcp_stream, :parse_dns_packet } = require "packet_utils"
 { :get_l2 } = require "nfq/ethernet"
 { :drain_pipe, :is_pending, :get_pending_entry, :consume, :purge_pending } = require "ipc"
-{ :add_ip4, :add_ip6, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
+{ :add_ip4_many, :add_ip6_many, :add_mac4_many, :add_mac6_many, :add_mac4, :add_mac6, :get_last_seq, :wait_ack, :drain_ack } = require "nft_queue"
 { :run_queue, :NF_ACCEPT, :NF_DROP, :MAX_BATCH_PKTS, :packet_age_ms } = require "nfq_loop"
 { :log_info, :log_warn, :log_debug, :log_allow, :log_block, :now, :set_action_prefix, :level_enabled, :get_last_write_us } = require "log"
 { :tsv_field } = require "lib.tsv"
@@ -668,8 +668,8 @@ resolve_client_family = (ip_str, want) ->
 
 -- Tables d'addition précalculées : créées une fois par processus au lieu
 -- d'une par paquet dans finalize_a (cf. docs/agents/perf.md §22).
-ADD_IP  = { ipv4: add_ip4, ipv6: add_ip6 }
-ADD_MAC = { ipv4: add_mac4, ipv6: add_mac6 }
+ADD_IP  = { ipv4: add_ip4_many, ipv6: add_ip6_many }
+ADD_MAC = { ipv4: add_mac4_many, ipv6: add_mac6_many }
 
 --- Résout l'adresse d'un client pour une famille (memoïsée dans ctx).
 -- Fonction de module : remplace la closure `client_addr` recréée à chaque

@@ -61,9 +61,11 @@ reset = ->
   validator_override = nil
   response_inject_nft = true
 
-record_add = (key, dest, rule_id, timeout, corr) ->
-  nft_calls[#nft_calls + 1] = { :key, :dest, :rule_id, :corr }
-  nft_result
+record_add = (key, addrs, rule_id, timeout, corr) ->
+  -- Insertion groupée (nft_queue.add_ip4_many) : `dest` reste l'adresse seule
+  -- quand le groupe n'en porte qu'une (cas de ces réponses de test).
+  nft_calls[#nft_calls + 1] = { :key, dest: table.concat(addrs, " "), :rule_id, :corr }
+  if nft_result then #addrs else 0
 
 -- Stub config tenu dans une variable locale : on mute CETTE table (celle que
 -- doh.query capture au require), et non `require "config"` à l'exécution — sous
@@ -96,6 +98,8 @@ package.loaded["filter"] = {
 }
 package.loaded["nft_queue"] = {
   add_ip4: record_add, add_ip6: record_add, add_mac4: record_add, add_mac6: record_add
+  add_ip4_many: record_add, add_ip6_many: record_add
+  add_mac4_many: record_add, add_mac6_many: record_add
   get_last_seq: -> 1       -- non-nil → exerce le wait_ack
   wait_ack: (seq, corr) -> wait_acks[#wait_acks + 1] = corr
   drain_ack: (->)

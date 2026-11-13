@@ -597,6 +597,7 @@ local MICRO_CASES = {
   "micro_decode",
   "micro_makekey",
   "micro_add_line",
+  "micro_add_group",
   "micro_parse_answers",
   "micro_strip",
   "micro_classify",
@@ -621,8 +622,11 @@ build_micro_cases = function(s)
   local dup = require("dup_query")
   local user_for_mac
   user_for_mac = require("auth.sessions").user_for_mac
-  local add_ip4
-  add_ip4 = require("nft_queue").add_ip4
+  local add_ip4, add_ip4_many
+  do
+    local _obj_0 = require("nft_queue")
+    add_ip4, add_ip4_many = _obj_0.add_ip4, _obj_0.add_ip4_many
+  end
   local write_msg
   write_msg = require("ipc").write_msg
   local ip2s
@@ -664,6 +668,20 @@ build_micro_cases = function(s)
   add_line_step = function(i)
     return (add_ip4(CLIENT_IP, "100.64.0.11", "r_utilisateurs", "660s", "1234:10.35.1.2:5353:10.35.1.1")) and 1 or 2
   end
+  local add_group_addrs
+  do
+    local _accum_0 = { }
+    local _len_0 = 1
+    for i = 1, 8 do
+      _accum_0[_len_0] = "100.64.0." .. tostring(10 + i)
+      _len_0 = _len_0 + 1
+    end
+    add_group_addrs = _accum_0
+  end
+  local add_group_step
+  add_group_step = function(i)
+    return add_ip4_many(CLIENT_IP, add_group_addrs, "r_utilisateurs", "660s", "1234:10.35.1.2:5353:10.35.1.1")
+  end
   local wevent_step
   wevent_step = function(i)
     return (s.wq.write_event(s.micro_fields, true)) and 1 or 2
@@ -704,6 +722,11 @@ build_micro_cases = function(s)
       return #(ipc.make_key(TXID, CLIENT_IP, CLIENT_PORT, RESOLVER_IP))
     end),
     micro("micro_add_line", "nft_queue.add_ip4 : build_line + enqueue", add_line_step, {
+      finish = function()
+        return nft_q.get_last_seq()
+      end
+    }),
+    micro("micro_add_group", "nft_queue.add_ip4_many (8 adresses, 1 ligne)", add_group_step, {
       finish = function()
         return nft_q.get_last_seq()
       end

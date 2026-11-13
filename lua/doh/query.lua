@@ -7,10 +7,10 @@ do
   local _obj_0 = require("filter")
   decide_meta, run_on_response = _obj_0.decide_meta, _obj_0.run_on_response
 end
-local add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, get_worker_idx, wait_ack, drain_ack
+local add_ip4_many, add_ip6_many, add_mac4_many, add_mac6_many, get_last_seq, get_worker_idx, wait_ack, drain_ack
 do
   local _obj_0 = require("nft_queue")
-  add_ip4, add_ip6, add_mac4, add_mac6, get_last_seq, get_worker_idx, wait_ack, drain_ack = _obj_0.add_ip4, _obj_0.add_ip6, _obj_0.add_mac4, _obj_0.add_mac6, _obj_0.get_last_seq, _obj_0.get_worker_idx, _obj_0.wait_ack, _obj_0.drain_ack
+  add_ip4_many, add_ip6_many, add_mac4_many, add_mac6_many, get_last_seq, get_worker_idx, wait_ack, drain_ack = _obj_0.add_ip4_many, _obj_0.add_ip6_many, _obj_0.add_mac4_many, _obj_0.add_mac6_many, _obj_0.get_last_seq, _obj_0.get_worker_idx, _obj_0.wait_ack, _obj_0.drain_ack
 end
 local with_lock
 with_lock = require("lib.filelock").with_lock
@@ -408,12 +408,12 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
                   inject_nft = true,
                   mac_valid = mac_valid,
                   add_ip = {
-                    ipv4 = add_ip4,
-                    ipv6 = add_ip6
+                    ipv4 = add_ip4_many,
+                    ipv6 = add_ip6_many
                   },
                   add_mac = {
-                    ipv4 = add_mac4,
-                    ipv6 = add_mac6
+                    ipv4 = add_mac4_many,
+                    ipv6 = add_mac6_many
                   }
                 })
               end
@@ -463,12 +463,12 @@ process_query = function(dns_raw, client_ip, client_mac, upstream, client_vlan)
     inject_nft = resp_ctx.inject_nft,
     mac_valid = mac_valid,
     add_ip = {
-      ipv4 = add_ip4,
-      ipv6 = add_ip6
+      ipv4 = add_ip4_many,
+      ipv6 = add_ip6_many
     },
     add_mac = {
-      ipv4 = add_mac4,
-      ipv6 = add_mac6
+      ipv4 = add_mac4_many,
+      ipv6 = add_mac6_many
     }
   })
   local failure_policy = (config.nft or { }).add_failure_policy or "fail-closed"

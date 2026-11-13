@@ -5,13 +5,12 @@
 -- Responsabilités factorisées :
 --   - rr_timeout        : TTL du RR → timeout de set nft (borné + grace)
 --   - detect_wildcards  : règles wildcard d'auth (from_users sans to_domain*)
---   - add_to_wildcards  : recopie (key→dest) dans les sets des règles wildcard
 --   - inject            : boucle d'injection A/AAAA (per-rule + mac + wildcard),
 --                         avec comptage records_to_add/success pour le fail-closed.
 --
 -- Le module ne tire AUCUNE dépendance nft directe : les fonctions d'ajout
--- (add_ip4/6, add_mac4/6) sont injectées via `opts`, ce qui le rend testable
--- unitairement sans libnftnl.
+-- (add_ip4_many/6, add_mac4_many/6) sont injectées via `opts`, ce qui le rend
+-- testable unitairement sans libnftnl.
 
 config = require "config"
 
@@ -61,20 +60,12 @@ detect_wildcards = (rules_metadata) ->
       out[#out + 1] = meta.rule_id or "unknown_#{idx}"
   out
 
---- Injecte (key→dest) dans les sets de toutes les règles wildcard via add_fn.
--- @tparam function add_fn       Fonction d'ajout nft (add_ip4/6/add_mac4/6).
--- @tparam table    wildcard_ids Liste de rule_id wildcard.
--- @treturn boolean true si au moins une insertion a réussi.
-add_to_wildcards = (add_fn, wildcard_ids, key, dest, timeout, corr) ->
-  any_ok = false
-  for _, rid in ipairs wildcard_ids or {}
-    -- NB : effet de bord dissocié de l'accumulation — `any_ok or= add_fn …`
-    -- court-circuiterait et sauterait les règles suivantes dès le 1er succès.
-    ok = add_fn key, dest, rid, timeout, corr
-    any_ok = any_ok or ok
-  any_ok
-
 --- Boucle d'injection nft des réponses A/AAAA (noyau commun).
+-- Les insertions sont regroupées par set et par timeout : une réponse de N RR
+-- ne coûte plus 2N lignes IPC mais une par (set, timeout) — les RR d'un même
+-- RRset partagent leur TTL, le cas courant est donc une seule ligne pour le set
+-- de la règle et une pour le set MAC (cf. nft_queue.add_many et
+-- docs/agents/perf.md §29a).
 -- @tparam table answers Liste normalisée de { family:"ipv4"|"ipv6", addr, ttl }.
 -- @tparam table opts {
 --   client_addr  : (family) -> addr|nil   résout l'adresse client dans la famille
@@ -86,8 +77,8 @@ add_to_wildcards = (add_fn, wildcard_ids, key, dest, timeout, corr) ->
 --   inject_nft   : boolean                 si faux, aucune insertion (no-op comptable)
 --   timeout_of   : (ttl) -> string         défaut rr_timeout
 --   mac_valid    : (mac) -> boolean
---   add_ip       : { ipv4: add_ip4, ipv6: add_ip6 }
---   add_mac      : { ipv4: add_mac4, ipv6: add_mac6 }
+--   add_ip       : { ipv4 = add_ip4_many, ipv6 = add_ip6_many }
+--   add_mac      : { ipv4 = add_mac4_many, ipv6 = add_mac6_many }
 -- }
 -- @treturn table { records_to_add, success_any, ip_count, no_v4, no_v6 }
 inject = (answers, opts) ->
@@ -103,6 +94,20 @@ inject = (answers, opts) ->
   use_wild    = opts.user and opts.wildcard_ids and #opts.wildcard_ids > 0
   mac_ok      = mac_valid opts.client_mac
 
+  -- Accumulateur d'insertions : une entrée par (fonction d'ajout, règle, clé
+  -- client, timeout). `order` fixe l'ordre d'émission (`pairs` n'en garantit
+  -- aucun) ; le nombre d'entrées est celui des sets touchés, donc le parcours
+  -- linéaire reste court.
+  groups = {}
+  order  = {}
+  add_addr = (add_fn, rule_id, key, addr, timeout) ->
+    for g in *order
+      if g.add_fn == add_fn and g.rule_id == rule_id and g.key == key and g.timeout == timeout
+        g.addrs[#g.addrs + 1] = addr
+        return
+    order[#order + 1] = { :add_fn, :rule_id, :key, :timeout, addrs: { addr } }
+    nil
+
   for ans in *answers
     fam     = ans.family
     add_ip  = opts.add_ip[fam]
@@ -112,24 +117,30 @@ inject = (answers, opts) ->
 
     if client
       records_to_add += 1
-      ok = add_ip client, ans.addr, opts.rule_id, timeout, opts.ack_corr
-      ip_count += 1 if ok
-      success_any = success_any or ok
-      -- L'injection wildcard est TOUJOURS tentée (effet de bord dissocié du OR).
+      add_addr add_ip, opts.rule_id, client, ans.addr, timeout
+      -- L'injection wildcard est TOUJOURS tentée (set distinct de la règle).
       if use_wild
-        w_ok = add_to_wildcards add_ip, opts.wildcard_ids, client, ans.addr, timeout, opts.ack_corr
-        success_any = success_any or w_ok
+        for rid in *opts.wildcard_ids
+          add_addr add_ip, rid, client, ans.addr, timeout
     else
       tbl = fam == "ipv4" and no_v4 or no_v6
       tbl[#tbl + 1] = ans.addr
 
     if mac_ok
-      m_ok = add_mac opts.client_mac, ans.addr, opts.rule_id, timeout, opts.ack_corr
-      success_any = success_any or m_ok
+      add_addr add_mac, opts.rule_id, opts.client_mac, ans.addr, timeout
       if use_wild
-        wm_ok = add_to_wildcards add_mac, opts.wildcard_ids, opts.client_mac, ans.addr, timeout, opts.ack_corr
-        success_any = success_any or wm_ok
+        for rid in *opts.wildcard_ids
+          add_addr add_mac, rid, opts.client_mac, ans.addr, timeout
+
+  for g in *order
+    n = g.add_fn g.key, g.addrs, g.rule_id, g.timeout, opts.ack_corr
+    if n and n > 0
+      success_any = true
+      -- `ip_count` ne compte, comme avant, que les adresses insérées dans le
+      -- set IP de la règle de la réponse (ni wildcard, ni MAC).
+      if g.rule_id == opts.rule_id and (g.add_fn == opts.add_ip.ipv4 or g.add_fn == opts.add_ip.ipv6)
+        ip_count += n
 
   { :records_to_add, :success_any, :ip_count, :no_v4, :no_v6 }
 
-{ :rr_timeout, :detect_wildcards, :add_to_wildcards, :inject }
+{ :rr_timeout, :detect_wildcards, :inject }

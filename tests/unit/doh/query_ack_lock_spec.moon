@@ -64,6 +64,15 @@ nft_stub = {
     true
   add_mac4: (key, dest, rule_id, timeout, corr) -> true
   add_mac6: (key, dest, rule_id, timeout, corr) -> true
+  -- Variantes groupées (response_inject.inject les appelle avec une liste).
+  add_ip4_many: (key, addrs, rule_id, timeout, corr) ->
+    events[#events + 1] = "add"
+    #addrs
+  add_ip6_many: (key, addrs, rule_id, timeout, corr) ->
+    events[#events + 1] = "add"
+    #addrs
+  add_mac4_many: (key, addrs) -> #addrs
+  add_mac6_many: (key, addrs) -> #addrs
 }
 package.loaded["nft_queue"] = nft_stub
 
@@ -84,8 +93,8 @@ make_opts = (inject_nft=true) -> {
   wildcard_ids: {}
   ack_corr: "c1"
   mac_valid: -> false
-  add_ip:  { ipv4: nft_stub.add_ip4, ipv6: nft_stub.add_ip6 }
-  add_mac: { ipv4: nft_stub.add_mac4, ipv6: nft_stub.add_mac6 }
+  add_ip:  { ipv4: nft_stub.add_ip4_many, ipv6: nft_stub.add_ip6_many }
+  add_mac: { ipv4: nft_stub.add_mac4_many, ipv6: nft_stub.add_mac6_many }
 }
 
 describe "doh.query.inject_nft_and_wait", ->

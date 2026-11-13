@@ -588,7 +588,7 @@ MICRO_CASES = {
   "micro_parse_q", "micro_parse_a", "micro_parse_b",
   "micro_decide", "micro_write_msg", "micro_encode_msg",
   "micro_build_udp", "micro_decode", "micro_makekey",
-  "micro_add_line", "micro_parse_answers", "micro_strip",
+  "micro_add_line", "micro_add_group", "micro_parse_answers", "micro_strip",
   "micro_classify", "micro_encode_verdict", "micro_corr_key",
   "micro_ip2s", "micro_write_event", "micro_learn", "micro_user",
   "micro_get_pending", "micro_is_valid_timeout"
@@ -609,7 +609,7 @@ build_micro_cases = (s) ->
   dns_classify = require "dns_classify"
   dup = require "dup_query"
   { :user_for_mac } = require "auth.sessions"
-  { :add_ip4 } = require "nft_queue"
+  { :add_ip4, :add_ip4_many } = require "nft_queue"
   { :write_msg } = require "ipc"
   { :ip2s } = require "lib.packet_parsing"
   ipc_hex = require "lib.ipc_hex"
@@ -640,6 +640,11 @@ build_micro_cases = (s) ->
   add_line_step = (i) ->
     (add_ip4 CLIENT_IP, "100.64.0.11", "r_utilisateurs", "660s",
       "1234:10.35.1.2:5353:10.35.1.1") and 1 or 2
+  -- Les 8 adresses d'une réponse mixed (response_inject.inject groupe par set).
+  add_group_addrs = [ "100.64.0.#{10 + i}" for i = 1, 8 ]
+  add_group_step = (i) ->
+    add_ip4_many CLIENT_IP, add_group_addrs, "r_utilisateurs", "660s",
+      "1234:10.35.1.2:5353:10.35.1.1"
   wevent_step = (i) -> (s.wq.write_event s.micro_fields, true) and 1 or 2
   learn_step  = (i) -> (s.wq.write_learn_msg q.ip.src, CLIENT_MAC_RAW) and 1 or 2
 
@@ -670,6 +675,8 @@ build_micro_cases = (s) ->
     micro "micro_makekey", "ipc.make_key (clé pending)", ->
       #(ipc.make_key TXID, CLIENT_IP, CLIENT_PORT, RESOLVER_IP)
     micro "micro_add_line", "nft_queue.add_ip4 : build_line + enqueue", add_line_step,
+      { finish: -> nft_q.get_last_seq! }
+    micro "micro_add_group", "nft_queue.add_ip4_many (8 adresses, 1 ligne)", add_group_step,
       { finish: -> nft_q.get_last_seq! }
     micro "micro_parse_answers", "lib.dns_response.parse_answers (8 RR)", ->
       #(disp.parse_answers a.msg)
