@@ -53,13 +53,59 @@ Variables : `HP_ITERS`, `HP_CHUNK` (64 = `MAX_BATCH_PKTS`), `HP_WARMUP`,
 `HP_PROFILE=f|l`, `HP_ONLY=<cas>`, `HP_JIT_V=<fichier>`,
 `HP_JIT_DUMP=<fichier>`, `HP_TASKSET=<cpu>`, `HP_EXTRA` (flags bruts).
 Flags GC (via `HP_EXTRA`) : `--gc-pause`, `--gc-stepmul`, `--gc-idle-step`,
-`--gc-max-heap`. Le rapport porte le réglage appliqué et une colonne
+`--gc-max-heap`. Autres flags : `--micro` (micro-cas), `--stages` (sondes par
+fonction), `--no-steps` (sans tableau par étape), `--only a,b`
+(plusieurs cas). Le rapport porte le réglage appliqué et une colonne
 `tas max (Kio)` (`collectgarbage "count"` relevé après chaque lot), ce qui
 permet de comparer coût par paquet et empreinte entre deux réglages.
 Cas disponibles : `question`, `ipc_drain`, `response`, `so_a`, `so_cycle`,
-`setup_control` (`--list`). Le banc **échoue** (code 1) si le chemin mesuré n'est
-pas celui attendu (mauvais code retour, verdict manquant) : une mesure ne doit
-jamais porter sur un autre chemin que celui décrit.
+`mixed_o2`, `mixed_plain`, `setup_control` (`--list`). Le banc **échoue** (code
+1) si le chemin mesuré n'est pas celui attendu (mauvais code retour, verdict
+manquant) : une mesure ne doit jamais porter sur un autre chemin que celui
+décrit.
+
+### Cycle `mixed` complet (`mixed_o2`, `mixed_plain`)
+
+Deux cas reproduisent **une requête client du profil `mixed`** de bout en bout,
+telle que la décrit `docs/agents/perf.md` §23 : `mixed_o2` = question → réponse
+A du résolveur (parquée) → réponse B du validateur (classify, broadcast du
+verdict, déparquage, `finalize_a` avec 8 A et 16 insertions nft) ; `mixed_plain`
+= question → réponse A seule (règle sans second avis). Les poids du profil
+(68 % avec second avis) servent au « total par requête `mixed` pondéré » du
+rapport. Les deux cas portent des `labels` d'étape : le rapport publie un
+tableau **coût par étape** (µs/requête et octets/requête), mesuré par une passe
+dédiée (`--no-steps` pour la couper).
+
+Particularités par rapport aux cas historiques : le worker réponses lit le tube
+où le worker questions écrit (comme en production), et le **bus de verdicts**
+du second avis est armé en écriture (un seul fd, production : un par worker),
+son tube étant vidé après chaque lot — sans lui, l'encodage `encode_verdict` ne
+serait jamais mesuré.
+
+### Micro-cas (`--micro`)
+
+`--micro` (ou `--only micro_…`) mesure **une fonction réelle à la fois** avec
+des arguments réels (paquets du profil préparés une fois) : `parse_dns_packet`
+(question / réponse A / réponse B), `filter.decide_meta`, `ipc.write_msg`,
+`ipc.encode_msg`, `ipc.decode_msg`, `ipc.make_key`, `dup_query.build_udp`,
+`nft_queue.add_ip4`, `parse_answers`, `patch_modified_dns`,
+`dns_classify.classify`, `encode_verdict`, `corr_key`, `ip2s`,
+`write_event`, `write_learn_msg`, `user_for_mac`, `get_pending_entry`. C'est le
+classement « où passe le temps » : chaque étape rend un nombre (valeur
+consommée), ce qui interdit au JIT d'éliminer l'appel (§22.1).
+
+**Allocation par étape** : mesurée GC arrêté sur un lot après échauffement.
+LuaJIT internant les chaînes identiques, les étapes qui reconstruisent la même
+chaîne (même txid, même qname) apparaissent sous-estimées ; les valeurs uniques
+par itération (seq nft, txid réel) sont exactes.
+
+### Sondes par fonction (`--stages`)
+
+`--stages` enveloppe les fonctions des modules appelés par les workers
+(`src/bench/stage_probe.moon`) et publie un tableau par sonde (µs/requête,
+µs/appel, appels/requête, octets/requête). Temps **inclusifs**, et wrapper
+(~0,2-0,4 µs/appel) qui désooptimise le chemin mesuré : à lire comme un
+classement relatif, pas comme un absolu. Lancer les totaux **sans** `--stages`.
 
 Le cas `question` appelle le hook de fin de lot du worker questions
 (`on_batch_end`, exposé comme `on_batch_end_q`) après chaque lot de `HP_CHUNK`
