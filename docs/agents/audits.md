@@ -4667,3 +4667,13 @@ HP_TASKSET=1`, médiane des rapports par paire) : `mixed_o2` +0,0 % (moyenne) /
 (`tmp/test_refactor.log`). Pas de `make test-e2e` (consigne). Mesures :
 `perf.md` §29a.1.
 
+### Branche `d-capip` — IP du portail captif non détectée au démarrage
+
+`src/captive_ips.moon` `detect` ne lisait l'IP du bridge qu'une fois au démarrage.
+Refactor en `detect_ip4`/`detect_ip6` + `new_detector` avec `ensure(now)` qui
+retente les familles manquantes toutes les `RETRY_INTERVAL` (10 s), mémorise et
+logue (INFO) une fois. `worker_questions` et `worker_doh` utilisent le détecteur ;
+`doh.query` ne forge plus de réponse vide quand l'IP de la famille demandée
+manque (laisse passer normalement). WARN au démarrage par famille manquante.
+Tests : `tests/unit/captive_ips_spec.moon` (10).`
+

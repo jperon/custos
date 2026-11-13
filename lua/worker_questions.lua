@@ -46,10 +46,10 @@ tsv_field = require("lib.tsv").tsv_field
 local user_for_mac
 user_for_mac = require("auth.sessions").user_for_mac
 local forge_dns = require("forge_dns")
-local detect_captive_ips, domain_from_url
+local domain_from_url, new_detector
 do
   local _obj_0 = require("captive_ips")
-  detect_captive_ips, domain_from_url = _obj_0.detect, _obj_0.domain_from_url
+  domain_from_url, new_detector = _obj_0.domain_from_url, _obj_0.new_detector
 end
 local bridge_raw = require("bridge_raw")
 local new_eth, IP4, IP6
@@ -85,6 +85,7 @@ local shed_ts_logged = false
 local captive_domain = nil
 local captive_ip4 = nil
 local captive_ip6 = nil
+local captive_detector = nil
 local raw_fd = nil
 local _ifindex = nil
 local _bridge_mac = nil
@@ -359,6 +360,16 @@ handle_question = function(qh_ptr, nfad, pkt_id)
     for _, q in ipairs(dns_msg.questions) do
       local norm = q.name:lower():gsub("%.+$", "")
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28) then
+        if captive_detector then
+          local ip4, ip6 = captive_detector:ensure()
+          captive_ip4, captive_ip6 = ip4, ip6
+        end
+        if q.qtype == 1 and not captive_ip4 then
+          break
+        end
+        if q.qtype == 28 and not captive_ip6 then
+          break
+        end
         local mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0" then
           log_warn(function()
@@ -587,9 +598,26 @@ run = function(queue_num, wfd, learn_wfd, ev_wfd, filter_data)
   do
     local auth = filter.get_auth_cfg()
     captive_domain = domain_from_url(auth.redirect_url)
-    captive_ip4, captive_ip6 = detect_captive_ips(auth)
+    captive_detector = new_detector(auth)
+    captive_ip4, captive_ip6 = captive_detector:get()
     if captive_domain then
       local ifname = auth.bridge_ifname or "br0"
+      if not captive_ip4 then
+        log_warn(function()
+          return {
+            action = "captive_ip4_not_detected",
+            ifname = ifname
+          }
+        end)
+      end
+      if not captive_ip6 then
+        log_warn(function()
+          return {
+            action = "captive_ip6_not_detected",
+            ifname = ifname
+          }
+        end)
+      end
       local fd, err = bridge_raw.open_socket(ifname)
       if fd then
         raw_fd = fd

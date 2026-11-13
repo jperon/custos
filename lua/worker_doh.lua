@@ -846,26 +846,49 @@ run = function(doh_cfg, filter_data)
   if doh_cfg.ack_rfd and doh_cfg.worker_idx ~= nil then
     nft_q.set_ack_rfd(doh_cfg.ack_rfd, doh_cfg.worker_idx)
   end
+  local captive_detector = nil
+  local cap_domain = nil
+  local cap_ip4 = nil
+  local cap_ip6 = nil
+  local set_captive = nil
   if filter_data then
     local filter = require("filter")
     filter.rules = filter_data.rules
     filter.auth_cfg_cache = filter_data.auth_cfg_cache
     filter.decision_cfg = filter_data.decision_cfg
-    local set_wildcard_rules, set_captive
-    do
-      local _obj_0 = require("doh.query")
-      set_wildcard_rules, set_captive = _obj_0.set_wildcard_rules, _obj_0.set_captive
-    end
+    local doh_query = require("doh.query")
+    local set_wildcard_rules = doh_query.set_wildcard_rules
+    set_captive = doh_query.set_captive
     set_wildcard_rules(filter_data.rules and filter_data.rules.rules_metadata)
-    local detect, domain_from_url
+    local domain_from_url, new_detector
     do
       local _obj_0 = require("captive_ips")
-      detect, domain_from_url = _obj_0.detect, _obj_0.domain_from_url
+      domain_from_url, new_detector = _obj_0.domain_from_url, _obj_0.new_detector
     end
     local auth = filter.get_auth_cfg()
-    local cap_domain = domain_from_url(auth.redirect_url)
-    local cap_ip4, cap_ip6 = detect(auth)
+    cap_domain = domain_from_url(auth.redirect_url)
+    captive_detector = new_detector(auth)
+    cap_ip4, cap_ip6 = captive_detector:get()
     set_captive(cap_domain, cap_ip4, cap_ip6)
+    if cap_domain then
+      local ifname = auth.bridge_ifname or "br0"
+      if not cap_ip4 then
+        log_warn(function()
+          return {
+            action = "captive_ip4_not_detected",
+            ifname = ifname
+          }
+        end)
+      end
+      if not cap_ip6 then
+        log_warn(function()
+          return {
+            action = "captive_ip6_not_detected",
+            ifname = ifname
+          }
+        end)
+      end
+    end
   end
   if not (doh_cfg.enabled) then
     log_info(function()
@@ -986,6 +1009,13 @@ run = function(doh_cfg, filter_data)
       local dead_pid = reap_one()
       if not (dead_pid and dead_pid > 0) then
         break
+      end
+    end
+    if captive_detector and cap_domain then
+      local new4, new6 = captive_detector:ensure()
+      if new4 ~= cap_ip4 or new6 ~= cap_ip6 then
+        cap_ip4, cap_ip6 = new4, new6
+        set_captive(cap_domain, cap_ip4, cap_ip6)
       end
     end
     local readable, _ = socket.select(all_servers, nil, 0.1)

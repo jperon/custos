@@ -32,7 +32,7 @@ filter                   = require "filter"
 { :tsv_field } = require "lib.tsv"
 { :user_for_mac } = require "auth.sessions"
 forge_dns = require "forge_dns"
-{ detect: detect_captive_ips, :domain_from_url } = require "captive_ips"
+{ :domain_from_url, :new_detector } = require "captive_ips"
 bridge_raw = require "bridge_raw"
 { new: new_eth, proto: {:IP4, :IP6} } = require "ipparse.l2.ethernet"
 dup_query = require "dup_query"
@@ -80,9 +80,10 @@ shed_ts_logged = false
 -- captive_ip4/6  : adresses IP du portail captif pour les RR A et AAAA.
 -- raw_fd/_ifindex/_bridge_mac : socket AF_PACKET et infos bridge pour
 --                 l'injection directe de la réponse DNS vers le client.
-captive_domain = nil
-captive_ip4    = nil
-captive_ip6    = nil
+captive_domain   = nil
+captive_ip4      = nil
+captive_ip6      = nil
+captive_detector = nil
 raw_fd         = nil
 _ifindex       = nil
 _bridge_mac    = nil
@@ -360,6 +361,16 @@ handle_question = (qh_ptr, nfad, pkt_id) ->
     for _, q in ipairs dns_msg.questions
       norm = q.name\lower!\gsub "%.+$", ""
       if norm == captive_domain and (q.qtype == 1 or q.qtype == 28)   -- A ou AAAA
+        -- Détection paresseuse : retente si l'IP de cette famille manque.
+        if captive_detector
+          ip4, ip6 = captive_detector\ensure!
+          captive_ip4, captive_ip6 = ip4, ip6
+        -- Pas d'IP pour la famille demandée : ne pas forger de réponse vide,
+        -- laisser la question suivre le chemin normal.
+        if q.qtype == 1 and not captive_ip4
+          break
+        if q.qtype == 28 and not captive_ip6
+          break
         mac_raw = l2.mac_raw
         if not mac_raw or mac_raw == "\0\0\0\0\0\0"
           log_warn -> {
@@ -577,9 +588,14 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   do
     auth = filter.get_auth_cfg!
     captive_domain = domain_from_url auth.redirect_url
-    captive_ip4, captive_ip6 = detect_captive_ips auth
+    captive_detector = new_detector auth
+    captive_ip4, captive_ip6 = captive_detector\get!
     if captive_domain
       ifname = auth.bridge_ifname or "br0"
+      if not captive_ip4
+        log_warn -> { action: "captive_ip4_not_detected", ifname: ifname }
+      if not captive_ip6
+        log_warn -> { action: "captive_ip6_not_detected", ifname: ifname }
       fd, err = bridge_raw.open_socket ifname
       if fd
         raw_fd   = fd
