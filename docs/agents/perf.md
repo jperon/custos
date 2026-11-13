@@ -4116,3 +4116,97 @@ passe de 21 177 lignes `response_dns_benchmark` par fenêtre de 30 s (§27.4) à
 - L'horloge murale de la cible a été vue sautant d'une seconde pendant un
   échantillonnage : fenêtres et durées sont calculées en `uptime`/jiffies ;
   les epochs du journal ne servent qu'à sélectionner les lignes (±1 s).
+
+## 29c. Coût de `filter.decide_meta` : index de suffixes dans `to_domains` (2026-11-13, branche `d-decide`)
+
+§26.2 (ligne 4) mesurait `filter.decide_meta` à **4,8 µs/requête**, 6 % du cycle
+`mixed`, hors périmètre de cette branche-là. Profilage (`--micro` + `jit.profile`
+mode `f`, config du banc = 4 règles par défaut + 4 SafeSearch + 3 règles du
+banc, profil §26.1) : **69 % des échantillons** dans les évaluations de
+conditions, 11,6 % dans `details_of`, 7 % dans les `eval_fn` de règle, 6,5 %
+dans les évaluations d'action. Par règle (moyenne de 200 000 appels sur le nom
+du profil, `tmp/d-decide/perrule.lua`) :
+
+| règle | domaines de la condition | µs/appel (avant) |
+|---|---|---|
+| 5 — `SafeSearch Google` (`to_domains`) | **194** | **2,6 – 4,1** |
+| 2 et 3 — captives (`from_user` + `to_domains`, `to_domains`) | 11 | 0,09 – 0,88 |
+| 9 — `Utilisateurs`, 10 — `Ouverture complète` (`to_domains`) | 4 / 2 | 0,06 – 0,08 |
+| 1, 6, 7, 8, 11 | 1 ou 0 | 0,03 – 0,10 |
+
+Cause : `to_domains` instanciait une condition `to_domain` **par domaine de la
+liste** et les parcourait toutes à chaque requête. La règle SafeSearch Google
+(donnée de configuration : liste des `google.*` ccTLD, `src/config.moon:104-190`)
+coûtait donc 194 appels de condition par requête, y compris pour un nom sans
+rapport — 3,5 µs des 4,8.
+
+**Correctif** (`src/filter/conditions/to_domains.moon`) : l'ensemble des
+domaines est construit à la compilation, et `eval` teste le nom exact puis
+chacun de ses suffixes après un point dans cet ensemble — la méthode déjà
+employée par `to_domainlist` (`src/filter/conditions/to_domainlist.moon:174-186`).
+Le coût suit le nombre de labels du nom (3-4 lookups), plus la taille de la
+liste. Messages et verdicts inchangés (« Exact match » / « Subdomain matched » /
+« Not matched by any domain ») ; les valeurs spéciales `_any`/`_none` restent
+des conditions dédiées, évaluées d'abord — seule différence, le message d'une
+liste qui mélangerait `_any`/`_none` avec des domaines (aucune configuration du
+dépôt ne le fait), le verdict étant identique.
+
+Mesures `HP_ITERS=100000 HP_REPEAT=3` sur cœur isolé (`taskset -c 0`), A/B
+alterné par remplacement du seul `.lua` de `to_domains` ; « lot min » = minimum
+de lot de 64 paquets, médiane des paires :
+
+| cas | avant | après | Δ |
+|---|---|---|---|
+| `micro_decide` (µs/appel, lot min) | 6,75 | **1,75** | **−5,0 (−74 %)** |
+| `micro_decide` (µs/appel, moyenne) | 7,8 | 2,9 | −4,9 |
+| `mixed_o2` (µs/requête, lot min, 6 paires) | 135,0 | **129,5** | **−5,5 (−4,1 %)** |
+| `mixed_plain` (µs/requête, lot min, 4 paires) | 65,1 | **62,6** | **−2,5 (−3,8 %)** |
+| `filter.decide_meta` **en cycle** (`--stages`, µs/requête) | 11,4 | **6,0** | −5,4 |
+
+Détail `mixed_o2` (10 000 itérations × 3 passages, 6 paires alternées,
+moyenne / lot min en µs) : avant 166,5/134,9 · 168,0/139,6 · 172,3/142,7 ·
+164,6/135,1 · 160,1/132,5 · 100,3/72,9 ; après 155,9/132,1 · 150,6/128,9 ·
+151,0/125,8 · 151,0/125,2 · 154,9/131,5 · 153,5/130,1. `mixed_plain` (4
+paires) : avant 87,3/66,7 · 86,9/65,2 · 75,8/45,6 · 89,5/65,0 ; après
+84,9/62,5 · 85,8/62,9 · 81,6/60,9 · 84,5/62,7.
+
+Réserve de mesure : la machine était partagée (2 cœurs sur 6 saturés par
+d'autres agents pendant la session). Le protocole prescrit `100000 × 3` donne
+sur `mixed_o2` un lot-min « avant » de 89,7-123,5 µs contre 97,8-111,3 µs
+« après » : dispersion de ±30 % qui masque le gain ; les séries de 10 000
+itérations × 3 passages sont stables (l'écart-type intra-variante tombe à ±3 %
+hors un point), et les trois mesures ciblées (`micro_decide`, sonde `--stages`,
+lot-min `mixed_o2`/`mixed_plain`) concordent à −5 µs.
+
+Après correctif, `filter.decide_meta` n'apparaît plus dans le top 12 de
+`jit.profile` sur `mixed_o2` (la fonction `eval` des conditions passe de 3,8 %
+des échantillons à moins de 1,8 %), soit ~1-2 % du cycle : le poste est sorti
+du chemin critique, et les leviers restants dans `src/filter/` sont sous le
+bruit (voir ci-dessous).
+
+**Examiné et non retenu** (gain estimé < 1 µs/requête, non mesurable ici) :
+
+- messages d'action construits par interpolation à chaque requête
+  (`src/filter/actions/allow.moon:19`, `deny.moon:18`, `validate.moon:26`) : ~2
+  chaînes par requête, précompilables à la compilation de la règle ; estimé
+  ~0,2 µs, non mesuré ;
+- `req.domain\lower!` inconditionnel (`src/filter/rule.moon:209`) : une
+  allocation par requête, supprimable par un test `find "%u"` ; même ordre ;
+- partage de la liste des suffixes du nom entre les 9 conditions `to_domains`
+  d'une requête (un champ par requête) : ~0,5-0,8 µs estimés, mais état partagé
+  par requête et contrat de condition modifié — refusé au nom de la clarté ;
+- ordre d'évaluation des conditions d'une règle (`pairs` → ordre déterministe
+  « bon marché d'abord ») : change le `condition_reason` rapporté quand
+  plusieurs conditions passent, pour un gain devenu marginal.
+
+Allocations : 858 o/appel avant et après sur `micro_decide` (les sous-chaînes
+de suffixes sont internées par le banc, qui rejoue le même nom) ; en production
+elles sont courtes et éphémères. Le tas max du banc baisse de ~230-300 Kio sur
+`mixed_o2`/`mixed_plain` (moins de travail par requête, donc moins de pas de
+GC), sans que ce soit un objectif.
+
+Vérifications : `nix develop --command bash -c "make all && make check &&
+make test"` → **3 281 succès / 0 échec / 0 erreur / 0 pending**
+(`tmp/d-decide/test-1.log`), dont 6 cas ajoutés à
+`tests/unit/filter/filter_spec.moon` (messages, nom sans domaine, match par
+labels et non par sous-chaîne, liste de 200 domaines, `_any`, `_none`).

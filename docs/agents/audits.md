@@ -4609,3 +4609,28 @@ Aucun autre fichier de production modifié. `make all && make check &&
 make test` : total dans `tmp/d-simpl2/test.log` (0 échec). Pas de
 `make test-e2e` (à la charge de l'orchestrateur).
 
+
+### Coût de `filter.decide_meta` : index de suffixes dans `to_domains` (branche `d-decide`, 2026-11-13)
+
+§26.2 (ligne 4) chiffrait `filter.decide_meta` à 4,8 µs/requête (6 % du cycle).
+Profilage du banc : la règle `SafeSearch Google` et sa condition `to_domains`
+de **194 domaines** (liste des `google.*`, `src/config.moon:104-190`) pesait à
+elle seule 2,6-4,1 µs, parce que `to_domains` instanciait une condition par
+domaine et les parcourait toutes à chaque requête.
+
+- `src/filter/conditions/to_domains.moon` : l'ensemble des domaines est
+  construit à la compilation ; `eval` teste le nom exact puis ses suffixes après
+  un point (méthode déjà utilisée par `to_domainlist.moon:174-186`). Coût par
+  requête proportionnel au nombre de labels du nom, plus à la taille de la
+  liste. `_any`/`_none` restent des conditions dédiées.
+- `tests/unit/filter/filter_spec.moon` : 6 cas ajoutés (messages, nom absent,
+  match par labels, liste de 200 domaines, `_any`, `_none`).
+
+Mesures : `micro_decide` 6,75 → **1,75** µs/appel (lot min, médiane de 4
+paires) ; sonde `--stages` en cycle `mixed_o2` 11,4 → **6,0** µs/requête ;
+`mixed_o2` lot-min 135,0 → **129,5** µs (−4,1 %), `mixed_plain` 65,1 → 62,6
+(−3,8 %). Le poste sort du top 12 de `jit.profile` sur `mixed_o2`. Détail,
+réserves de mesure et pistes écartées : `perf.md` §29c.
+
+`make all && make check && make test` : **3 281 succès / 0 échec**
+(`tmp/d-decide/test-1.log`). Pas de `make test-e2e` (consigne).
