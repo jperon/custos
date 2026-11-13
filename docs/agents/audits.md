@@ -4277,3 +4277,54 @@ perte à 700 `mixed` non attribuée (aucun `qdrop`/`udrop`/orpheline, 20 249
 réponses journalisées contre 19 365 reçues) — à rejouer en 2-3 runs ; une
 seule mesure par palier ; `events`/`mac-lrn` sous-estimés aux paliers saturés
 (leur traitement se termine pendant le drain, hors fenêtre CPU).
+
+### Worker AUTH : SIGHUP sans callback FFI (branche `d-authpanic`, 2026-11-13)
+
+**Symptôme** (custos.lan, `logread`) : à 03:00:13, le superviseur re-forke `doh`
+puis transmet SIGHUP à AUTH (`supervisor_sighup_forward_auth pid=30973`) ; le
+worker meurt aussitôt avec `daemon.err PANIC: unprotected error in call to Lua
+API (bad callback)` et `worker_died exit_code=1 name=auth`.
+
+**Cause** : `src/auth/worker.moon:46` (avant correction) installait le
+gestionnaire SIGHUP par `ffi.C.signal SIGHUP, ffi.cast "sighandler_t", -> …`,
+c'est-à-dire un **callback FFI** exécuté en contexte asynchrone. LuaJIT refuse
+d'entrer dans un callback FFI quand `jit_base` est positionné (code
+JIT-compilé en cours) : `lj_ccallback.c:726-730` émet `LJ_ERR_FFI_BADCBACK`,
+appelle le handler de panique puis `exit(EXIT_FAILURE)` — d'où le code 1
+observé. Le SIGHUP vient de l'updater (`src/filter/updater.moon:355-365`,
+`kill` du PID du pidfile écrit en `src/main.moon:577-581`) et le superviseur le
+forwarde à AUTH seul (`src/main.moon:606-610`) ; l'enfant de connexion AUTH
+peut aussi l'envoyer à son parent (`src/auth/handlers.moon:36-40`). Le worker
+reçoit le signal de façon asynchrone parce que `unblock_worker_signals` lève le
+masque hérité du superviseur (`src/lib/process.moon:22-30`).
+
+**Reproduction** (`tmp/`, non commité) : `tmp/repro_badcallback.lua` installe le
+même handler pendant une boucle chaude JIT ; `tmp/repro_driver.sh` envoie des
+SIGHUP puis rapporte le code de sortie. Avant : panique au **premier** signal,
+`signaux_envoyes=1 exit_code=1` (3 essais sur 3). Après (`tmp/repro_after.lua`,
+veilleur `lib.sighup`) : `survived rounds=4331 reloads=50`, 50 signaux,
+`exit_code=0`.
+
+**Correctif** : nouveau `src/lib/sighup.moon` — SIGHUP bloqué par
+`sigprocmask(SIG_BLOCK)` et lu par `signalfd` non bloquant, comme le
+superviseur (`src/main.moon:95-112`) et `worker_events`
+(`src/worker_events.moon:59-73`) ; `watcher:pending()` vide la file et signale
+l'événement. `src/auth/worker.moon` crée ce veilleur au démarrage et
+`reload_fn` l'interroge à chaque tour de la boucle serveur
+(`src/auth/server.moon:271-274`, `:417-418`). Une rafale est coalescée en un
+seul rechargement ; en cas d'échec de création, `sighup_watch_failed` est logué
+et le worker sert sans rechargement à chaud (aucun callback réinstallé).
+
+**Autres workers** : aucun autre `ffi.C.signal`/`sigaction` dans `src/` (grep) ;
+le superviseur ne forwarde SIGHUP qu'à AUTH, les workers « filter » sont tués
+par SIGTERM puis re-forkés (`src/main.moon:596-604`).
+
+**Tests** : `tests/unit/lib/sighup_spec.moon` (5 cas, dont un SIGHUP reçu
+pendant une boucle chaude JIT, qui tuait le processus de test avec l'ancien
+motif) ; `make all && make check && make test` : **3230 succès / 0 échec /
+0 erreur / 0 pending** (50,5 s, `tmp/test.log` ; référence avant correctif
+3225 succès, soit les 5 cas ajoutés).
+
+**Non fait** : pas de `make test-e2e` (homelab occupé, consigne) ; le PANIC
+lui-même n'a pas été rejoué sur custos.lan (aucune connexion aux hôtes
+autorisée pendant la campagne de charge) — la démonstration est locale.
