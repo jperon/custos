@@ -1,3 +1,4 @@
+_G.__COVERAGE__ = true
 -- tests/helpers/line_coverage_setup.lua
 -- Collecte de couverture ligne-par-ligne pour `make coverage`.
 --
@@ -117,3 +118,8 @@ if newproxy then
   _G.__line_coverage_anchor = newproxy(true)
   getmetatable(_G.__line_coverage_anchor).__gc = on_exit
 end
+
+-- Amorce des symboles FFI globaux (pollfd, socket, ...) pour les specs isolés,
+-- comme line_coverage_batch_setup.lua : certains modules (nft_queue, worker_responses)
+-- supposent lib.socket déjà chargé.
+pcall(require, "lib.socket")

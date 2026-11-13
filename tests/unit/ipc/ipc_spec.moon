@@ -1,3 +1,4 @@
+coverage = require "coverage"
 -- tests/unit/ipc/ipc_spec.moon
 -- Spec Busted pour lua/ipc.lua.
 --
@@ -149,8 +150,9 @@ describe "ipc", ->
       after = collectgarbage "count"
       collectgarbage "restart"
       per_call = (after - before) * 1024 / 300
-      assert.is_true per_call < 550,
-        "encode_msg alloue #{math.floor per_call} o/appel (seuil 550)"
+      unless coverage.active!
+        assert.is_true per_call < 550,
+          "encode_msg alloue #{math.floor per_call} o/appel (seuil 550)"
 
   -- ── 3. encode/decode IPv6 round-trip ─────────────────────────────────
   describe "encode/decode IPv6 round-trip", ->
@@ -1095,8 +1097,9 @@ describe "ipc", ->
       per_entry = (after - before) * 1024 / n
       -- Ordre de grandeur : quelques centaines d'octets (entrée + nœud de
       -- liste + clé). Les bornes larges évitent la fragilité entre versions.
-      assert.is_true per_entry > 64,   "entrée non triviale (#{per_entry} o)"
-      assert.is_true per_entry < 4096, "entrée < 4 Ko (#{per_entry} o)"
+      unless coverage.active!
+        assert.is_true per_entry > 64,   "entrée non triviale (#{per_entry} o)"
+        assert.is_true per_entry < 4096, "entrée < 4 Ko (#{per_entry} o)"
 
   -- ── 35. Défaut de `ipc.pending_max` selon le profil (lowmem) ───────────
   -- Recommandation de la campagne d-tune (docs/agents/perf.md §15.5) :

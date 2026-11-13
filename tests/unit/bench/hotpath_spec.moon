@@ -1,3 +1,4 @@
+coverage = require "coverage"
 -- tests/unit/bench/hotpath_spec.moon
 -- Tests unitaires du micro-banc hot path (paquets fabriqués, mesures par étape)
 -- et des sondes par étape (bench/stage_probe).
@@ -101,8 +102,9 @@ describe "bench.hotpath", ->
       }
       res = hp.measure_steps_alloc c, 20, 20
       assert.same 2, #res
-      assert.is_true res[1].bytes > 3000
-      assert.is_true res[2].bytes < 100
+      unless coverage.active!
+        assert.is_true res[1].bytes > 3000
+        assert.is_true res[2].bytes < 100
 
     it "run_probed exécute le cas et rend les sondes triées", ->
       p = stage_probe.new!

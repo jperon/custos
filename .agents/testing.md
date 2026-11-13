@@ -146,6 +146,20 @@ La VM e2e `custos` installe `libwolfssl` par `apk`/`opkg` sans épinglage
 (`libvirt/homelab.sh:404`) : au 2026-11-11 c'est `libwolfssl5.9.1`, qui exporte
 les mêmes symboles ALPN.
 
+## Couverture et assertions d'allocation / de temps
+
+Le hook de couverture (`tests/helpers/line_coverage_setup.lua`, `quick_coverage_setup.lua`)
+alloue et ralentit chaque ligne instrumentée : tout test qui mesure des allocations
+via `collectgarbage "count"` ou un temps via `os.clock`/`os.time`/`nanosleep` échoue
+sous couverture (chiffres faussés par le hook). Ces tests sont donc **protégés**
+par `tests/helpers/coverage.lua` (`coverage.active!`), qui détecte un run sous
+couverture (`_G.__COVERAGE__` posé par les helpers de setup, ou `debug.gethook()`
+non nil) et saute uniquement l'assertion d'allocation/de temps — le reste du test
+(fonctionnel) continue de s'exécuter. Les specs qui dépendent d'un état FFI global
+(`lib.socket`, qui déclare `pollfd`/`socket`) sont amorcés dans
+`line_coverage_setup.lua` (comme dans `line_coverage_batch_setup.lua`), ce qui leur
+permet de passer isolément sous `coverage-split`.
+
 ## Pièges des specs Busted (FFI)
 
 - **Jamais de handler de signal en fonction Lua** (`ffi.cast` d'une fonction Lua) dans un spec : le signal réentre dans la VM hors des points sûrs (LuaJIT panique « bad callback » ou corrompt son état) ; utiliser une fonction C async-signal-safe (cf. `tests/unit/socket_spec.moon:139-147`).
