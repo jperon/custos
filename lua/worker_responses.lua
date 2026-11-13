@@ -551,6 +551,54 @@ resolve_client_family = function(ip_str, want)
   end
   return nil
 end
+local ADD_IP = {
+  ipv4 = add_ip4,
+  ipv6 = add_ip6
+}
+local ADD_MAC = {
+  ipv4 = add_mac4,
+  ipv6 = add_mac6
+}
+local client_addr_of
+client_addr_of = function(ctx, fam)
+  if fam == "ipv4" then
+    ctx._client_v4 = ctx._client_v4 or (ctx.ip.version == 4 and ctx.client_ip or resolve_client_family(ctx.client_ip, "ipv4"))
+    return ctx._client_v4
+  else
+    ctx._client_v6 = ctx._client_v6 or (ctx.ip.version == 6 and ctx.client_ip or resolve_client_family(ctx.client_ip, "ipv6"))
+    return ctx._client_v6
+  end
+end
+local inject_answers
+inject_answers = function(ctx, inject_opts, answers)
+  if not (ctx.defer) then
+    drain_ack()
+  end
+  return inject(answers, inject_opts)
+end
+local patch_and_accept
+patch_and_accept = function(ctx, new_dns, action_label, txid_hex)
+  if new_dns then
+    new_dns = strip_https_rr(new_dns) or new_dns
+    local patched = replace_dns_payload(ctx.raw, ctx.ip, ctx.l4, ctx.ip_ihl, new_dns)
+    if patched then
+      if level_enabled("DEBUG") then
+        log_debug(function()
+          return {
+            action = action_label,
+            src_ip = ctx.src_ip,
+            dst_ip = ctx.dst_ip,
+            txid = txid_hex,
+            client_mac = ctx.client_mac,
+            user = ctx.user
+          }
+        end)
+      end
+      return settle(ctx, NF_ACCEPT, patched, false)
+    end
+  end
+  return settle(ctx, NF_DROP, nil, false)
+end
 local finalize_a
 finalize_a = function(ctx, override)
   local qh_ptr, pkt_id, raw, ip, l4, ip_ihl, dns_msg, dns_raw, entry
@@ -562,16 +610,9 @@ finalize_a = function(ctx, override)
   local src_ip, dst_ip = ctx.src_ip, ctx.dst_ip
   local reason = entry and entry.reason or ""
   local txid_hex = string.format("0x%04x", txid)
-  local client_v4, client_v6 = nil, nil
   local client_addr
   client_addr = function(fam)
-    if fam == "ipv4" then
-      client_v4 = client_v4 or (ip.version == 4 and client_ip or resolve_client_family(client_ip, "ipv4"))
-      return client_v4
-    else
-      client_v6 = client_v6 or (ip.version == 6 and client_ip or resolve_client_family(client_ip, "ipv6"))
-      return client_v6
-    end
+    return client_addr_of(ctx, fam)
   end
   local inject_opts = {
     client_addr = client_addr,
@@ -582,48 +623,12 @@ finalize_a = function(ctx, override)
     ack_corr = ack_corr,
     inject_nft = true,
     mac_valid = mac_valid,
-    add_ip = {
-      ipv4 = add_ip4,
-      ipv6 = add_ip6
-    },
-    add_mac = {
-      ipv4 = add_mac4,
-      ipv6 = add_mac6
-    }
+    add_ip = ADD_IP,
+    add_mac = ADD_MAC
   }
-  local inject_answers
-  inject_answers = function(answers)
-    if not (ctx.defer) then
-      drain_ack()
-    end
-    return inject(answers, inject_opts)
-  end
-  local patch_and_accept
-  patch_and_accept = function(new_dns, action_label)
-    if new_dns then
-      new_dns = strip_https_rr(new_dns) or new_dns
-      local patched = replace_dns_payload(raw, ip, l4, ip_ihl, new_dns)
-      if patched then
-        if level_enabled("DEBUG") then
-          log_debug(function()
-            return {
-              action = action_label,
-              src_ip = src_ip,
-              dst_ip = dst_ip,
-              txid = txid_hex,
-              client_mac = client_mac,
-              user = user
-            }
-          end)
-        end
-        return settle(ctx, NF_ACCEPT, patched, false)
-      end
-    end
-    return settle(ctx, NF_DROP, nil, false)
-  end
   if override and override.kind == "block" then
     write_block_event(ctx)
-    return patch_and_accept(build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block")
+    return patch_and_accept(ctx, build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block", txid_hex)
   end
   if override and override.kind == "sinkhole" then
     write_block_event(ctx)
@@ -632,7 +637,7 @@ finalize_a = function(ctx, override)
       aaaa = override.aaaa or { },
       ttl = override.ttl
     }
-    return patch_and_accept(build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole")
+    return patch_and_accept(ctx, build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole", txid_hex)
   end
   if override and override.kind == "redirect" and override.cname_target then
     if not (dns_classify.has_cname_target(dns_msg, dns_raw, override.cname_target)) then
@@ -666,7 +671,7 @@ finalize_a = function(ctx, override)
             }
           end
           if #redirect_answers > 0 then
-            inject_answers(redirect_answers)
+            inject_answers(ctx, inject_opts, redirect_answers)
           end
           if level_enabled("DEBUG") then
             log_debug(function()
