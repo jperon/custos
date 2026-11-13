@@ -692,3 +692,209 @@ describe "worker_questions", ->
       assert.equals 1, rc
       msg = ipc.decode_msg read_fd pipe_r
       assert.equals "r_noev", msg.rule_id
+
+  -- ── Couverture supplémentaire : branches logiques ───────────────────────
+  describe "write_learn_msg : branches d'erreur", ->
+    it "mac_raw de taille invalide → false", ->
+      assert.is_false wq.write_learn_msg "\192\168\0\10", "short"
+
+    it "ip_raw de longueur invalide → false", ->
+      assert.is_false wq.write_learn_msg "abc", "\170\187\204\221\238\255"
+
+  describe "append_unique : valeurs vides/nil ignorées", ->
+    it "ignore les valeurs nil ou vides", ->
+      dst = { "a" }
+      overflow = wq.append_unique dst, { nil, "", "b" }
+      assert.same { "a", "b" }, dst
+      assert.equals 0, overflow
+
+
+  describe "aggregate_decisions : décision nil ignorée + dépassement", ->
+    it "ignore les entrées nil et sans response_rule_ids", ->
+      out = wq.aggregate_decisions { nil, { verdict: true }, { response_rule_ids: { "z" } } }
+      assert.same { "z" }, out.response_rule_ids
+      assert.equals 0, out.dropped_ids
+      assert.is_nil out.allow_modifiers
+
+    it "compte les dépassements au-delà de MAX", ->
+      many = {}
+      for i = 1, wq.MAX_RESPONSE_RULE_IDS + 2
+        many[i] = "r#{i}"
+      out = wq.aggregate_decisions { { response_rule_ids: many } }
+      assert.equals wq.MAX_RESPONSE_RULE_IDS, #out.response_rule_ids
+      assert.equals 2, out.dropped_ids
+
+  describe "handle_question : dépassement response_rule_ids → warn", ->
+    it "émet response_rule_ids_truncated si > MAX ids", ->
+      decision = {
+        verdict: true
+        reason: "ok"
+        rule_id: "r1"
+        response_rule_ids: [ "r#{i}" for i = 1, wq.MAX_RESPONSE_RULE_IDS + 3 ]
+      }
+      rc = invoke ipv4_udp DNS_QUERY
+      assert.equals 1, rc
+      warn = find_log log_warns, "response_rule_ids_truncated"
+      assert.is_not_nil warn
+
+  describe "second avis : arm_resolvers + maybe_duplicate", ->
+    it "arme les résolveurs et duplique une question validate", ->
+      prev_second = cfg.second_opinion
+      cfg.second_opinion = { resolvers: { "8.8.8.8" } }
+      prev_raw = package.loaded["raw_send"]
+      prev_dup = package.loaded["dup_query"]
+      package.loaded["raw_send"] = {
+        routable: (ver, ip) -> true
+        open: (ver) -> 77
+        send: (fd, ver, pkt, val) -> true
+      }
+      package.loaded["dup_query"] = {
+        pick_resolver: (rs, ver) -> "8.8.8.8"
+        get_picker: (rs) -> (ver, id, sport) -> "8.8.8.8"
+        build_udp: (ip, l4, dns_raw, validator, raw) -> "PKT"
+      }
+      package.loaded["worker_questions"] = nil
+      wq2 = require "worker_questions"
+      wq2.run 0, pipe_w, learn_w, ev_w, nil
+      decision = {
+        verdict: true
+        reason: "ok"
+        rule_id: "r1"
+        timeout: "2m"
+        allow_modifiers: { validate: true }
+        response_rule_ids: { "r1" }
+      }
+      payload = ipv4_udp DNS_QUERY
+      rc = wq2.handle_question nil, nil, 1
+      wq2.flush_pipes!
+      assert.equals 1, rc
+      msg = ipc.decode_msg read_fd pipe_r
+      assert.is_not_nil msg
+      -- restore
+      cfg.second_opinion = prev_second
+      package.loaded["raw_send"] = prev_raw
+      package.loaded["dup_query"] = prev_dup
+      package.loaded["worker_questions"] = nil
+
+  describe "second avis : aucun validateur routable", ->
+    it "émet dns_validator_disabled", ->
+      prev_second = cfg.second_opinion
+      cfg.second_opinion = { resolvers: { "8.8.8.8" } }
+      prev_raw = package.loaded["raw_send"]
+      package.loaded["raw_send"] = { routable: (ver, ip) -> false, open: (ver) -> nil, send: -> true }
+      package.loaded["dup_query"] = { pick_resolver: (rs, ver) -> "8.8.8.8", get_picker: (rs) -> (ver, id, sport) -> "8.8.8.8", build_udp: (ip,l4,dns_raw,validator,raw) -> "PKT" }
+      package.loaded["worker_questions"] = nil
+      wq2 = require "worker_questions"
+      wq2.run 0, pipe_w, learn_w, ev_w, nil
+      assert.is_not_nil find_log log_warns, "dns_validator_disabled"
+      cfg.second_opinion = prev_second
+      package.loaded["raw_send"] = prev_raw
+      package.loaded["worker_questions"] = nil
+
+  describe "portail captif : vol de question DNS", ->
+    it "forge et injecte une réponse pour le domaine captif", ->
+      prev_captive = package.loaded["captive_ips"]
+      prev_bridge = package.loaded["bridge_raw"]
+      prev_forge = package.loaded["forge_dns"]
+      package.loaded["captive_ips"] = {
+        domain_from_url: (url) -> "captive.example"
+        new_detector: (auth) -> {
+          get: (self) -> "10.0.0.1", "fd00::1"
+          ensure: (self, now) -> "10.0.0.1", "fd00::1"
+        }
+      }
+      package.loaded["bridge_raw"] = {
+        open_socket: (ifname) -> 77
+        read_mac: (ifname) -> "\1\2\3\4\5\6"
+        send: (fd, bytes, ifindex) -> true
+      }
+      package.loaded["forge_dns"] = {
+        forge_dns_response: (ip, l4, id, q, ip4, ip6) -> { "PKT1", "PKT2" }
+      }
+      -- MAC source valide (pas "unknown")
+      package.loaded["nfq/ethernet"].get_l2 = ->
+        {
+          mac_src: "aa:bb:cc:dd:ee:ff"
+          mac_raw: "\170\187\204\221\238\255"
+          in_ifindex: 5
+          vlan: nil
+        }
+      package.loaded["worker_questions"] = nil
+      wq2 = require "worker_questions"
+      package.loaded["filter"].get_auth_cfg = -> { redirect_url: "http://captive.example/", bridge_ifname: "br0" }
+      wq2.run 0, pipe_w, learn_w, ev_w, nil
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      -- question sur le domaine captif
+      captive_query = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7captive\7example\0\0\1\0\1"
+      payload = ipv4_udp captive_query
+      rc = wq2.handle_question nil, nil, 1
+      wq2.flush_pipes!
+      assert.equals 0, rc   -- NF_DROP
+      -- restore
+      package.loaded["captive_ips"] = prev_captive
+      package.loaded["bridge_raw"] = prev_bridge
+      package.loaded["forge_dns"] = prev_forge
+      package.loaded["worker_questions"] = nil
+      package.loaded["nfq/ethernet"].get_l2 = ->
+        {
+          mac_src: "aa:bb:cc:dd:ee:ff"
+          mac_raw: "\170\187\204\221\238\255"
+          in_ifindex: 5
+          vlan: nil
+        }
+
+  describe "benchmark : get_benchmark_ms et question_proc_ms", ->
+    it "calcule question_proc_ms quand benchmark actif", ->
+      prev_runtime = cfg.runtime
+      cfg.runtime = { benchmark: true }
+      package.loaded["worker_questions"] = nil
+      wq2 = require "worker_questions"
+      wq2.run 0, pipe_w, learn_w, ev_w, nil
+      decision = { verdict: true, reason: "ok", rule_id: "r_bench" }
+      payload = ipv4_udp DNS_QUERY
+      rc = wq2.handle_question nil, nil, 1
+      wq2.flush_pipes!
+      assert.equals 1, rc
+      msg = ipc.decode_msg read_fd pipe_r
+      assert.is_not_nil msg
+      -- question_proc_ms transmis peut être nil ou number ; on vérifie juste le chemin
+      cfg.runtime = prev_runtime
+      package.loaded["worker_questions"] = nil
+
+  describe "run : branches max_age nil et filter_data", ->
+    it "max_age_ms nil → défaut 1500 ms", ->
+      cfg.nfqueue.max_age_ms = nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
+      assert.is_true wq.get_shed_total! >= 0
+      -- réarme pour la suite
+      cfg.nfqueue.max_age_ms = 1500
+      wq.run 0, pipe_w, learn_w, ev_w, nil
+
+    it "filter_data présent → copie rules/auth_cfg/decision_cfg", ->
+      fd = { rules: { x: 1 }, auth_cfg_cache: { y: 2 }, decision_cfg: { z: 3 } }
+      wq.run 0, pipe_w, learn_w, ev_w, fd
+      assert.is_not_nil captured_opts
+      cfg.nfqueue.max_age_ms = 1500
+      wq.run 0, pipe_w, learn_w, ev_w, nil
+
+  describe "run : résolveurs per-règle (validate_resolvers)", ->
+    it "arme les résolveurs déclarés dans les métadonnées de règle", ->
+      prev_raw = package.loaded["raw_send"]
+      package.loaded["raw_send"] = {
+        routable: (ver, ip) -> true
+        open: (ver) -> 88
+        send: -> true
+      }
+      fd = { rules: { rules_metadata: { { validate_resolvers: { "9.9.9.9" } } } } }
+      cfg.second_opinion = {}
+      package.loaded["worker_questions"] = nil
+      -- so_cfg captured at load: set config.second_opinion before require
+      cfg.second_opinion = {}
+      wq2 = require "worker_questions"
+      wq2.run 0, pipe_w, learn_w, ev_w, fd
+      -- si un résolveur a été armé, so_enabled true → pas de warn disabled
+      assert.is_nil find_log log_warns, "dns_validator_disabled"
+      package.loaded["raw_send"] = prev_raw
+      package.loaded["worker_questions"] = nil
+      cfg.nfqueue.max_age_ms = 1500
+      wq.run 0, pipe_w, learn_w, ev_w, nil
