@@ -4,7 +4,7 @@
 -- Motivation : chaque question DNS écrivait une ligne TSV dans le pipe
 -- `events` et un message binaire de 22 octets dans le pipe `learn` — deux
 -- `write()` par paquet, donc deux syscalls sur le chemin chaud du worker
--- questions (cf. docs/agents/perf.md §16.5 piste 7 et §19). Ce module accumule
+-- questions (cf. docs/agents/perf.md §16.5 piste 7 et §20). Ce module accumule
 -- les messages et les vide en UN `write()` par tranche ≤ PIPE_BUF_ATOMIC
 -- (4096 o) : les écritures d'un même producteur ne coûtent plus qu'un appel
 -- système par lot, et restent atomiques vis-à-vis des autres producteurs du

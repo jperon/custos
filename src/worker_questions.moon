@@ -548,7 +548,7 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   metrics.write_now! if metrics_on
   pipe_wfd      = wfd
   -- Tampons d'écriture groupée des pipes events/learn : un write() par lot au
-  -- lieu d'un par paquet (cf. docs/agents/perf.md §19). Créés après les fds :
+  -- lieu d'un par paquet (cf. docs/agents/perf.md §20). Créés après les fds :
   -- un fd absent donne un tampon inerte (add/flush sans effet).
   events_batch  = new_lines ev_wfd
   learn_batch   = new_records learn_wfd, LEARN_MSG_SIZE

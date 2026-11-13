@@ -468,7 +468,7 @@ setup = (opts={}) ->
     on_idle_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle
     on_idle_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle
     -- Fin de lot du worker questions : c'est là que la production vide les
-    -- tampons events/learn (cf. docs/agents/perf.md §19). nil quand la version
+    -- tampons events/learn (cf. docs/agents/perf.md §20). nil quand la version
     -- mesurée n'a pas de tampon (comparaison avant/après).
     on_batch_end_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_batch_end
     on_batch_end_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_batch_end

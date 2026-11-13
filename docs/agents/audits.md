@@ -4178,7 +4178,7 @@ question DNS (une ligne TSV vers `worker_events`, un message de 22 octets vers
   (première tentative invalidée par un déploiement concurrent d'un autre agent
   — le build testé ne contenait pas la branche, deux `make test-e2e`
   simultanés).
-- **Documentation** : `perf.md` §19, `src/bench/README.md` (hook de fin de lot
+- **Documentation** : `perf.md` §20, `src/bench/README.md` (hook de fin de lot
   du banc). Aucune ligne ajoutée à `AGENTS.md`.
 - **Non fait** : aucune mesure sur la cible aarch64 (pas de déploiement) ;
   `worker_tls`, `worker_responses.write_block_event`, `worker_arp_sniffer` et
