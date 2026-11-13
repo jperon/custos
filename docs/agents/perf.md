@@ -2148,7 +2148,7 @@ validation sur la cible (aucune connexion à `custos.lan` n'a été faite ici).
 | Module de réglage | `src/lib/gc_tune.moon` | `normalize` (validation entière + bornes), `new` (état injectable : `collectgarbage`, horloge, log), `apply!` (`setpause`/`setstepmul`), `idle!` (pas `collectgarbage "step", idle_step`), `guard!` (`count` ≤ 1×/s, jusqu'à 8 pas forcés au-delà de `max_heap_mb`, log `gc_heap_guard` ≤ 1/10 s), `shared!` (état du processus). |
 | Section de config | `src/config.moon` (normalize) | `gc = { pause, stepmul, idle_step, max_heap_mb }` ; valeurs absentes/invalides → défauts + warn `gc_invalid` ; repli sur `runtime.gc_pause`/`runtime.gc_stepmul` (compatibilité). |
 | Application au démarrage | `src/main.moon:57-71` | Réglage appliqué dans le superviseur avant tout fork (hérité COW), puis rappelé dans chaque worker par `gc.apply!` : `nfq_loop.run_queue` (`src/nfq_loop.moon:122-125`), `worker_events.run`, `mac_learner.run`, `worker_nft.run`. |
-| Pas sur temps mort | `src/nfq_loop.moon:279-283`, `src/worker_events.moon` (après poll), `src/mac_learner.moon` (poll 1 s sans fd prêt), `src/worker_nft.moon` (après flush, pipe drainé) | `gc.idle!` uniquement quand la file/tube est vide. |
+| Pas sur temps mort | `src/nfq_loop.moon:279-283`, `src/worker_events.moon` (après poll), `src/mac_learner.moon` (poll 1 s sans fd prêt), `src/worker_nft.moon` (timeout de `poll` depuis §24) | `gc.idle!` uniquement quand la file/tube est vide. |
 | Garde-fou | boucles ci-dessus | `gc.guard!` à chaque tour (coût : une comparaison d'horloge, `count` au plus 1×/s). |
 | WebUI | `src/webui/schema/config_schema.moon`, `handlers/config.moon`, `router.moon` | Section `gc` éditable (4 champs), valeurs par défaut affichées. |
 | Doc | `doc/CONFIG.md` § 2bis, `.agents/architecture.md`, `src/bench/README.md` | Clés, bornes, sémantique, anciennes clés marquées obsolètes. |
@@ -2723,3 +2723,141 @@ entre les deux runs, pas un effet des correctifs.
 - Résiduel hors périmètre toujours dominant : `parse_dns_packet`/`parse_rr`
   (ipparse, 2048-9232 o selon le cas), `decide_meta`/`run_on_response`
   (filtre), `build_udp` (dup_query), `write_event`.
+
+## 24. Régression CPU du worker nft après d-gctune : pas de GC par lot (2026-11-13, branche `d-nftcpu`)
+
+La campagne §21 a mesuré une **hausse du CPU du worker `nft`** en profil
+`mixed` : 18,0 % → 29,3 % à 200 q/s, 34,5 % → 43,0 % à 350, 38,5 % → 46,1 % à
+500 (§21.2), alors que `dns` et `resp` baissaient de 8 à 40 %. Le nombre
+d'upserts par question n'avait pas changé. Aucune mesure n'isolait le worker
+nft : cette section construit ce banc, isole la cause et la corrige.
+
+### 24.1 Cause mesurée : `gc.idle!` à chaque tour de boucle
+
+`src/lib/gc_tune.moon` (`d-gctune`) a ajouté trois appels par worker :
+`apply!` au démarrage, `guard!` à chaque tour et `idle!` sur temps mort.
+`worker_nft` était le seul worker à appeler `gc.idle!` **après chaque lot** :
+
+- avant correctif (`src/worker_nft.moon:491` de `dev` avant ce commit) :
+  `gc.idle! unless batch_full`, en fin de boucle ;
+- or cette boucle faisait `libc.poll poll_fd, 1, -1` (blocage infini) : il
+  n'existe **aucun tour à vide**. Chaque tour suit l'arrivée de données, draine
+  le tube et flushe — `gc.idle!` s'exécutait donc après **chaque batch**, soit
+  une fois par réponse porteuse d'insertions, et non « sur temps mort ».
+- `gc.idle!` fait `collectgarbage "step", 100` (`src/lib/gc_tune.moon:95-98`).
+  Avec le tas du worker (`pause 200`, plusieurs Mio de cache/pending), ce pas
+  coûte **~366 à 569 µs de CPU** par tour au lieu de zéro.
+
+Les autres boucles ne font pas cette erreur : `nfq_loop` (`src/nfq_loop.moon:264-268`)
+et `worker_events` (`src/worker_events.moon:378-422`) ne font un pas de GC que
+lorsque `poll` a **expiré** (`pr == 0`) ; `mac_learner` idem avec son timeout
+long (`src/mac_learner.moon:455-467`).
+
+### 24.2 Banc dédié (`make bench-nftcpu`, `src/bench/nft_cpu.moon`)
+
+Boucle `worker_nft.run` **réelle** dans un enfant `fork`, tube réel non
+bloquant, `nft.run_cmd` remplacé par un stub (`true`, aucune transaction
+libnftables : ce coût est identique entre les versions comparées). Les lignes
+sont produites par `nft_queue.build_line` — profil de §21 : client authentifié
+unique, 8 enregistrements A, donc 16 lignes par réponse (`ip4` + `mac4` par
+adresse, `response_inject.inject`), `rule_id` `r_utilisateurs`, timeout
+`rr_timeout(60)` = `660s`, corrélateur de 16 octets distinct par réponse. CPU
+lu dans `/proc/<pid>/stat` (utime+stime, HZ 100) sur trois fenêtres : charge,
+temps mort (`poll` bloqué), total.
+
+Le nombre de **tours** est piloté par `--turns` (réponses par écriture) à débit
+de lignes constant : `turns=1` = un tour par réponse (production), `turns=8` =
+un tour pour huit. La différence de CPU/s entre les deux donne le coût d'un
+tour, sans modifier le code mesuré :
+
+`CPU/s = a·lignes/s + b·tours/s` ⇒ `b = ΔCPU/s / Δtours/s`.
+
+Protocole : 500 réponses/s × 16 lignes = 8 000 lignes/s, 8 s de charge + 1 s de
+temps mort, 5 passages, **médiane** (la dispersion vient de la phase du GC, pas
+d'interférence externe : le minimum d'un petit nombre de passages est biaisé).
+Comparaisons : `ecdf4ab` (référence `d-bench5`, `pause 110`, aucun appel GC dans
+la boucle), `dev` avant correctif, `dev` après, et `dev --gc-idle-step 0`
+(neutralisation du seul pas de GC sur temps mort, sans toucher au code).
+
+### 24.3 Résultats
+
+| variante | tours | µs CPU/ligne (médiane) | CPU charge % | µs CPU/tour (dérivé) | octets/ligne (GC arrêté) |
+|---|---|---|---|---|---|
+| `ecdf4ab` (réf. d-bench5, pause 110, sans `gc.idle`) | 1 | 32,2 | 25,7 | −43 (bruit) | 448,9 |
+| `ecdf4ab` | 8 | 34,5 | 27,6 | — | 448,9 |
+| `dev` **avant** correctif (pause 200 + `gc.idle` par lot) | 1 | **50,3** | **40,2** | **569** | 248,9 |
+| `dev` **avant** correctif | 8 | 19,2 | 15,4 | — | 248,9 |
+| `dev` **après** correctif (pause 200, pas sur timeout seul) | 1 | **19,5** | **15,6** | 43 (bruit) | 248,9 |
+| `dev` **après** correctif | 8 | 17,2 | 13,7 | — | 248,9 |
+| `dev` après, `--gc-idle-step 0` | 1 | 19,1 | 15,2 | 43 (bruit) | 248,9 |
+| `dev` après, `--gc-idle-step 0` | 8 | 16,7 | 13,4 | — | 248,9 |
+
+Lecture :
+
+1. **La cause est le pas de GC par tour**, pas `pause`/`stepmul` : avant
+   correctif, `turns=1` coûte 569 µs/tour de plus que `turns=8` (50,3 vs
+   19,2 µs/ligne) ; après correctif, l'écart tombe à 43 µs/tour, dans le bruit.
+   Neutraliser `idle_step` (`--gc-idle-step 0`) sur le code corrigé ne change
+   rien (19,1 vs 19,5 µs/ligne) : il ne reste plus de pas par lot.
+2. **`pause 200` n'est pas en cause** : à charge égale et sans pas par tour
+   (`--gc-pause 110 --gc-idle-step 0`), le coût est de 20,4-28,7 µs/ligne
+   contre 19,5 à `pause 200` (mesure de mise au point, 3 s × 2 passages) ; et
+   la référence `ecdf4ab` en `pause 110` est plus chère (32,2) que `dev`
+   corrigé en `pause 200` (19,5).
+3. **Le garde-fou est gratuit** : `guard!` à chaque tour (une comparaison
+   d'horloge) est dans le bruit ; le désactiver (`--gc-max-heap 0`) ne change
+   pas les chiffres (16,2-19,0 vs 19,2-20,0 µs/ligne, mesure de mise au point).
+4. **Le parse s'est amélioré entre-temps** : `dev` corrigé est à 19,5 µs/ligne
+   contre 32,2 pour `ecdf4ab` (−39 %) et à 248,9 octets/ligne contre 448,9
+   (−45 %), grâce à `from_hex` par table de nibbles (`d-prof`/`d-alloc`).
+   `nft_queue.build_line` (concaténation directe, `d-alloc`) n'apparaît pas ici :
+   il est côté producteur, hors du processus mesuré.
+5. **Temps mort** : 0,0 % de CPU dans toutes les variantes — `poll` bloque
+   réellement quand le tube est vide (aucun tour à vide avant comme après).
+
+### 24.4 Correctif
+
+`src/worker_nft.moon` : `poll` reçoit un timeout borné
+`POLL_IDLE_MS = 1000` (retour immédiat dès qu'une ligne arrive : la latence
+n'est pas affectée, seule une expiration signifie « temps mort »), et le pas de
+GC n'est fait que si `poll` a expiré sans donnée
+(`idle_after_poll pr`, `pr == 0`), comme `nfq_loop`/`worker_events`. Le
+garde-fou `guard!` reste à chaque tour, et `pause 200`/`stepmul 400` sont
+inchangés : l'objet de `d-gctune` (pas de GC borné sur temps mort, garde-fou
+mémoire) est conservé, sans le pas par lot.
+
+Tests : `tests/unit/worker_nft_spec.moon` couvre la décision
+(`idle_after_poll` 0/1/−1), l'absence de pas après un lot traité (le test
+échoue sur le code d'avant correctif : `1` au lieu de `0`) et le pas effectif
+quand `poll` expire (`gc` injecté, `poll_idle_ms` de test) ;
+`tests/unit/bench/nft_cpu_spec.moon` couvre le banc (format de ligne identique à
+`nft_queue.build_line`, 16 lignes/réponse, alternance `ip4`/`mac4`, CLI).
+
+### 24.5 Gain attendu sur la cible et limites
+
+Sur le banc (x86_64, `nft` stubbé), le correctif ramène le coût worker nft de
+50,3 à 19,5 µs/ligne au tour par réponse, soit **−61 %** ; le pas supprimé vaut
+**~0,37 à 0,57 ms par batch**. Sur `custos.lan`, la régression mesurée est de
++8 à +11 points de CPU (§21.4) : elle est entièrement imputable à ce pas, qui
+s'exécutait une fois par réponse porteuse d'insertions (~200-350 tours/s à
+200-500 q/s `mixed`). Le gain attendu est donc la **récupération des ~8-11
+points** (retour au niveau `d-bench5`, voire en dessous grâce au parse plus
+rapide), et ~10-15 points de marge à 700 q/s où le CPU total sature (§21.5).
+
+**Non fait / limites** :
+
+- Aucune campagne de charge sur `custos.lan` : elle était en cours (consigne),
+  et `make test-e2e` n'a pas été lancé (homelab occupé). Le chiffre cible
+  ci-dessus est une **extrapolation** à partir du coût par tour mesuré
+  localement, pas une mesure sur la cible.
+- Banc x86_64 : les µs absolues ne sont pas transposables à l'aarch64 A55 ; le
+  rapport entre « avec » et « sans » pas de GC l'est.
+- `nft.run_cmd` est stubbé : le coût libnftables (dominant quand les insertions
+  ne sont pas sautées par le cache) est exclu du banc. Il est identique entre
+  les versions comparées, donc neutre pour la régression, mais le CPU absolu du
+  worker en production reste supérieur aux chiffres du tableau.
+- Charge synthétique : toutes les réponses portent 16 lignes (profil
+  authentifié 8 A). En `mixed` réel, une partie des réponses n'insère rien (NXDOMAIN,
+  NODATA) et le cache d'upsert saute des réinsertions : le nombre de tours
+  utiles est plus faible, ce qui explique que la régression observée
+  (+8-11 points) soit inférieure aux 25 points du cas synthétique.

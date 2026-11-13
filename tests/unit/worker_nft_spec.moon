@@ -15,6 +15,7 @@ for decl in *{
   "int  close(int fd);"
   "long read(int fd, void *buf, unsigned long count);"
   "long write(int fd, const void *buf, unsigned long count);"
+  "int* __errno_location(void);"
 }
   pcall ffi.cdef, decl
 O_NONBLOCK = 2048
@@ -298,6 +299,56 @@ describe "worker_nft helpers", ->
       assert.equals 64, tonumber a1[0]
       assert.equals 8, tonumber n2
       assert.equals 65, tonumber a2[0]
+
+    it "run ne fait pas de pas de GC après un lot : le pas est réservé au temps mort", ->
+      inp = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+      hex = (s) -> (s\gsub ".", (c) -> string.format "%02x", c\byte!)
+      line = "v1|ip4|10.0.0.1|1.2.3.4|#{hex "r_test"}|2m|1|0|\n"
+      libc.write inp[1], line, #line
+      idle_calls = 0
+      guard_calls = 0
+      fake_gc = {
+        apply: -> true
+        guard: ->
+          guard_calls += 1
+          -- Deuxième tour (après le lot) : ferme l'écriture pour que le
+          -- worker voie EOF et rende la main au tour suivant.
+          libc.close inp[1] if guard_calls == 2
+          0
+        idle: ->
+          idle_calls += 1
+          true
+      }
+      wnft.run inp[0], {}, nil, fake_gc, { poll_idle_ms: 20 }
+      libc.close inp[0]
+      assert.is_true guard_calls >= 2
+      -- Régression d-gctune : un pas par lot sous charge coûtait ~366 µs/tour
+      -- (docs/agents/perf.md §24). Un lot traité n'est pas un temps mort.
+      assert.equals 0, idle_calls
+
+    it "run fait un pas de GC quand poll expire sans donnée", ->
+      inp = ffi.new "int[2]"
+      assert.equals 0, libc.pipe2 inp, O_NONBLOCK
+      idle_calls = 0
+      fake_gc = {
+        apply: -> true
+        guard: -> 0
+        idle: ->
+          idle_calls += 1
+          -- Ferme l'écriture après le premier temps mort : le tour suivant
+          -- verra EOF et run() rendra la main (aucune attente d'un écrivain).
+          libc.close inp[1]
+          true
+      }
+      wnft.run inp[0], {}, nil, fake_gc, { poll_idle_ms: 20 }
+      libc.close inp[0]
+      assert.equals 1, idle_calls
+
+    it "idle_after_poll : seul un timeout (0) est un temps mort", ->
+      assert.is_true wnft.idle_after_poll 0
+      assert.is_false wnft.idle_after_poll 1
+      assert.is_false wnft.idle_after_poll -1
 
 describe "worker_nft branches d'erreur et build_batch", ->
   local wnft
