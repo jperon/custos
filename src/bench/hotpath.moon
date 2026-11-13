@@ -582,8 +582,8 @@ setup = (opts={}) ->
 -- Chaque micro-cas appelle UNE fonction du hot path avec des arguments réels
 -- (paquets et objets préparés par `setup`) et rend un nombre : la valeur de
 -- retour est consommée, ce qui empêche le JIT d'éliminer l'appel (§22.1).
--- Les micro-cas sont hors des cas par défaut : `HP_ONLY=micro` ou
--- `HP_EXTRA=--micro`.
+-- Les micro-cas sont hors des cas par défaut : `HP_EXTRA=--micro`, ou
+-- `--only micro_<nom>` pour un seul.
 MICRO_CASES = {
   "micro_parse_q", "micro_parse_a", "micro_parse_b",
   "micro_decide", "micro_write_msg", "micro_encode_msg",
