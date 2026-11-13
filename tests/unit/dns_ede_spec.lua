@@ -68,12 +68,28 @@ describe("dns_ede.strip_https_rr", function()
     assert.equals(0, #parsed_after.additionals)
     return assert.equals(QTYPE_A, parsed_after.answers[1].rtype)
   end)
-  return it("laisse inchangé un payload sans RR HTTPS", function()
+  it("laisse inchangé un payload sans RR HTTPS", function()
     local question = qname_example .. sp(">H H", QTYPE_A, QCLASS_IN)
     local answer_a = pack_rr(QTYPE_A, string.char(8, 8, 8, 8))
     local header = sp(">H H H H H H", 0x4321, 0x8180, 1, 1, 0, 0)
     local raw = header .. question .. answer_a
     return assert.equals(raw, strip_https_rr(raw))
+  end)
+  return it("alloue < 800 o par appel sur payload à 4 RR (GC arrêté)", function()
+    local raw = make_dns_payload()
+    for _ = 1, 5000 do
+      strip_https_rr(raw)
+    end
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    for _ = 1, 500 do
+      strip_https_rr(raw)
+    end
+    local after = collectgarbage("count")
+    collectgarbage("restart")
+    local per_call = (after - before) * 1024 / 500
+    return assert.is_true(per_call < 800, "strip_https_rr alloue " .. tostring(math.floor(per_call)) .. " o/appel (seuil 800)")
   end)
 end)
 describe("dns_ede.add_ede_modified", function()

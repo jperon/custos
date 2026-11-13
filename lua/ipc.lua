@@ -26,6 +26,7 @@ local IPC_WRITE_RETRY_COUNT = 5
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local timespec_ptr_t = ffi.typeof("timespec_t[1]")
+local sleep_req = timespec_ptr_t()
 local read_buf = ffi.new("uint8_t[?]", IPC_READ_CHUNK)
 local MSG_IPV4 = 0x41
 local MSG_IPV6 = 0x36
@@ -125,7 +126,6 @@ msg_type_for = function(ipv4, refused)
 end
 local write_with_retry
 write_with_retry = function(pipe_wfd, msg)
-  local sleep_req = timespec_ptr_t()
   for i = 1, IPC_WRITE_RETRY_COUNT do
     local n = libc.write(pipe_wfd, msg, #msg)
     if n == #msg then
@@ -284,8 +284,9 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
   end
   qproc = math.floor(qproc)
   local mods_bits = encode_modifiers(modifiers)
-  local response_ids = { }
+  local response_ids_hex = ""
   if type(response_rule_ids) == "table" then
+    local response_ids = { }
     for _, rid in ipairs(response_rule_ids) do
       local _continue_0 = false
       repeat
@@ -303,24 +304,11 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
         break
       end
     end
+    if #response_ids > 0 then
+      response_ids_hex = to_hex(table.concat(response_ids, ","))
+    end
   end
-  local response_ids_hex = to_hex(table.concat(response_ids, ","))
-  local line = table.concat({
-    IPC_VERSION,
-    string.format("%02x", msg_type),
-    tostring(tonumber(txid) or 0),
-    client_ip,
-    tostring(tonumber(src_port) or 0),
-    resolver_ip,
-    mac_raw_to_str(mac_raw),
-    to_hex(reason),
-    to_hex(rule_id),
-    timeout,
-    tostring(bench),
-    string.format("%x", mods_bits),
-    response_ids_hex,
-    tostring(qproc)
-  }, "|") .. "\n"
+  local line = IPC_VERSION .. "|" .. string.format("%02x", msg_type) .. "|" .. tostring(tonumber(txid) or 0) .. "|" .. client_ip .. "|" .. tostring(tonumber(src_port) or 0) .. "|" .. resolver_ip .. "|" .. mac_raw_to_str(mac_raw) .. "|" .. to_hex(reason) .. "|" .. to_hex(rule_id) .. "|" .. timeout .. "|" .. tostring(bench) .. "|" .. string.format("%x", mods_bits) .. "|" .. response_ids_hex .. "|" .. tostring(qproc) .. "\n"
   if #line > IPC_MAX_LINE then
     return nil
   end

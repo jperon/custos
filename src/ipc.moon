@@ -35,6 +35,10 @@ EAGAIN       = 11
 EWOULDBLOCK  = 11
 
 timespec_ptr_t = ffi.typeof "timespec_t[1]"
+-- Buffer timespec réutilisé pour le nanosleep de write_with_retry : alloué
+-- une fois par processus au lieu d'un cdata par écriture (cf.
+-- docs/agents/perf.md §19 ; même motif que nft_queue.sleep_req).
+sleep_req = timespec_ptr_t!
 read_buf       = ffi.new "uint8_t[?]", IPC_READ_CHUNK
 
 -- ── Types de messages : famille + refus uniquement ──────────────────
@@ -113,7 +117,6 @@ msg_type_for = (ipv4, refused) ->
   MSG_IPV6
 
 write_with_retry = (pipe_wfd, msg) ->
-  sleep_req = timespec_ptr_t!
   for i = 1, IPC_WRITE_RETRY_COUNT
     n = libc.write pipe_wfd, msg, #msg
     return true if n == #msg
@@ -235,29 +238,33 @@ encode_msg = (txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused, reason,
   qproc = math.floor qproc
 
   mods_bits = encode_modifiers modifiers
-  response_ids = {}
+  -- response_ids : le tableau n'est construit que s'il y a des ids (sinon
+  -- le champ vaut "" comme avant, sans allocation).
+  response_ids_hex = ""
   if type(response_rule_ids) == "table"
+    response_ids = {}
     for _, rid in ipairs response_rule_ids
       break if #response_ids >= 8
       continue unless rid and rid != ""
       response_ids[#response_ids + 1] = tostring(rid)
-  response_ids_hex = to_hex table.concat response_ids, ","
-  line = table.concat({
-    IPC_VERSION
-    string.format "%02x", msg_type
-    tostring(tonumber(txid) or 0)
-    client_ip
-    tostring(tonumber(src_port) or 0)
-    resolver_ip
-    mac_raw_to_str mac_raw
-    to_hex reason
-    to_hex rule_id
-    timeout
-    tostring bench
-    string.format "%x", mods_bits
-    response_ids_hex
-    tostring qproc
-  }, "|") .. "\n"
+    if #response_ids > 0
+      response_ids_hex = to_hex table.concat response_ids, ","
+  -- Concaténation directe (14 champs + "\n") : la forme à table.concat
+  -- allouait un tableau de 14 slots + 2 strings par question (cf.
+  -- docs/agents/perf.md §19).
+  line = IPC_VERSION .. "|" .. string.format("%02x", msg_type) ..
+    "|" .. tostring(tonumber(txid) or 0) ..
+    "|" .. client_ip ..
+    "|" .. tostring(tonumber(src_port) or 0) ..
+    "|" .. resolver_ip ..
+    "|" .. mac_raw_to_str(mac_raw) ..
+    "|" .. to_hex(reason) ..
+    "|" .. to_hex(rule_id) ..
+    "|" .. timeout ..
+    "|" .. tostring(bench) ..
+    "|" .. string.format("%x", mods_bits) ..
+    "|" .. response_ids_hex ..
+    "|" .. tostring(qproc) .. "\n"
 
   return nil if #line > IPC_MAX_LINE
   line
