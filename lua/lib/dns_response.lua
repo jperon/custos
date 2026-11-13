@@ -5,11 +5,8 @@ do
   local _obj_0 = require("lib.checksums")
   w16, w32, fix_ip4_cksum, fix_l4_cksum, PROTO_UDP, PROTO_TCP = _obj_0.w16, _obj_0.w32, _obj_0.fix_ip4_cksum, _obj_0.fix_l4_cksum, _obj_0.PROTO_UDP, _obj_0.PROTO_TCP
 end
-local ip2s, QTYPE
-do
-  local _obj_0 = require("lib.packet_parsing")
-  ip2s, QTYPE = _obj_0.ip2s, _obj_0.dns_types
-end
+local ip2s
+ip2s = require("lib.packet_parsing").ip2s
 local replace_dns_payload
 replace_dns_payload = function(raw, ip, l4, ip_ihl, new_dns)
   local p = ffi.cast("const uint8_t*", raw)
@@ -89,15 +86,9 @@ parse_answers = function(dns_msg)
   for _index_0 = 1, #_list_0 do
     local rr = _list_0[_index_0]
     _accum_0[_len_0] = {
-      name = rr.name,
       rtype = rr.rtype,
-      rclass = rr.rclass,
-      ttl = rr.ttl,
-      rdlength = #rr.rdata,
-      rdata_raw = (rr.rtype == 1 or rr.rtype == 28) and rr.rdata or "",
       rdata_str = fmt_rdata(rr),
-      rtype_name = QTYPE[rr.rtype] or "TYPE" .. tostring(rr.rtype),
-      ttl_offset = rr.off + #rr.rname + 3
+      ttl = rr.ttl
     }
     _len_0 = _len_0 + 1
   end

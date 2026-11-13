@@ -89,6 +89,52 @@ describe "lib.dns_response", ->
       bad = header .. string.char(0xC0, 0x0C, 0, 1, 0, 1)
       assert.is_nil D.build_query_from_response bad, 1
 
+  describe "parse_answers", ->
+    -- Payload : en-tête + question + 2 RR A (via ipparse, comme le fait
+    -- worker_responses avant d'appeler parse_answers).
+    dns_mod = require "ipparse.l7.dns"
+    sp = require("ipparse.lib.pack_compat").pack
+    build_msg = ->
+      qname = "\3foo\7example\3com\0"
+      question = qname .. sp ">H H", 1, 1
+      answer1 = "\192\12" .. sp(">H H I4 s2", 1, 1, 60, string.char(1, 2, 3, 4))
+      answer2 = "\192\12" .. sp(">H H I4 s2", 1, 1, 30, string.char(5, 6, 7, 8))
+      header = sp ">H H H H H H", 0x1234, 0x8180, 1, 2, 0, 0
+      dns_mod.parse header .. question .. answer1 .. answer2, 1, false
+
+    it "expose les 3 champs lus par worker_responses (rtype, rdata_str, ttl)", ->
+      msg = build_msg!
+      answers = D.parse_answers msg
+      assert.equals 2, #answers
+      assert.equals 1, answers[1].rtype
+      assert.equals "1.2.3.4", answers[1].rdata_str
+      assert.equals 60, answers[1].ttl
+      assert.equals "5.6.7.8", answers[2].rdata_str
+      assert.equals 30, answers[2].ttl
+
+    it "alloue < 1800 o pour 8 RR (GC arrêté, seuil ~1,3× le coût mesuré)", ->
+      -- Réponse à 8 RR (profil r_utilisateurs de docs/agents/perf.md §16.3).
+      qname = "\12controlplane\5login\9tailscale\3com\0"
+      parts = {}
+      for i = 1, 8
+        parts[i] = "\192\12" .. sp(">H H I4 s2", 1, 1, 60, string.char(100, 64, 0, 10 + i))
+      payload = sp(">H H H H H H", 0x1234, 0x8180, 1, 8, 0, 0) .. qname .. sp(">H H", 1, 1) .. table.concat parts
+      msg = dns_mod.parse payload, 1, false
+      assert.equals 8, #msg.answers
+      for _ = 1, 2000 do D.parse_answers msg   -- JIT + mise en forme
+      collectgarbage "collect"
+      collectgarbage "stop"
+      before = collectgarbage "count"
+      for _ = 1, 200 do D.parse_answers msg
+      after = collectgarbage "count"
+      collectgarbage "restart"
+      per_call = (after - before) * 1024 / 200
+      -- Avant réduction des champs : 3723 o/appel (mesuré) ; après : 1419.
+      -- Le seuil 1800 laisse la marge à la croissance de la part hash sans
+      -- laisser passer l'ancien coût.
+      assert.is_true per_call < 1800,
+        "parse_answers alloue #{math.floor per_call} o/appel pour 8 RR (seuil 1800)"
+
   describe "fmt_rdata", ->
     it "formate un enregistrement A", ->
       assert.equals "1.2.3.4", D.fmt_rdata { rtype: 1, rdata: string.char(1, 2, 3, 4) }
