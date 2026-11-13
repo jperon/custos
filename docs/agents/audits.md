@@ -4667,3 +4667,51 @@ HP_TASKSET=1`, médiane des rapports par paire) : `mixed_o2` +0,0 % (moyenne) /
 (`tmp/test_refactor.log`). Pas de `make test-e2e` (consigne). Mesures :
 `perf.md` §29a.1.
 
+
+### Optimisation de ipparse sur le hot path DNS (branche `d-ipp`)
+
+**Contexte** : le profilage de la branche `d-prof` (`docs/agents/perf.md` §18,
+rapport `d-prof/custos/tmp/prof_report.md` §5.2) classait deux postes
+résiduels comme « sous-module moontastik non modifiable ici » :
+`parse_rr`/`labels`/`label`/`need_bytes` (40-50 % de `so_a`, ~15 % de
+`response`) et `sp`/`su`/`checksum` (5-11 % de `question`). Le mainteneur de
+moontastik ayant autorisé la modification, la branche `ipp-perf` de ce dépôt
+(sous-dossier `ipparse/`) porte **5 optimisations, un commit chacune** :
+
+| Commit | Correctif | Gain (ipparse, A/B alterné) |
+|---|---|---|
+| `18feea7` | `checksum` par `string.byte` au lieu d'un `unpack ">H"` par mot | `checksum_20` −92 %, `checksum_udp` −96 % |
+| `6c7e481` | noms de RR lus en une seule passe (`label_parts`/`walk_name`), table `visited` reportée | `parse_rr` −27 %, réponse 8 A −23 %, allocation −27 % |
+| `6d84084` | `pack` : table d'arguments réutilisée jusqu'à 16 valeurs | `sp_ip4hdr` −21 % (allocation −73 %) |
+| `7541f1e` | `cN` ≤ 64 o écrits dans le tampon (plus de table `parts`) | `sp_ip4hdr` −32 %, `sp_pseudo` −41 % |
+| `237a93a` | mémoïsation des noms déjà résolus dans un message | réponse 8 A −42 % (isolé), allocation −23 % |
+
+Sous-module basculé dans custos par `3c3bc20` (+ `.lua` régénérés) ; banc hot
+path récupéré de `d-prof` par `c312961`. Effet custos (`make bench-hotpath`,
+A/B alterné, minimum de 2 passages par état) : `question` −8,7 %,
+`response` −10,6 %, `so_a` −31,4 %, `so_cycle` −15,3 % ; allocations
+`question` −12,3 %, `so_a` −25,8 %, `so_cycle` −11,9 % ; témoins
+`ipc_drain`/`setup_control` : temps dans le bruit, allocation **exactement
+inchangée** (2634 et 890 o). Rapport complet : `tmp/ipp_report.md` ;
+détail : `docs/agents/perf.md` §32.
+
+**Tests** : ipparse `make test` → `==> Total: 571/571` (dont 3 tests
+d'équivalence `checksum` contre une référence RFC 1071 écrite à la main et
+6 tests d'équivalence des noms DNS contre des copies littérales du code
+d'avant, exécutées d'abord contre ce code d'origine — 6/6 — pour prouver
+qu'elles n'étaient pas vides) ; sous **Lua 5.4.7** (proxy de la cible
+Lunatik : Lua 5.4 noyau, sans FFI) → `==> Total: 591/591` ; custos
+`make all && make check && make test`
+→ `3164 successes / 0 failures / 0 errors / 0 pending`. `make test-lunatik`
+et `vm-test` non exécutés (root + arbre Lunatik requis).
+
+**Non fait / douteux** : `su`/`unpack` non optimisé (5,3 % de `question`
+dans le profil — gain non mesuré, donc non revendiqué, candidat suivant) ;
+aucune mesure sur cible aarch64 (parts transposables, µs non) ; part du GC
+non re-mesurée après la campagne ; `parse_question` volontairement laissé
+sur `labels` + `concat` (le constructeur unique y perdait 3,7 %) ; un
+appel direct à `label_parts` depuis `labels` s'était révélé instable en
+banc complet, d'où le rappel par `label` — réglage à re-mesurer si ce code
+bouge.
+*Voir aussi §29b*
+
