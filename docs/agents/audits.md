@@ -4534,3 +4534,26 @@ par réponse) : lignes IPC et décodage identiques caractère pour caractère. A
 alterné : cycle `mixed` complet 60,6 → 49,2 µs/requête (−18,8 %). Banc, tableau
 des étapes et pistes hors périmètre : `docs/agents/perf.md` §26.
 
+### Retours au code simple (branche `d-simpl2`, 2026-11-13)
+
+Trois optimisations de `d-prof2`/`d-alloc` ont été ramenées au code antérieur
+après l'audit coût/bénéfice `tmp/simpl_report.md` (verdicts SIMPLIFIER) ; le
+banc hot path ne montre pas de régression (`HP_ITERS=50000 HP_REPEAT=2
+HP_ONLY=mixed_o2,mixed_plain` : lot-min 61,6 / 33,4 µs avant, 61,6 / 33,5 µs
+après ; moyennes de passage dans le bruit). Détail : `perf.md` §26.7.
+
+- `src/dup_query.moon:105-137` : `build_udp` n'a plus qu'un chemin, la
+  recopie ; `raw` est obligatoire et le repli ipparse est supprimé (seul
+  l'appelant de production `worker_questions.moon:138` passait `raw`). Le spec
+  compare la sortie à un paquet attendu construit indépendamment du module.
+- `src/dns_ede.moon:347,383` : `strip_rrtypes` reprend les tables locales du
+  commit parent `549560f` ; les tables scratch module-level de `55bd240`
+  reposaient sur un invariant de non-réentrance non vérifié.
+- `src/ipc.moon:308-310` : `decode_msg` reprend `gsub "\n+$"` inconditionnel ;
+  la branche conditionnelle de `1922b0d` valait 0,14 % et ajoutait une
+  hypothèse sur les appelants.
+
+Aucun autre fichier de production modifié. `make all && make check &&
+make test` : total dans `tmp/d-simpl2/test.log` (0 échec). Pas de
+`make test-e2e` (à la charge de l'orchestrateur).
+
