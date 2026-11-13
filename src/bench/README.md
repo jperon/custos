@@ -10,6 +10,7 @@ Mesure les performances du filtre DNS selon deux volets, écrit un rapport dans
 | Micro-bench | `bench.micro` | ns/op + KB alloués sur les hot-paths (parsing ipparse, `bin48`, xxhash) | non |
 | Charge DNS | `bench.load` | QPS soutenu, latences p50/p95/p99, pertes/timeouts | oui (UDP/53) |
 | Profilage hot path | `bench.hotpath` | µs/paquet + profils `jit.profile`/`jit.v`/`jit.dump` des handlers réels des workers | non |
+| CPU worker nft | `bench.nft_cpu` | CPU par ligne et par tour de boucle du worker `nft` réel (`nft` stubbé) | non |
 
 ## Usage rapide
 
@@ -74,6 +75,36 @@ ruleset d'un hôte où custos tourne. Aucune file NFQUEUE n'est ouverte
 (`run_queue` neutralisé) et `raw_send` est stubé : aucun paquet n'est émis.
 Seules écritures : `./tmp/prof/`.
 
+## CPU du worker nft (`make bench-nftcpu`)
+
+Isole le CPU du **worker `nft` seul** : `worker_nft.run` réel dans un enfant
+`fork`, tube réel, `nft.run_cmd` remplacé par un stub (`true`). Les lignes sont
+produites par `nft_queue.build_line` (16 par réponse : `ip4` + `mac4` pour
+chacun des 8 A, comme `response_inject`), le débit est piloté en
+réponses/s, et le CPU de l'enfant est lu dans `/proc/<pid>/stat` sur trois
+fenêtres : charge, temps mort (`poll` bloqué) et total jusqu'à EOF.
+
+Le paramètre `--turns` (réponses par écriture) règle le nombre de **tours de
+boucle** à débit de lignes constant. La différence de CPU/s entre `--turns 1`
+et `--turns 8` donne le coût d'un tour (`poll` + `read` + `gc.guard!` +
+`gc.idle!`) sans modifier le code mesuré : c'est ce qui a isolé la régression
+de GC par lot de `docs/agents/perf.md` §24.
+
+```sh
+make bench-nftcpu                                  # 500 réponses/s, tours 1 et 8
+make bench-nftcpu NP_EXTRA="--gc-idle-step 0"      # A/B d'un réglage GC
+make bench-nftcpu NP_TURNS=1 NP_DURATION=30 NP_REPEAT=5
+```
+
+Variables : `NP_QPS`, `NP_DURATION`, `NP_IDLE`, `NP_REPEAT`, `NP_TURNS`
+(ex. `1,8`), `NP_TASKSET`, `NP_EXTRA`. Flags : `--qps`, `--lines`, `--turns`,
+`--duration`, `--idle`, `--repeat`, `--alloc` (octets/ligne, GC arrêté),
+`--alloc-responses`, `--legacy-gc` (version sans `lib.gc_tune` : applique
+`runtime.gc_pause`/`gc_stepmul` comme l'ancien `main.moon`), `--gc-pause`,
+`--gc-stepmul`, `--gc-idle-step`, `--gc-max-heap`, `--tag`. Pour comparer une
+autre version, la placer en tête de `LUA_PATH` (ex. `git archive <commit> lua`),
+le banc restant résolu depuis ce dépôt. Sorties : `tmp/bench/nftcpu/`.
+
 ## CLI directe
 
 ```sh
@@ -114,5 +145,8 @@ viser n'importe quel résolveur (`TARGET=1.1.1.1`) pour valider le générateur.
 - `hotpath.moon` — micro-banc de profilage du hot path (paquets, stubs libnfq /
   IPC / raw_send, cas de mesure, `jit.profile`, rapport) ; `hotpath_cli.moon` —
   son point d'entrée script.
+- `nft_cpu.moon` — banc CPU du worker nft (worker réel forké, tube réel, `nft`
+  stubbé, mesures `/proc`, coût par ligne et par tour, allocation) ;
+  `nft_cpu_cli.moon` — son point d'entrée script.
 
 Tests : `tests/unit/bench/*_spec.moon`.

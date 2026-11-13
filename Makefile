@@ -112,7 +112,7 @@ SYNC_LUAS  := $(patsubst $(SYNC)/%.moon,$(LUA)/sync/%.lua,$(SYNC_MOONS))
 .PHONY: all clean check test test-unit test-js test-vm test-openwrt test-e2e test-e2e-rebuild \
         homelab-up homelab-down homelab-nuke homelab-redeploy \
         coverage coverage-quick run reload update-lists make-secret logs \
-        bench bench-micro bench-load bench-hotpath \
+        bench bench-micro bench-load bench-hotpath bench-nftcpu \
         sync-init sync-push-init redbean-ui help
 
 all: $(LUA)/nfq $(LUAS) $(FILTER_LUAS) $(AUTH_LUAS) $(GEN_LUAS) $(IPPARSE_LUAS) $(IPPARSE_STATIC_LUAS) $(MOONSCRIPT_RUNTIME_LUAS) $(SYNC_LUAS) install-owrt.lua .init.lua
@@ -440,6 +440,27 @@ bench-hotpath: all
 	@mkdir -p tmp/prof
 	@$(BENCH_ENV) $(if $(HP_TASKSET),taskset -c $(HP_TASKSET)) \
 	  $(LUAJIT) $(LUA)/bench/hotpath_cli.lua $(HP_ARGS)
+
+# Banc CPU du worker nft seul : boucle worker_nft.run réelle, tube réel, `nft`
+# remplacé par un stub (aucune transaction libnftables). Mesure le CPU par ligne
+# et le coût d'un tour de boucle (poll + read + gc.guard!/gc.idle!), utile pour
+# comparer deux versions ou deux réglages GC. Sorties dans tmp/bench/nftcpu/.
+# Variables : NP_QPS, NP_DURATION, NP_IDLE, NP_REPEAT, NP_TURNS (ex. "1,8"),
+#             NP_TASKSET, NP_EXTRA (ex. "--gc-idle-step 0").
+NP_QPS      ?= 500
+NP_DURATION ?= 10
+NP_IDLE     ?= 2
+NP_REPEAT   ?= 3
+NP_TURNS    ?= 1,8
+NP_TASKSET  ?=
+NP_EXTRA    ?=
+NP_ARGS = --qps $(NP_QPS) --duration $(NP_DURATION) --idle $(NP_IDLE) \
+  --repeat $(NP_REPEAT) --turns $(NP_TURNS) $(if $(NP_EXTRA),$(NP_EXTRA),)
+
+bench-nftcpu: all
+	@mkdir -p tmp/bench/nftcpu
+	@$(BENCH_ENV) $(if $(NP_TASKSET),taskset -c $(NP_TASKSET)) \
+	  $(LUAJIT) $(LUA)/bench/nft_cpu_cli.lua $(NP_ARGS)
 
 # Clean compiled files
 clean:

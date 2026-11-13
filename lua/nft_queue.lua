@@ -467,5 +467,6 @@ return {
   sanitize_rule_id = sanitize_rule_id,
   ACK_SIZE = ACK_SIZE,
   get_last_acked = get_last_acked,
-  reset_ack_state = reset_ack_state
+  reset_ack_state = reset_ack_state,
+  build_line = build_line
 }
