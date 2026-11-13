@@ -4609,3 +4609,16 @@ Aucun autre fichier de production modifié. `make all && make check &&
 make test` : total dans `tmp/d-simpl2/test.log` (0 échec). Pas de
 `make test-e2e` (à la charge de l'orchestrateur).
 
+
+### Parse DNS des réponses sans `su` (branche `d-ippdns`, 2026-11-13)
+
+`parse_dns_packet` sur les réponses A/B coûtait 2 × 5,0 µs/req (§26.2) ; le
+profil montrait `su` (émulation de `string.unpack`) à 13,9 % + `read_uint`
+2,8 % pour décoder quatre champs fixes par RR. Le sous-module ipparse
+(branche `ipp-perf`, commit `81ab99d`) remplace ces `su` par `u16`/`u32`
+(`ipparse/l7/dns.moon:85-99,153-165,394-396,430-434`), un seul
+`string.byte` multi-octets par champ. Mesure A/B alternée : `dns_parse_resp8`
+5,07 → 2,90 µs/appel, `mixed_o2` 99,5 → 93,8 µs (lot-min). Une seconde piste
+(`parse_question` en une passe via `walk_name`) s'est révélée neutre et a été
+retirée. Détail et chiffres : `perf.md` §29b. Tests : ipparse 572/572,
+custos 3 275 succès / 0 échec.
