@@ -4277,3 +4277,97 @@ perte à 700 `mixed` non attribuée (aucun `qdrop`/`udrop`/orpheline, 20 249
 réponses journalisées contre 19 365 reçues) — à rejouer en 2-3 runs ; une
 seule mesure par palier ; `events`/`mac-lrn` sous-estimés aux paliers saturés
 (leur traitement se termine pendant le drain, hors fenêtre CPU).
+
+### Campagne de charge après la fusion d-alloc (branche `d-bench7`, 2026-11-13)
+
+Campagne demandée après le déploiement d'un build `dev` contenant la fusion de
+`d-alloc` (§22 : −24,8 % d'allocation sur le cas `response`, −22,3 % sur
+`so_cycle`). **Aucune modification de code** ; la configuration de la cible
+n'a **pas** été changée (déjà `nfqueue: { responses: "14-15" }`). Sauvegarde
+`/etc/custos/config.moon.dbench7` prise avant la première mesure et restaurée
+à la fin (identité `md5` `bddc79b5…` vérifiée, sauvegarde supprimée). Détail,
+tableaux et analyse : `docs/agents/perf.md` §23 ; rapport de campagne
+`tmp/bench7_report.md` ; harnais `tmp/tune7/` (copies de `tmp/tune6/`, seul
+`OUT` change) et résultats bruts `tmp/tune7/results7/` (ignorés par git).
+
+**Build vérifié** : `md5sum` égaux entre `lua/` de la branche et
+`/usr/share/custos/` pour **les 292** fichiers `lua/**/*.lua` (dont
+`worker_responses.lua` et `nft_queue.lua` avec le code `d-alloc`). Réglage GC
+constaté : `action=gc_tuning pause=200 stepmul=400 idle_step=100
+max_heap_mb=32`.
+
+**Protocole** : `servus` authentifié (`dig controlplane.tailscale.com` → 8
+adresses avant **chaque** palier, 12/12 en succès) ; `dnsload5.py` inchangé
+(128 ports, 2 destinations) ; 30 s par palier, drain 45 s, repos vérifié ;
+`mixed` 500, **600 ×3**, **700 ×3**, 850 (arrêt au premier palier dont la
+médiane > 5 %, donc 1000 non mesuré) ; `up` 1000/1300/1600 ; latence à vide
+20 q/s.
+
+**Défaut de harnais corrigé — `question_shed`** : `worker_questions` préfixe
+ses actions (`set_action_prefix "questions_"`, `src/worker_questions.moon:538`,
+`src/log.moon:359-363`), donc le délestage s'écrit
+`action=questions_question_shed`. Le motif des harnais d-bench5/d-bench6
+(`action=question_shed`) ne matchait pas : la conclusion de §21.5/§21.7
+« `question_shed` = 0 partout » était **fausse**. Relecture des journaux bruts
+de d-bench6 : **1 443** délestages à 700 `mixed` (pour 1 634 pertes, 88 %) et
+**3 152** à 1600 `up` (pour 7 716 pertes, avec `qdrop` 1 846) — la perte à 700
+`mixed` laissée ouverte en §21.7 pt 4 était du **délestage de questions**
+(`packet_age_ms` > `max_age_ms` 1 500, `src/worker_questions.moon:267-289`).
+Le motif est corrigé dans `tmp/tune7/analyse7.py` et
+`tmp/tune7/runphase7.sh` ; les `_shed.log` ont été régénérés depuis les
+`_logread.log` conservés.
+
+**Résultats (comparaison à §21)** :
+
+| palier | d-bench6 | d-bench7 |
+|---|---|---|
+| 500 `mixed` | 0 %, p50 42,5 / p99 217 ms | 0 %, p50 31,9 / p99 223 ms |
+| 600 `mixed` | non mesuré | **0 % (0/0/0)**, p50 69-72 / p99 316-325 ms |
+| 700 `mixed` | 7,8 %, p50 600 ms | **0 % (0/0/0)**, p50 419-455 / p99 1 567-3 131 ms |
+| 850 `mixed` | série arrêtée | **9,9 %**, p50 1 930 / p99 6 209 ms |
+| 1000 `up` | 0 %, p50 22,4 ms | 0 %, p50 22,1 / p99 171 ms |
+| 1300 `up` | 0 %, p50 297 / p99 966 ms | 0 %, p50 151 / p99 441 ms |
+| 1600 `up` | 16,1 %, `qdrop` 1 846 | **7,2 %**, `qdrop` 521 (q14) |
+
+À vide (20 q/s `mixed`) : 0 %, p50 22,6 / p99 54,2 ms. Plafond `mixed`
+**≥ 700 q/s** (0 % sur trois répétitions à 700), premier palier > 5 % = 850 ;
+`up` inchangé à 1300, 1600 perd deux fois moins (répartition `jhash`
+équilibrée cette fois-ci : 50,2/49,8 % contre 57,5/42,5 % en §21 — tirage de
+ports, pas gain de code).
+
+**Localisation de la perte** : à 850 `mixed`, `qdrop` = `udrop` = 0 et
+`seq` questions 26 296 ≥ 25 503 émis (aucune perte par débordement des
+files) ; **≈ 2 366 délestages** (94 % de la perte de 2 526), ≤ 276 réponses
+journalisées non reçues, solde amont ≈ 0-460 ; le surplus
+`nft_r − journal` = 16 256 (0,64/requête) est la réponse dupliquée du second
+avis (§4.1, jetée sans log dans `src/worker_responses.moon:1178-1195`). À
+1600 `up` : 1 232 délestages + **521 `qdrop`** (q14, profondeur 3 848) + solde
+non attribué 1 414-1 726 (pas de compteur « réponse entrée dans la file →
+verdict émis » ; 1 461 réponses comptées par nft sans ligne de journal ni
+orpheline). **CPU par requête** (ms, b6 → b7, mêmes runs) : total −1,0 à
+−3,7 %, `dns` −3,4 à −14,7 %, `resp` −1,6 à +6,9 % : l'effet de `d-alloc` sur
+la cible est **faible** et concentré sur le chemin question, contrairement au
+micro-banc de §22.
+
+**GC / RSS** : aucun `gc_heap_guard` ; `dns-q*` plat (22,7 → 24,2 Mio pour
+deux workers) ; `resp-q*` croît de 19,6 à 63,1 Mio (max à 1600) puis 54,2 ;
+`MemAvailable` ≥ 3 562 460 Kio. Croissance **monotone entre paliers** (pas un
+état stationnaire) et plus haute qu'en §21 à charge égale (700 `mixed` :
+41,3-43,6 contre 39,6 Mio ; 1600 `up` : 63,1 contre 58,8).
+
+**Vérifications finales** : configuration restaurée (`grep` : seule la ligne
+`nfqueue: { responses: "14-15" }`, `md5` identique, `.dbench7` absent,
+`status` running) ; sonde finale `controlplane.tailscale.com` → 8 adresses
+(toujours authentifié) et `vpn.stemarie.dynv6.net` servie en **NODATA**
+(`NOERROR`, `ANSWER: 0`, comme §21.10) ; `servus` sans IPv6 temporaire
+(`ip -6 addr show dev wan` : 2 globales + 1 lien-local, rien à retirer) et
+sans générateur résiduel ; aucune capture AF_PACKET. `make all && make check
+&& make test` : **3 225 succès / 0 échec / 0 erreur / 0 pending** (≈ 48 s,
+`tmp/test.log`) ; aucun code modifié, aucun `.lua` régénéré. Pas de
+`make test-e2e`.
+
+**Non fait / douteux** : 850 mesuré une seule fois et 1000 non mesuré ;
+résolveurs (10.35.1.1, 10.35.4.1) non instrumentables (hôtes distincts) ;
+compteur manquant « réponse entrée → verdict émis » ; `nft` CPU toujours
+42-48 % en `mixed` (écart à §17 non expliqué, comme en §21) ;
+`events`/`mac-lrn` sous-estimés aux paliers saturés.
