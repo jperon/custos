@@ -2133,3 +2133,109 @@ campagne dédiée et non un correctif local.
 - campagne « allocation par paquet » (§18.6) si le coût CPU par paquet reste le
   plafond après le multi-worker §11 et le second avis ciblé §10.2.
 
+
+## 19. Campagne « allocation par paquet » (2026-11-13, branche `d-alloc`)
+
+Suite logique du §18.6 : le GC reste le premier poste résiduel (29-47 % des
+échantillons, §18.3) parce que le hot path alloue ~6,6 Ko/question,
+~11,2 Ko/réponse et ~32,9 Ko/cycle second avis (§18.2). Objectif : réduire
+l'allocation par paquet, hors sous-module ipparse. Tout a été fait **en
+local** : aucun accès réseau, aucun déploiement. Rapport complet (mesures
+brutes, scripts, échecs) : **`tmp/d_alloc_report.md`** ; artefacts dans
+`tmp/alloc/`.
+
+### 19.1 Méthode
+
+- **Répartition par sous-chemin** avant de toucher au code : script
+  `tmp/alloc/split.lua` qui rejoue les six cas du banc (`setup`/
+  `build_cases` récupérés par `debug.getupvalue` sur `hotpath.main`) avec
+  des wrappers d'allocation autour des fonctions des modules appelés par
+  les workers — chaque wrapper mesure `collectgarbage "count"` avant/après
+  (GC arrêté), en distinguant inclusif/ exclusif (sous-wrappers déduits).
+  Postes instrumentés : `parse_dns_packet`, `encode_msg`/`write_msg`,
+  `drain_pipe`, `set_pending`, `enqueue` (build_line), `parse_answers`,
+  `patch_modified_dns`/`strip_*`, `inject`, `decide_meta`/
+  `run_on_response`, `classify`, `user_for_mac`, `log_*`.
+- **A/B alterné dans la même fenêtre** par correctif : `make bench-hotpath
+  HP_REPEAT=5` (minimum de lot retenu, métrique stable — §18.1), état A
+  (`git stash`) puis B, deux couples par correctif ; témoins = les cas non
+  visés du même run.
+- **TDD** : pour chaque correctif, un test d'allocation GC arrêté dans le
+  spec du fichier modifié, seuil calibré entre la mesure avant/après
+  (constaté en échec avant correctif, en succès après).
+- Pièges de mesure constatés : **LuaJIT interne les strings identiques**
+  (mesure à 0 pour des inputs constants) ; le JIT **élimine les appels dont
+  le résultat est ignoré** (il faut un sink) ; `luassert.is_true` alloue
+  (+1 100 o/ligne mesuré dans une boucle).
+
+### 19.2 Répartition initiale (o/itér, GC arrêté)
+
+| cas | total | postes principaux (hors périmètre entre parenthèses) |
+|---|---|---|
+| `question` | 6 664 | (parse_dns_packet 2048), (dup_query.build_udp 1536), (decide_meta 536), write_msg 328, reste 2216 (write_event) |
+| `ipc_drain` | 1 884 | drain_pipe 1624 (read+decode+set_pending) |
+| `response` | 10 883 | (parse_dns_packet 2632), **enqueue 1091**, **patch_modified_dns 1040**, set_pending 632, **parse_answers 536**, (run_on_response 456), reste 3998 |
+| `so_a` | 8 994 | (parse_dns_packet 6600) |
+| `so_cycle` | 30 544 | (parse_dns_packet 9232), **enqueue 8714 (16 lignes)**, **parse_answers 3720**, patch_modified_dns 1088 |
+
+Hors périmètre : sous-module ipparse (`parse_dns_packet`/`parse_rr`/`labels`),
+filtre (`decide_meta`/`run_on_response`, sémantique de filtrage), `write_event`
+et l'envoi d'événements (autre agent), `dup_query.build_udp` (fichier non
+nommé), `set_pending` (table d'entrée nécessaire + log `ipc_pending_overwrite`
+dominant dans le banc — artefact du txid fixe).
+
+### 19.3 Correctifs retenus (un commit par optimisation)
+
+| # | Correctif | Cas visé | Gain (A/B alterné) | Commit |
+|---|---|---|---|---|
+| 1 | `nft_queue.build_line` en concaténation directe (supprime la table de 9 champs + la double copie `.. "\n"` par ligne) | `so_cycle` (16 lignes) | alloc 30601 → 28297 (**−7,5 %**), temps total 9,06 → 8,48 s (−6,5 %) ; `response` −2,6 % ; test 372 → 225 o/ligne | `21a7acf` |
+| 2 | `parse_answers` réduit aux 3 champs lus (`rtype`, `rdata_str`, `ttl`) par `finalize_a` | `so_cycle` | alloc 28297 → 25993 (**−8,1 %**), lot-min 37,9 → 35,0 µs (**−7,5 %**) ; test 3723 → 1419 o/appel (8 RR) | `0674b10` |
+| 3 | `dns_ede.strip_rrtypes` : `u16_at`/`skip_name_at`/`copy_section` en fonctions de module (params explicites) + sets précalculés `A_SET`/`AAAA_SET`/`HTTPS_SVCB_SET` | `response` | alloc 10359 → 9623 (**−7,1 %**), lot-min 24,7 → 20,8 µs (**−16 %**) ; test `strip_https_rr` 1040 → 304 o/appel | `5ec6028` |
+| 4 | `finalize_a` sans closures lourdes : `client_addr_of`/`inject_answers`/`patch_and_accept` en fonctions de module + `ADD_IP`/`ADD_MAC` précalculés | `response` | alloc 9623 → 8503 (**−11,6 %**), lot-min 21,6 → 20,7 µs ; test 3897 → 3277 o/appel | `d44a9c6` |
+| 5 | `ipc.encode_msg` en concaténation directe (14 champs) + `response_ids` sans tableau vide + `write_with_retry` avec timespec module-level | `question` | alloc 6664 → 6448 (−3,2 %), **lot-min 25,3 → 23,5 µs (−7,1 %)** ; poste isolé 757 → 340 o/appel ; test seuil 550 | `549560f` |
+| 6 | `strip_rrtypes` : tables `question_parts`/`sec` en scratch module-level | `response` | **lot-min 21,15 → 19,9 µs (−5,9 %)**, total −4,7 %, alloc −3,6 % (8481 → 8177) ; test 305 → 0 o/appel | `55bd240` |
+
+Chaque commit porte son avant/après ; `make check && make test` vert à chaque
+étape (référence de campagne : 3180 → **3185 succès / 0 échec**),
+`make test-e2e` : **94 passed / 0 failed**.
+
+### 19.4 Bilan global (mêmes runs, HP_REPEAT=5)
+
+| cas | alloc avant | alloc après | Δ | lot-min avant | lot-min après |
+|---|---|---|---|---|---|
+| `response` | 10 935 | **8 201** | **−24,8 %** | 22,5 µs | 19,6 µs |
+| `so_cycle` | 30 601 | **23 785** | **−22,3 %** | 37,9 µs | 31,3 µs |
+| `question` | 6 624 | 6 448 | −2,7 % | 24,9 µs | 21,6 µs |
+| `so_a` (témoin) | 8 994 | 8 994 | 0 | 25,0 µs | 20,6 µs |
+| `ipc_drain` (témoin) | 1 906 | 1 906 | 0 | 3,7 µs | 3,9 µs |
+| `setup_control` (témoin) | 890 | 890 | 0 | 0,5 µs | 0,5 µs |
+
+Les témoins d'allocation sont strictement stables ; les écarts de temps des
+témoins (`so_a` 25,0 → 20,6 µs) reflètent la charge de la machine partagée
+entre les deux runs, pas un effet des correctifs.
+
+### 19.5 Non fait / constaté sous le seuil
+
+- **Tables `answers`/`qnames`/`txid_hex` paresseux dans `finalize_a`**
+  (reverté) : −3,3 % sur `response` et −1,4 % sur `so_cycle` en allocation
+  (−3 % en temps), **sous le seuil de 5 %** — la version revertée reste dans
+  `tmp/alloc/`. Le test `finalize_a` garde son seuil de campagne (3550 o,
+  mesure initiale 3897).
+- **`drain_pipe` fast-path `state == ""`** (reverté) : gain nul mesuré —
+  LuaJIT optimise déjà `"" .. s`.
+- **`make_key`/`string.format`** : 4,1 % d'échantillons dans le profil mais
+  le remplacement par concatène ne gagne que 0,015 µs/appel (le poste est
+  dominé par le log `ipc_pending_overwrite`, artefact du banc).
+- **`ctx` de `handle_response`** (~23 clés hash ≈ 1 Ko) : non réductible
+  sans toucher à `format_block_event` (envoi d'événements, hors périmètre) —
+  les champs `qname`/`vlan`/`af` y sont lus.
+- **`decode_msg`/`split_fields`** (14 sous-strings) : non refondu — le
+  format de message est un contrat (`worker_nft.parse_line`, §18.5) et le
+  refactoring ne montre pas ≥ 5 %.
+- **`set_pending`** (632 o dans le banc) : dominé par le log INFO
+  `ipc_pending_overwrite` émis à chaque écrasement — comportement de log
+  inchangé, et dans la production l'écrasement est rare (le banc réutilise
+  le même txid à chaque itération).
+- Résiduel hors périmètre toujours dominant : `parse_dns_packet`/`parse_rr`
+  (ipparse, 2048-9232 o selon le cas), `decide_meta`/`run_on_response`
+  (filtre), `build_udp` (dup_query), `write_event`.
