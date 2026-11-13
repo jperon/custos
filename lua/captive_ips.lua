@@ -5,8 +5,7 @@ do
 end
 local shquote
 shquote = require("lib.shquote").shquote
-local RETRY_INTERVAL_S = 10
-local RETRY_INTERVAL = RETRY_INTERVAL_S
+local RETRY_INTERVAL = 10
 local domain_from_url
 domain_from_url = function(url)
   if not (url) then
@@ -121,22 +120,18 @@ new_detector = function(auth_cfg)
     ip4 = nil,
     ip6 = nil,
     last4 = 0,
-    last6 = 0,
-    logged4 = false,
-    logged6 = false
+    last6 = 0
   }
   local now = os.time()
   d.last4 = now
   local v4 = detect_ip4(auth_cfg, ifname)
   if v4 then
     d.ip4 = v4
-    d.logged4 = true
   end
   d.last6 = now
   local v6 = detect_ip6(auth_cfg, ifname)
   if v6 then
     d.ip6 = v6
-    d.logged6 = true
   end
   d.ensure = function(self, now_ts)
     now_ts = now_ts or os.time()
@@ -146,16 +141,6 @@ new_detector = function(auth_cfg)
         local v = detect_ip4(self.auth_cfg, self.ifname)
         if v then
           self.ip4 = v
-          if not (self.logged4) then
-            self.logged4 = true
-            log_info(function()
-              return {
-                action = "captive_ip4_autodetected",
-                ip = v,
-                ifname = self.ifname
-              }
-            end)
-          end
         end
       end
     end
@@ -165,16 +150,6 @@ new_detector = function(auth_cfg)
         local v = detect_ip6(self.auth_cfg, self.ifname)
         if v then
           self.ip6 = v
-          if not (self.logged6) then
-            self.logged6 = true
-            log_info(function()
-              return {
-                action = "captive_ip6_autodetected",
-                ip = v,
-                ifname = self.ifname
-              }
-            end)
-          end
         end
       end
     end
@@ -191,6 +166,5 @@ return {
   detect_ip6 = detect_ip6,
   domain_from_url = domain_from_url,
   new_detector = new_detector,
-  RETRY_INTERVAL = RETRY_INTERVAL,
-  RETRY_INTERVAL_S = RETRY_INTERVAL_S
+  RETRY_INTERVAL = RETRY_INTERVAL
 }

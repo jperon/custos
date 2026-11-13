@@ -18,8 +18,7 @@
 { :shquote } = require "lib.shquote"
 
 --- Intervalle minimal (secondes) entre deux tentatives de détection paresseuse.
-RETRY_INTERVAL_S = 10
-RETRY_INTERVAL = RETRY_INTERVAL_S
+RETRY_INTERVAL = 10
 
 --- Extrait le hostname d'une URL https?://host[:port]/...
 -- Retourne nil si l'URL contient une IP brute (IPv4 x.x.x.x ou IPv6 [::]).
@@ -120,8 +119,6 @@ new_detector = (auth_cfg) ->
     ip6: nil
     last4: 0
     last6: 0
-    logged4: false
-    logged6: false
   }
 
   now = os.time!
@@ -129,13 +126,11 @@ new_detector = (auth_cfg) ->
   v4 = detect_ip4 auth_cfg, ifname
   if v4
     d.ip4 = v4
-    d.logged4 = true
 
   d.last6 = now
   v6 = detect_ip6 auth_cfg, ifname
   if v6
     d.ip6 = v6
-    d.logged6 = true
 
   d.ensure = (self, now_ts) ->
     now_ts = now_ts or os.time!
@@ -145,18 +140,12 @@ new_detector = (auth_cfg) ->
         v = detect_ip4 self.auth_cfg, self.ifname
         if v
           self.ip4 = v
-          unless self.logged4
-            self.logged4 = true
-            log_info -> { action: "captive_ip4_autodetected", ip: v, ifname: self.ifname }
     if not self.ip6
       if now_ts - self.last6 >= RETRY_INTERVAL
         self.last6 = now_ts
         v = detect_ip6 self.auth_cfg, self.ifname
         if v
           self.ip6 = v
-          unless self.logged6
-            self.logged6 = true
-            log_info -> { action: "captive_ip6_autodetected", ip: v, ifname: self.ifname }
     self.ip4, self.ip6
 
   d.get = (self) ->
@@ -164,4 +153,4 @@ new_detector = (auth_cfg) ->
 
   d
 
-{ :detect, :detect_ip4, :detect_ip6, :domain_from_url, :new_detector, :RETRY_INTERVAL, :RETRY_INTERVAL_S }
+{ :detect, :detect_ip4, :detect_ip6, :domain_from_url, :new_detector, :RETRY_INTERVAL }
