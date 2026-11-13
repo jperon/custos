@@ -4534,3 +4534,54 @@ par réponse) : lignes IPC et décodage identiques caractère pour caractère. A
 alterné : cycle `mixed` complet 60,6 → 49,2 µs/requête (−18,8 %). Banc, tableau
 des étapes et pistes hors périmètre : `docs/agents/perf.md` §26.
 
+### Campagne de charge sans journal benchmark ni lecteurs logread (branche `d-bench9`, 2026-11-13)
+
+Campagne de mesure des leviers 1-2 de §27.7 de `docs/agents/perf.md`
+(suppression du journal `response_dns_benchmark` et des lecteurs `logread`),
+après le merge `d-sys` (donc `d-prof2`). **Aucune modification de code** ;
+aucune clé de configuration modifiée (état préparé : `runtime.benchmark:
+false`, ligne 164, et 6 `logread -f` + `tmux` déjà tués). Sauvegarde
+`/etc/custos/config.moon.dbench9` prise avant la première mesure et restaurée
+à la fin (`md5` `d31244ec…` identique avant/après, sauvegarde supprimée,
+`status` running) ; `benchmark` **non** remis à `true`. Détail, tableaux et
+ventilation : `docs/agents/perf.md` §28 ; rapport `tmp/bench9_report.md` ;
+harnais `tmp/bench9/` (résultats bruts `results9/`, ignorés par git).
+
+**Build vérifié** : `md5sum` égaux entre `lua/` de la branche et
+`/usr/share/custos/` pour **les 296** fichiers `lua/**/*.lua` (noyau 6.12.74,
+nft 1.1.6, 4 cœurs). **Protocole** : `mixed` 700 ×1, **850 ×3**, **1000 ×3**,
+`up` 1300 et 1600 ; 30 s, drain 45 s, 128 sockets, 2 destinations ;
+`servus` authentifié avant chaque phase (8 adresses, 10/10), repos vérifié,
+sonde `rc=0` (10/10). Journal benchmark coupé ⇒ latences **client**
+uniquement ; délestages comptés **ponctuellement**
+(`logread -l 20000 | grep -c`, jamais `-f`) : **4 → 4, delta 0** sur les
+10 phases ; fenêtres délimitées par `/proc/uptime` et durées en jiffies
+(HZ = 100), l'horloge murale ayant sauté d'une seconde en cours
+d'échantillonnage.
+
+**Résultats** : `mixed` **0 % de perte à 700, 850 (3/3) et 1000 (3/3)** —
+p50 20,0 / 21,5 / 29,8-31,0 ms et p99 92,8 / 121,5-125,8 / 173,5-174,2 ms —
+contre 10,0 % (p50 1 011-1 604) à 850 et 22,9 % (p50 1 664-1 794) à 1000 en
+§25 ; `up` **0 % à 1300 et 1600** (p50 14,2 / 15,3). `qdrop` = `udrop` = 0,
+`question_shed` = 0, orphelines = 0, `gc_heap_guard` = 0, profondeurs maximales
+≤ 115. Le **plateau de ~770 q/s** de §25/§27 est donc levé : capacité
+`4 000 / 3,367 ms` ≈ **1 190 q/s** (15 % d'un cœur par CPU encore libre à
+1000). Coût machine **5,260 → 3,599 ms/req** à 700 et **5,017 → 3,470** à 850 ;
+`workers` 3,56 → 3,23 ; **non attribué 1,70 → 0,36** (−79 %), les postes
+`logread` 0,50 / `tmux` 0,21 / `logd` 0,17 / `procd` 0,13 / échantillonneur
+0,14 ms/req de §27.3 ayant disparu (19-49 lignes de log par fenêtre de 30 s,
+contre 21 177 en §27.4) ; le résidu est désormais le noyau `irq+softirq`
+(0,28-0,32 ms/req).
+
+**Vérifications finales** : sonde `controlplane.tailscale.com` → 8 adresses et
+`vpn.stemarie.dynv6.net` → NODATA ; aucune IPv6 temporaire sur `servus`
+(2 globales + 1 lien-local, inchangé) ni générateur résiduel ; aucun `logread`
+ni `tmux` sur la cible ; aucune capture AF_PACKET. `make all && make check &&
+make test` : **3 273 succès / 0 échec / 0 erreur / 0 pending**, aucun `.lua`
+régénéré. Pas de `make test-e2e`.
+
+**Non fait / douteux** : pas d'A/B `benchmark: true` (clé hors périmètre) ;
+700 `mixed` mesuré une fois ; capacité au-delà de 1000 `mixed` extrapolée ;
+trafic de fond ≈ 19 q/s inclus (≤ 2,7 %) ; métriques serveur
+(`ack_wait_us`, `response_entry_ms`, `q_to_response_ms`) indisponibles sans
+journal ; résolveurs et résidu noyau non instrumentés.
