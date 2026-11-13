@@ -10,6 +10,12 @@ MAX_BATCH = 64
 EAGAIN    = 11
 EWOULDBLOCK = 11
 POLLIN    = 1
+-- Timeout de `poll` quand aucune ligne n'est bufferisée. Sert uniquement à
+-- repasser en temps mort réel (aucune donnée pendant cette durée) pour le pas
+-- de GC borné, comme nfq_loop/worker_events : poll rend la main dès qu'une
+-- ligne arrive, la latence n'est donc pas affectée. Un pas par lot sous charge
+-- coûtait ~366 µs de CPU par tour (docs/agents/perf.md §24).
+POLL_IDLE_MS = 1000
 
 LINE_VERSION = "v1"
 
@@ -398,15 +404,24 @@ flush_batch = (pending, ack_queue, ack_wfds, cache) ->
   for i = #ack_queue, 1, -1
     ack_queue[i] = nil
 
+--- Vrai si un appel de `poll` a expiré sans donnée (temps mort réel).
+-- Sépare la décision du câblage pour la tester sans attendre une seconde.
+-- @tparam number pr Retour de `poll` (0 = timeout, > 0 = fd prêt, < 0 = erreur)
+-- @treturn boolean true si le pas de GC sur temps mort doit être effectué
+idle_after_poll = (pr) -> pr == 0
+
 --- Boucle principale du worker.
 -- @tparam number rfd        Pipe `nft` en lecture
 -- @tparam table|nil ack_wfds FD d'ACK indexés par worker
 -- @tparam table|nil cache   Cache d'upsert (injectable pour les tests ;
 --   défaut : nouveau cache borné propre au processus)
-run = (rfd, ack_wfds, cache) ->
+-- @tparam table|nil gc      État GC injectable (défaut : gc_tune.shared!)
+-- @tparam table|nil opts    { poll_idle_ms } (tests)
+run = (rfd, ack_wfds, cache, gc, opts) ->
   set_action_prefix "nft_"
-  gc = gc_tune.shared!
+  gc or= gc_tune.shared!
   gc.apply!
+  idle_ms = (opts and opts.poll_idle_ms) or POLL_IDLE_MS
   ack_wfds = ack_wfds or {}
   cache = cache or new_cache!
   log_info -> { action: "worker_start", rfd: rfd, ack_workers: #ack_wfds }
@@ -424,9 +439,11 @@ run = (rfd, ack_wfds, cache) ->
     -- tour précédent) : on la traite immédiatement sans attendre le pipe. Un
     -- `partial` ne contenant qu'un fragment incomplet (sans `\n`) ne suffit pas :
     -- on bloque alors sur poll en attendant la fin de la ligne.
+    idle = false
     unless partial\find "\n", 1, true
       poll_fd[0].revents = 0
-      libc.poll poll_fd, 1, -1
+      pr = libc.poll poll_fd, 1, idle_ms
+      idle = idle_after_poll pr
 
     -- Garde-fou mémoire : au plus une lecture de collectgarbage "count" par
     -- seconde ; pause/stepmul ont été appliqués au démarrage.
@@ -486,8 +503,9 @@ run = (rfd, ack_wfds, cache) ->
       flush_batch pending, ack_queue, ack_wfds, cache
       pending_count = 0
 
-    -- Pipe drainé (aucun batch plein en attente) : temps mort → pas de GC
-    -- borné, sans interaction avec les écritures groupées du worker.
-    gc.idle! unless batch_full
+    -- Temps mort réel (poll expiré sans donnée) : pas de GC borné, comme
+    -- nfq_loop/worker_events. Jamais après un lot : sous charge, un pas par
+    -- tour coûtait ~366 µs de CPU/tour (docs/agents/perf.md §24).
+    gc.idle! if idle
 
-{ :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex, :new_cache, :cache_put, :cache_drop, :cache_clear, :cache_key_of, :cacheable_set, :timeout_to_seconds }
+{ :run, :parse_line, :flush_batch, :build_batch, :try_add_pending, :split_fields, :from_hex, :new_cache, :cache_put, :cache_drop, :cache_clear, :cache_key_of, :cacheable_set, :timeout_to_seconds, :idle_after_poll, :POLL_IDLE_MS }

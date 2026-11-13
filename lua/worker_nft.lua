@@ -26,6 +26,7 @@ local MAX_BATCH = 64
 local EAGAIN = 11
 local EWOULDBLOCK = 11
 local POLLIN = 1
+local POLL_IDLE_MS = 1000
 local LINE_VERSION = "v1"
 local CLOCK_MONOTONIC = 1
 local SKIP_WINDOW_MAX_S = 5
@@ -452,11 +453,16 @@ flush_batch = function(pending, ack_queue, ack_wfds, cache)
     ack_queue[i] = nil
   end
 end
+local idle_after_poll
+idle_after_poll = function(pr)
+  return pr == 0
+end
 local run
-run = function(rfd, ack_wfds, cache)
+run = function(rfd, ack_wfds, cache, gc, opts)
   set_action_prefix("nft_")
-  local gc = gc_tune.shared()
+  gc = gc or gc_tune.shared()
   gc.apply()
+  local idle_ms = (opts and opts.poll_idle_ms) or POLL_IDLE_MS
   ack_wfds = ack_wfds or { }
   cache = cache or new_cache()
   log_info(function()
@@ -473,9 +479,11 @@ run = function(rfd, ack_wfds, cache)
   poll_fd[0].fd = rfd
   poll_fd[0].events = POLLIN
   while true do
+    local idle = false
     if not (partial:find("\n", 1, true)) then
       poll_fd[0].revents = 0
-      libc.poll(poll_fd, 1, -1)
+      local pr = libc.poll(poll_fd, 1, idle_ms)
+      idle = idle_after_poll(pr)
     end
     gc.guard()
     local batch_full = false
@@ -574,7 +582,7 @@ run = function(rfd, ack_wfds, cache)
       flush_batch(pending, ack_queue, ack_wfds, cache)
       pending_count = 0
     end
-    if not (batch_full) then
+    if idle then
       gc.idle()
     end
   end
@@ -593,5 +601,7 @@ return {
   cache_clear = cache_clear,
   cache_key_of = cache_key_of,
   cacheable_set = cacheable_set,
-  timeout_to_seconds = timeout_to_seconds
+  timeout_to_seconds = timeout_to_seconds,
+  idle_after_poll = idle_after_poll,
+  POLL_IDLE_MS = POLL_IDLE_MS
 }

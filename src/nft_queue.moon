@@ -399,4 +399,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state, :build_line }
