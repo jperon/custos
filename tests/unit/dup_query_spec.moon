@@ -5,7 +5,7 @@ package.path = "src/?.lua;src/?/init.lua;src/?/?.lua;lua/?.lua;lua/?/init.lua;lu
 
 dup = require "dup_query"
 { parse: parse_ip, new: new_ip, :s2ip, :ip2s } = require "ipparse.l3.ip"
-{ parse: parse_udp } = require "ipparse.l4.udp"
+{ parse: parse_udp, new: new_udp } = require "ipparse.l4.udp"
 sp = require("ipparse.lib.pack_compat").pack
 bit = require "bit"
 
@@ -25,6 +25,30 @@ build_v6 = (src, dst, dns, tc=0, fl=0) ->
   vtf = bit.bor bit.lshift(6, 28), bit.lshift(tc, 20), fl
   hdr = sp ">I4 I2 B B", vtf, udp_len, 17, 64
   hdr .. s2ip(src) .. s2ip(dst) .. sp(">H H H H", 5353, 53, udp_len, 0) .. dns
+
+-- Paquet attendu construit indépendamment du module testé (reconstruction
+-- ipparse + sérialisation), pour comparer les octets de la recopie à une
+-- référence qui ne partage pas son code.
+expected_packet = (ip, l4, dns, validator) ->
+  udp = new_udp { spt: l4.spt, dpt: l4.dpt, checksum: 0, data: dns }
+  pkt = new_ip {
+    version:  ip.version
+    v_ihl:    ip.v_ihl
+    tos:      ip.tos
+    id:       ip.id
+    ff:       ip.ff
+    ttl:      ip.ttl
+    options:  ip.options or ""
+    traffic_class: ip.traffic_class
+    flow_label:    ip.flow_label
+    hop_limit:     ip.hop_limit
+    src:      ip.src
+    dst:      s2ip(validator)
+    protocol: 17
+    next_header: 17
+    data:     udp
+  }
+  "#{pkt}"
 
 describe "dup_query", ->
   describe "pick_resolver", ->
@@ -102,7 +126,7 @@ describe "dup_query", ->
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
-      out = dup.build_udp ip, l4, dns, "94.130.180.225"
+      out = dup.build_udp ip, l4, dns, "94.130.180.225", raw
       assert.is_truthy out
       oip, _ = parse_ip out, 1
       assert.same "192.0.2.10", ip2s(oip.src)
@@ -110,65 +134,74 @@ describe "dup_query", ->
       oudp, _ = parse_udp out, oip.data_off
       payload = out\sub oudp.data_off, oudp.off + oudp.len - 1
       assert.same dns, payload
+      assert.is_true expected_packet(ip, l4, dns, "94.130.180.225") == out
 
     it "nil en TCP", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "tcp"
-      assert.is_nil dup.build_udp ip, l4, dns, "94.130.180.225"
+      assert.is_nil dup.build_udp ip, l4, dns, "94.130.180.225", raw
 
     it "nil si famille validateur incohérente", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
-      assert.is_nil dup.build_udp ip, l4, dns, "2a01:4f8::1"
+      assert.is_nil dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
+
+    it "nil sans paquet d'origine (raw obligatoire)", ->
+      raw = build_v4 "192.0.2.10", "1.1.1.1", dns
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      assert.is_nil dup.build_udp ip, l4, dns, "94.130.180.225"
 
     it "préserve traffic_class/flow_label IPv6 (vtf recalculé par ip6.pack)", ->
       raw = build_v6 "2001:db8::10", "2001:db8::53", dns, 0x2e, 0x12345
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
-      out = dup.build_udp ip, l4, dns, "2a01:4f8::1"
+      out = dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
       assert.is_truthy out
       oip, _ = parse_ip out, 1
       assert.equals 0x2e, oip.traffic_class
       assert.equals 0x12345, oip.flow_label
 
-    -- Chemin rapide (recopie du paquet d'origine) : la sortie doit être
-    -- IDENTIQUE octet à octet à la reconstruction ipparse, sinon les
-    -- checksums ou un champ d'en-tête diffèrent en production.
-    it "chemin rapide IPv4 : sortie identique à la reconstruction ipparse", ->
+    -- Sortie comparée à un paquet attendu construit hors du module (helper
+    -- expected_packet) : une erreur de recopie ou de checksum est détectée.
+    it "IPv4 : octets identiques au paquet attendu construit indépendamment", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
-      ref = dup.build_udp ip, l4, dns, "94.130.180.225"
-      fast = dup.build_udp ip, l4, dns, "94.130.180.225", raw
-      assert.same #ref, #fast
-      assert.is_true ref == fast
+      expected = expected_packet ip, l4, dns, "94.130.180.225"
+      out = dup.build_udp ip, l4, dns, "94.130.180.225", raw
+      assert.same #expected, #out
+      assert.is_true expected == out
 
-    it "chemin rapide IPv6 : sortie identique à la reconstruction ipparse", ->
+    it "IPv6 : octets identiques au paquet attendu construit indépendamment", ->
       raw = build_v6 "2001:db8::10", "2001:db8::53", dns, 0x2e, 0x12345
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
-      ref = dup.build_udp ip, l4, dns, "2a01:4f8::1"
-      fast = dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
-      assert.is_true ref == fast
+      expected = expected_packet ip, l4, dns, "2a01:4f8::1"
+      out = dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
+      assert.same #expected, #out
+      assert.is_true expected == out
 
-    it "chemin rapide : ignore le bourrage au-delà du datagramme IP", ->
+    it "ignore le bourrage au-delà du datagramme IP", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off
       l4.proto = "udp"
       padded = raw .. "\0\0\0\0\0\0\0\0"
-      fast = dup.build_udp ip, l4, dns, "94.130.180.225", padded
-      assert.same #raw, #fast
-      assert.is_true dup.build_udp(ip, l4, dns, "94.130.180.225") == fast
+      out = dup.build_udp ip, l4, dns, "94.130.180.225", padded
+      expected = expected_packet ip, l4, dns, "94.130.180.225"
+      assert.same #raw, #out
+      assert.is_true expected == out
 
-    it "chemin rapide : nil en TCP et sur famille incohérente", ->
+    it "nil en TCP et sur famille incohérente (raw fourni)", ->
       raw = build_v4 "192.0.2.10", "1.1.1.1", dns
       ip, _ = parse_ip raw, 1
       l4, _ = parse_udp raw, ip.data_off

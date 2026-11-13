@@ -110,13 +110,13 @@ pick_resolver = function(resolvers, version)
 end
 local build_udp
 build_udp = function(ip, l4, dns_raw, validator_ip, raw)
-  if raw == nil then
-    raw = nil
-  end
-  if not (ip and l4 and dns_raw and validator_ip) then
+  if not (ip and l4 and dns_raw and validator_ip and raw) then
     return nil
   end
   if not (l4.proto == "udp") then
+    return nil
+  end
+  if not (l4.off and l4.len) then
     return nil
   end
   local dst_raw = dst_raw_of(validator_ip)
@@ -129,43 +129,18 @@ build_udp = function(ip, l4, dns_raw, validator_ip, raw)
   if ip.version == 6 and #dst_raw ~= 16 then
     return nil
   end
-  if raw and l4.off and l4.len then
-    local total = l4.off - 1 + l4.len
-    if total > 0 and total <= #raw and total <= SCRATCH_SIZE then
-      _scratch = _scratch or ffi.new("uint8_t[?]", SCRATCH_SIZE)
-      ffi.copy(_scratch, raw, total)
-      ffi.copy(_scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw)
-      if ip.version == 4 then
-        fix_ip4_cksum(_scratch, ip.payload_off or 20)
-      end
-      fix_l4_cksum(_scratch, total, l4.off - 1, ip.version, PROTO_UDP)
-      return ffi.string(_scratch, total)
-    end
+  local total = l4.off - 1 + l4.len
+  if not (total > 0 and total <= #raw and total <= SCRATCH_SIZE) then
+    return nil
   end
-  local udp = new_udp({
-    spt = l4.spt,
-    dpt = l4.dpt,
-    checksum = 0,
-    data = dns_raw
-  })
-  local ip_pkt = new_ip({
-    version = ip.version,
-    v_ihl = ip.v_ihl,
-    tos = ip.tos,
-    id = ip.id,
-    ff = ip.ff,
-    ttl = ip.ttl,
-    options = ip.options or "",
-    traffic_class = ip.traffic_class,
-    flow_label = ip.flow_label,
-    hop_limit = ip.hop_limit,
-    src = ip.src,
-    dst = dst_raw,
-    protocol = PROTO_UDP,
-    next_header = PROTO_UDP,
-    data = udp
-  })
-  return tostring(ip_pkt)
+  _scratch = _scratch or ffi.new("uint8_t[?]", SCRATCH_SIZE)
+  ffi.copy(_scratch, raw, total)
+  ffi.copy(_scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw)
+  if ip.version == 4 then
+    fix_ip4_cksum(_scratch, ip.payload_off or 20)
+  end
+  fix_l4_cksum(_scratch, total, l4.off - 1, ip.version, PROTO_UDP)
+  return ffi.string(_scratch, total)
 end
 local build_query
 build_query = function(ip, l4, query_raw)
