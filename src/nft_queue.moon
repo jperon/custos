@@ -232,6 +232,64 @@ add_ip4  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip4",  client
 add_ip6  = (client_ip, ip_str, rule_id, timeout, corr) -> enqueue "ip6",  client_ip, ip_str, rule_id, timeout, corr
 add_mac4 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac4", mac,       ip_str, rule_id, timeout, corr
 add_mac6 = (mac, ip_str, rule_id, timeout, corr)       -> enqueue "mac6", mac,       ip_str, rule_id, timeout, corr
+
+--- Enfile plusieurs adresses d'un même set dans UNE ligne IPC.
+-- Une réponse DNS insère N adresses dans le set de la règle (clé = IP client)
+-- et N dans le set MAC : autant de lignes que d'enregistrements, alors que le
+-- contenu ne diffère que par l'adresse. Cette variante porte la liste des
+-- adresses dans le champ `ip` (séparateur espace, format accepté par
+-- `worker_nft.parse_line`) : une seule validation de timeout, un seul `to_hex`
+-- par champ constant, une seule concaténation par ligne, et un seul `seq` pour
+-- N éléments (l'ACK couvre donc tout le groupe) — cf. docs/agents/perf.md §29a.
+-- La liste est découpée en autant de lignes que nécessaire pour qu'aucune ne
+-- dépasse PIPE_BUF_SAFE (cas d'un RRset AAAA volumineux).
+-- @tparam string kind    ip4|ip6|mac4|mac6
+-- @tparam string key     Clé du tuple (IP client, MAC…), commune aux adresses
+-- @tparam table  addrs   Adresses à insérer (liste de chaînes)
+-- @tparam string rule_id Identifiant de règle (nom du set)
+-- @tparam string|nil timeout Timeout nft commun aux adresses (assaini une fois)
+-- @tparam string|nil corr Corrélateur (cf. build_line)
+-- @treturn number Nombre d'adresses enfilées (0 si aucun tube, tuple
+--   incomplet, liste vide, ou ligne trop longue pour PIPE_BUF_SAFE)
+add_many = (kind, key, addrs, rule_id, timeout, corr) ->
+  return 0 unless pipe_wfd
+  return 0 unless kind and key and addrs
+  n = #addrs
+  return 0 if n == 0
+  timeout  = sanitize_timeout timeout
+  rule_hex = to_hex rule_id or ""
+  corr_hex = to_hex corr or ""
+  widx_str = tostring worker_idx or -1
+  queued = 0
+  i = 1
+  while i <= n
+    seq += 1
+    -- Le seq courbe la taille du suffixe : il est donc construit par tranche.
+    prefix = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|"
+    suffix = "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) ..
+      "|" .. widx_str .. "|" .. corr_hex .. "\n"
+    budget = PIPE_BUF_SAFE - #prefix - #suffix
+    parts = {}
+    bytes = 0
+    -- Au moins une adresse par tranche (une adresse plus longue que le budget
+    -- rend la ligne invalide, comme pour une ligne unitaire).
+    while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget)
+      parts[#parts + 1] = addrs[i]
+      bytes += #addrs[i] + 1
+      i += 1
+    line = prefix .. table.concat(parts, " ") .. suffix
+    return queued if #line > PIPE_BUF_SAFE
+    flush! if pending_bytes + #line > PIPE_BUF_ATOMIC
+    pending_lines[#pending_lines + 1] = line
+    pending_seqs[#pending_seqs + 1] = seq
+    pending_bytes += #line
+    queued += #parts
+  queued
+
+add_ip4_many  = (client_ip, addrs, rule_id, timeout, corr) -> add_many "ip4",  client_ip, addrs, rule_id, timeout, corr
+add_ip6_many  = (client_ip, addrs, rule_id, timeout, corr) -> add_many "ip6",  client_ip, addrs, rule_id, timeout, corr
+add_mac4_many = (mac, addrs, rule_id, timeout, corr)       -> add_many "mac4", mac,       addrs, rule_id, timeout, corr
+add_mac6_many = (mac, addrs, rule_id, timeout, corr)       -> add_many "mac6", mac,       addrs, rule_id, timeout, corr
 add_sip4 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip4", ip_str,    ip_str, rule_id, timeout, corr
 add_sip6 = (ip_str, rule_id, timeout, corr)            -> enqueue "sip6", ip_str,    ip_str, rule_id, timeout, corr
 
@@ -399,4 +457,4 @@ cmd_for = (kind, key, ip, rule_id, timeout) ->
   return nil unless lines and #lines > 0
   table.concat lines, "\n"
 
-{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state, :build_line }
+{ :set_wfd, :set_ack_rfd, :get_last_seq, :get_worker_idx, :wait_ack, :drain_ack, :send_barrier, :flush, :add_ip4, :add_ip6, :add_mac4, :add_mac6, :add_ip4_many, :add_ip6_many, :add_mac4_many, :add_mac6_many, :add_many, :add_sip4, :add_sip6, :cmd_for, :cmd_lines_for, :element_spec, :sanitize_timeout, :get_set_name, :sanitize_rule_id, :ACK_SIZE, :get_last_acked, :reset_ack_state, :build_line }

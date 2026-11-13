@@ -261,6 +261,66 @@ local add_mac6
 add_mac6 = function(mac, ip_str, rule_id, timeout, corr)
   return enqueue("mac6", mac, ip_str, rule_id, timeout, corr)
 end
+local add_many
+add_many = function(kind, key, addrs, rule_id, timeout, corr)
+  if not (pipe_wfd) then
+    return 0
+  end
+  if not (kind and key and addrs) then
+    return 0
+  end
+  local n = #addrs
+  if n == 0 then
+    return 0
+  end
+  timeout = sanitize_timeout(timeout)
+  local rule_hex = to_hex(rule_id or "")
+  local corr_hex = to_hex(corr or "")
+  local widx_str = tostring(worker_idx or -1)
+  local queued = 0
+  local i = 1
+  while i <= n do
+    seq = seq + 1
+    local prefix = LINE_VERSION .. "|" .. kind .. "|" .. key .. "|"
+    local suffix = "|" .. rule_hex .. "|" .. timeout .. "|" .. tostring(seq) .. "|" .. widx_str .. "|" .. corr_hex .. "\n"
+    local budget = PIPE_BUF_SAFE - #prefix - #suffix
+    local parts = { }
+    local bytes = 0
+    while i <= n and (bytes == 0 or bytes + #addrs[i] + 1 <= budget) do
+      parts[#parts + 1] = addrs[i]
+      bytes = bytes + #addrs[i] + 1
+      i = i + 1
+    end
+    local line = prefix .. table.concat(parts, " ") .. suffix
+    if #line > PIPE_BUF_SAFE then
+      return queued
+    end
+    if pending_bytes + #line > PIPE_BUF_ATOMIC then
+      flush()
+    end
+    pending_lines[#pending_lines + 1] = line
+    pending_seqs[#pending_seqs + 1] = seq
+    pending_bytes = pending_bytes + #line
+    queued = queued + #parts
+  end
+  return queued
+end
+local add_ip4_many
+add_ip4_many = function(client_ip, addrs, rule_id, timeout, corr)
+  return add_many("ip4", client_ip, addrs, rule_id, timeout, corr)
+end
+local add_ip6_many
+add_ip6_many = function(client_ip, addrs, rule_id, timeout, corr)
+  return add_many("ip6", client_ip, addrs, rule_id, timeout, corr)
+end
+local add_mac4_many
+add_mac4_many = function(mac, addrs, rule_id, timeout, corr)
+  return add_many("mac4", mac, addrs, rule_id, timeout, corr)
+end
+local add_mac6_many
+add_mac6_many = function(mac, addrs, rule_id, timeout, corr)
+  return add_many("mac6", mac, addrs, rule_id, timeout, corr)
+end
 local add_sip4
 add_sip4 = function(ip_str, rule_id, timeout, corr)
   return enqueue("sip4", ip_str, ip_str, rule_id, timeout, corr)
@@ -457,6 +517,11 @@ return {
   add_ip6 = add_ip6,
   add_mac4 = add_mac4,
   add_mac6 = add_mac6,
+  add_ip4_many = add_ip4_many,
+  add_ip6_many = add_ip6_many,
+  add_mac4_many = add_mac4_many,
+  add_mac6_many = add_mac6_many,
+  add_many = add_many,
   add_sip4 = add_sip4,
   add_sip6 = add_sip6,
   cmd_for = cmd_for,
