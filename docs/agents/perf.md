@@ -2236,7 +2236,7 @@ cible (aarch64 A55 ×4, OpenWrt) :
    `mac-lrn` ne remonte pas (le pas `idle_step` ne tourne qu'après un timeout de
    poll sans donnée ; `mac_learner` l'exclut quand des probes sont en vol).
 
-## 19. Écritures groupées vers les workers events et mac-learner (2026-11-12, branche `d-batchev`)
+## 20. Écritures groupées vers les workers events et mac-learner (2026-11-12, branche `d-batchev`)
 
 Implémentation de la piste (7) de `tmp/perfaudit_report.md` §5.3 (« écriture
 events + learn par question : 2 pipe writes par paquet ») et du volet
@@ -2248,7 +2248,7 @@ un message binaire de 22 octets vers `mac_learner`
 le chemin chaud du worker questions, et **deux réveils par paquet** des
 lecteurs (mesurés à 11,6 % et 4,9 % d'un vCPU à 350 q/s, §16.2).
 
-### 19.1 Ce qui change
+### 20.1 Ce qui change
 
 - **Nouveau module `src/lib/pipe_batch.moon`** : tampon d'écriture groupée,
   deux formes selon le protocole du pipe. `new_records(fd, rec_size)` accumule
@@ -2293,7 +2293,7 @@ Formats, destinataires et sémantique de perte : **inchangés**. Un arrêt bruta
 du processus peut perdre jusqu'à un lot de messages (avant : jusqu'au message
 en cours sur EAGAIN) ; la fenêtre est bornée par le vidage en fin de lot.
 
-### 19.2 Mesures (locale x86-64, machine partagée, minimum de passages)
+### 20.2 Mesures (locale x86-64, machine partagée, minimum de passages)
 
 Protocole A/B alterné dans la même fenêtre ; les `.lua` compilés des deux états
 sont échangés (même banc, mêmes sources de banc). Détail : `tmp/batchev_report.md`.
@@ -2323,7 +2323,7 @@ déploiement depuis cette branche).
 `ipc_drain` 4,5/4,5 µs (lot min), `response` 25,1/24,9, `so_cycle` 36,2/40,0
 (bruit connu de ce cas) — stables.
 
-### 19.3 Couverture et vérifications
+### 20.3 Couverture et vérifications
 
 - `tests/unit/lib/pipe_batch_spec.moon` : accumulation sans écriture, vidage en
   un `write`, tranche ≤ capacité (jamais d'écriture coupée), messages hors
