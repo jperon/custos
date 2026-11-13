@@ -12,10 +12,39 @@
 -- (worker_questions), via bridge_raw ; ce module ne fait que construire l'octet
 -- du paquet IP (sans en-tête Ethernet). TCP non géré (questions UDP seulement).
 
+ffi = require "ffi"
 { new: new_ip, :s2ip } = require "ipparse.l3.ip"
 { new: new_udp }       = require "ipparse.l4.udp"
+{ :fix_ip4_cksum, :fix_l4_cksum, :PROTO_UDP } = require "lib.checksums"
 
-PROTO_UDP = 17
+-- ── Mémo des IP validateur (octets bruts) ────────────────────────────
+-- `s2ip` est un motif + un pack par appel (~0,4 µs IPv4, ~1,6 µs IPv6) : la
+-- liste des validateurs est bornée (configuration) et ses IP reviennent à
+-- chaque question dupliquée. Cache borné, purge en bloc au débordement.
+DST_RAW_MAX = 64
+_dst_raw   = {}
+_dst_raw_n = 0
+
+--- Octets bruts d'une IP validateur, mémoïsés (nil si texte invalide).
+-- @tparam string validator_ip IP textuelle
+-- @treturn string|nil 4 ou 16 octets
+dst_raw_of = (validator_ip) ->
+  return nil unless type(validator_ip) == "string"
+  hit = _dst_raw[validator_ip]
+  return hit if hit
+  ok, raw = pcall s2ip, validator_ip
+  return nil unless ok and raw
+  if _dst_raw_n >= DST_RAW_MAX
+    _dst_raw   = {}
+    _dst_raw_n = 0
+  _dst_raw[validator_ip] = raw
+  _dst_raw_n += 1
+  raw
+
+-- Tampon de recopie du chemin rapide (un par processus, alloué au premier
+-- appel) : la taille maximale d'un datagramme IP est 65 535 octets.
+SCRATCH_SIZE = 65536
+_scratch = nil
 
 -- Sélecteurs mémoïsés par liste de résolveurs (identité de table) : le
 -- hot-path de duplication appelle get_picker à chaque question, sans allouer.
@@ -74,19 +103,42 @@ pick_resolver = (resolvers, version) ->
   pick version, 0, 0
 
 --- Construit le paquet IP dupliqué (UDP uniquement) vers `validator_ip`.
+-- Deux chemins, MÊME sortie (égalité octet à octet vérifiée par
+-- tests/unit/dup_query_spec.moon) :
+--   * `raw` fourni (production) : recopie du paquet d'origine, réécriture de la
+--     seule IP destination, recalcul des checksums IP (v4) et L4 — une copie et
+--     deux sommes, au lieu de reconstruire les objets ipparse puis de les
+--     sérialiser ;
+--   * sans `raw` : reconstruction par ipparse (API historique, tests).
 -- @tparam table   ip       En-tête IP parsé de la question (ipparse l3).
 -- @tparam table   l4       En-tête UDP parsé (champ .proto == "udp", .spt, .dpt).
 -- @tparam string  dns_raw  Payload DNS brut (question) à transmettre tel quel.
 -- @tparam string  validator_ip IP destination du validateur (même famille que ip).
+-- @tparam[opt] string raw  Paquet IP d'origine (active le chemin par recopie).
 -- @treturn string|nil Octets du paquet IP (sans Ethernet), ou nil si non applicable.
-build_udp = (ip, l4, dns_raw, validator_ip) ->
+build_udp = (ip, l4, dns_raw, validator_ip, raw=nil) ->
   return nil unless ip and l4 and dns_raw and validator_ip
   return nil unless l4.proto == "udp"
-  ok, dst_raw = pcall s2ip, validator_ip
-  return nil unless ok and dst_raw
+  dst_raw = dst_raw_of validator_ip
+  return nil unless dst_raw
   -- La famille de l'IP validateur doit correspondre à celle du paquet.
   return nil if ip.version == 4 and #dst_raw != 4
   return nil if ip.version == 6 and #dst_raw != 16
+
+  -- Chemin rapide : la longueur du datagramme vient de l'en-tête UDP (le paquet
+  -- d'origine peut porter du bourrage Ethernet au-delà).
+  if raw and l4.off and l4.len
+    total = l4.off - 1 + l4.len
+    if total > 0 and total <= #raw and total <= SCRATCH_SIZE
+      _scratch or= ffi.new "uint8_t[?]", SCRATCH_SIZE
+      ffi.copy _scratch, raw, total
+      -- Offset 0-based de l'IP destination : 16 en IPv4, 24 en IPv6.
+      ffi.copy _scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw
+      -- IPv6 n'a pas de checksum d'en-tête (RFC 8200 §3).
+      if ip.version == 4
+        fix_ip4_cksum _scratch, ip.payload_off or 20
+      fix_l4_cksum _scratch, total, l4.off - 1, ip.version, PROTO_UDP
+      return ffi.string _scratch, total
 
   udp = new_udp { spt: l4.spt, dpt: l4.dpt, checksum: 0, data: dns_raw }
   ip_pkt = new_ip {
@@ -140,4 +192,4 @@ build_query = (ip, l4, query_raw) ->
   }
   "#{ip_pkt}"
 
-{ :pick_resolver, :new_picker, :get_picker, :build_udp, :build_query }
+{ :pick_resolver, :new_picker, :get_picker, :build_udp, :build_query, :dst_raw_of }

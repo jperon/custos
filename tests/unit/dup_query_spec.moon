@@ -136,6 +136,58 @@ describe "dup_query", ->
       assert.equals 0x2e, oip.traffic_class
       assert.equals 0x12345, oip.flow_label
 
+    -- Chemin rapide (recopie du paquet d'origine) : la sortie doit être
+    -- IDENTIQUE octet à octet à la reconstruction ipparse, sinon les
+    -- checksums ou un champ d'en-tête diffèrent en production.
+    it "chemin rapide IPv4 : sortie identique à la reconstruction ipparse", ->
+      raw = build_v4 "192.0.2.10", "1.1.1.1", dns
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      ref = dup.build_udp ip, l4, dns, "94.130.180.225"
+      fast = dup.build_udp ip, l4, dns, "94.130.180.225", raw
+      assert.same #ref, #fast
+      assert.is_true ref == fast
+
+    it "chemin rapide IPv6 : sortie identique à la reconstruction ipparse", ->
+      raw = build_v6 "2001:db8::10", "2001:db8::53", dns, 0x2e, 0x12345
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      ref = dup.build_udp ip, l4, dns, "2a01:4f8::1"
+      fast = dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
+      assert.is_true ref == fast
+
+    it "chemin rapide : ignore le bourrage au-delà du datagramme IP", ->
+      raw = build_v4 "192.0.2.10", "1.1.1.1", dns
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      padded = raw .. "\0\0\0\0\0\0\0\0"
+      fast = dup.build_udp ip, l4, dns, "94.130.180.225", padded
+      assert.same #raw, #fast
+      assert.is_true dup.build_udp(ip, l4, dns, "94.130.180.225") == fast
+
+    it "chemin rapide : nil en TCP et sur famille incohérente", ->
+      raw = build_v4 "192.0.2.10", "1.1.1.1", dns
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "tcp"
+      assert.is_nil dup.build_udp ip, l4, dns, "94.130.180.225", raw
+      l4.proto = "udp"
+      assert.is_nil dup.build_udp ip, l4, dns, "2a01:4f8::1", raw
+
+    it "mémoïse la conversion de l'IP validateur", ->
+      raw = build_v4 "192.0.2.10", "1.1.1.1", dns
+      ip, _ = parse_ip raw, 1
+      l4, _ = parse_udp raw, ip.data_off
+      l4.proto = "udp"
+      first = dup.dst_raw_of "94.130.180.225"
+      assert.same 4, #first
+      assert.is_true first == dup.dst_raw_of("94.130.180.225")
+      assert.is_nil dup.dst_raw_of "pas-une-ip"
+      assert.is_nil dup.dst_raw_of nil
+
   describe "build_query", ->
     query = "\xab\xcd\1\0\0\1\0\0\0\0\0\0\7example\3com\0\0\1\0\1"
 

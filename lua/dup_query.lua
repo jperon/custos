@@ -1,3 +1,4 @@
+local ffi = require("ffi")
 local new_ip, s2ip
 do
   local _obj_0 = require("ipparse.l3.ip")
@@ -5,7 +6,37 @@ do
 end
 local new_udp
 new_udp = require("ipparse.l4.udp").new
-local PROTO_UDP = 17
+local fix_ip4_cksum, fix_l4_cksum, PROTO_UDP
+do
+  local _obj_0 = require("lib.checksums")
+  fix_ip4_cksum, fix_l4_cksum, PROTO_UDP = _obj_0.fix_ip4_cksum, _obj_0.fix_l4_cksum, _obj_0.PROTO_UDP
+end
+local DST_RAW_MAX = 64
+local _dst_raw = { }
+local _dst_raw_n = 0
+local dst_raw_of
+dst_raw_of = function(validator_ip)
+  if not (type(validator_ip) == "string") then
+    return nil
+  end
+  local hit = _dst_raw[validator_ip]
+  if hit then
+    return hit
+  end
+  local ok, raw = pcall(s2ip, validator_ip)
+  if not (ok and raw) then
+    return nil
+  end
+  if _dst_raw_n >= DST_RAW_MAX then
+    _dst_raw = { }
+    _dst_raw_n = 0
+  end
+  _dst_raw[validator_ip] = raw
+  _dst_raw_n = _dst_raw_n + 1
+  return raw
+end
+local SCRATCH_SIZE = 65536
+local _scratch = nil
 local _pickers = setmetatable({ }, {
   __mode = "k"
 })
@@ -78,15 +109,18 @@ pick_resolver = function(resolvers, version)
   return pick(version, 0, 0)
 end
 local build_udp
-build_udp = function(ip, l4, dns_raw, validator_ip)
+build_udp = function(ip, l4, dns_raw, validator_ip, raw)
+  if raw == nil then
+    raw = nil
+  end
   if not (ip and l4 and dns_raw and validator_ip) then
     return nil
   end
   if not (l4.proto == "udp") then
     return nil
   end
-  local ok, dst_raw = pcall(s2ip, validator_ip)
-  if not (ok and dst_raw) then
+  local dst_raw = dst_raw_of(validator_ip)
+  if not (dst_raw) then
     return nil
   end
   if ip.version == 4 and #dst_raw ~= 4 then
@@ -94,6 +128,19 @@ build_udp = function(ip, l4, dns_raw, validator_ip)
   end
   if ip.version == 6 and #dst_raw ~= 16 then
     return nil
+  end
+  if raw and l4.off and l4.len then
+    local total = l4.off - 1 + l4.len
+    if total > 0 and total <= #raw and total <= SCRATCH_SIZE then
+      _scratch = _scratch or ffi.new("uint8_t[?]", SCRATCH_SIZE)
+      ffi.copy(_scratch, raw, total)
+      ffi.copy(_scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw)
+      if ip.version == 4 then
+        fix_ip4_cksum(_scratch, ip.payload_off or 20)
+      end
+      fix_l4_cksum(_scratch, total, l4.off - 1, ip.version, PROTO_UDP)
+      return ffi.string(_scratch, total)
+    end
   end
   local udp = new_udp({
     spt = l4.spt,
@@ -158,5 +205,6 @@ return {
   new_picker = new_picker,
   get_picker = get_picker,
   build_udp = build_udp,
-  build_query = build_query
+  build_query = build_query,
+  dst_raw_of = dst_raw_of
 }

@@ -142,7 +142,7 @@ maybe_duplicate = function(ip, l4, raw, rule_resolvers, dns_id)
     return 
   end
   local dns_raw = raw:sub(l4.data_off, l4.off + l4.len - 1)
-  local pkt = dup_query.build_udp(ip, l4, dns_raw, validator)
+  local pkt = dup_query.build_udp(ip, l4, dns_raw, validator, raw)
   if not (pkt) then
     return 
   end

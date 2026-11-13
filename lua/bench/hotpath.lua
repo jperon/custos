@@ -693,7 +693,7 @@ build_micro_cases = function(s)
       return #(ipc.encode_msg(s.msg_tls.txid, q.ip.src, s.msg_tls.src_port, CLIENT_MAC_RAW, q.ip.dst, false, s.msg_tls.reason, nil, s.msg_tls.rule_id, s.msg_tls.timeout, s.msg_tls.modifiers, s.msg_tls.response_rule_ids, nil))
     end),
     micro("micro_build_udp", "dup_query.build_udp (duplication validateur)", function()
-      return #(dup.build_udp(q.ip, q.l4, q.raw, VALIDATOR_IP))
+      return #(dup.build_udp(q.ip, q.l4, q.raw, VALIDATOR_IP, s.pkt_question))
     end),
     micro("micro_decode", "ipc.decode_msg (14 champs)", function()
       return (ipc.decode_msg(s.ipc_line)) and 1 or 2
