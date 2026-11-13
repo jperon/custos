@@ -33,6 +33,7 @@
 
 ffi = require "ffi"
 gc_tune = require "lib.gc_tune"
+stage_probe = require "bench.stage_probe"
 { :s2ip } = require "ipparse.l3.ip"
 sp = require("ipparse.lib.pack_compat").pack
 
@@ -63,6 +64,9 @@ ADDRS_TLS = {
 }
 ADDRS_VPN = { "185.199.108.153" }
 ADDRS_B   = { "167.235.236.107" }
+-- Réponse du validateur (B) du profil « mixed » : le validateur rend les mêmes
+-- 8 A que le résolveur (§21/§23 : le profil authentifié a 8 A).
+ADDRS_VAL = ADDRS_TLS
 
 O_NONBLOCK     = 2048
 F_SETPIPE_SZ   = 1031
@@ -118,7 +122,8 @@ BENCH_RULES = {
   }
 }
 
-ALL_CASES = { "question", "ipc_drain", "response", "so_a", "so_cycle", "setup_control" }
+ALL_CASES = { "question", "ipc_drain", "response", "so_a", "so_cycle",
+  "mixed_o2", "mixed_plain", "setup_control" }
 
 -- ── Fabrication de paquets (pur, testé par tests/unit/bench/hotpath_spec) ──
 
@@ -275,6 +280,41 @@ install_stubs = ->
     nil
   nil
 
+--- Installe les sondes par étape (option `--stages`).
+-- À appeler APRÈS `filter.load` mais AVANT le `require` des workers : les
+-- workers capturent leurs dépendances par destructuration au chargement
+-- (`{ :f } = require "m"`), donc un wrapper posé plus tard ne serait pas vu.
+-- Les sondes sont inclusives (une fonction appelée en interne par son module
+-- via une variable locale n'est pas interceptable) : cf. bench/stage_probe.moon.
+-- @tparam table p Jeu de sondes (bench.stage_probe.new).
+-- @treturn nil
+install_probes = (p) ->
+  p.wrap require("packet_utils"), "parse_dns_packet", "parse_dns_packet"
+  p.wrap require("ipc"), "drain_pipe", "ipc.drain_pipe"
+  p.wrap require("ipc"), "get_pending_entry", "ipc.get_pending_entry"
+  p.wrap require("ipc"), "consume", "ipc.consume"
+  p.wrap require("ipc"), "write_msg", "ipc.write_msg"
+  p.wrap require("lib.dns_response"), "parse_answers", "parse_answers"
+  p.wrap require("lib.dns_response"), "replace_dns_payload", "replace_dns_payload"
+  p.wrap require("dns_ede"), "patch_modified_dns", "patch_modified_dns"
+  p.wrap require("dns_ede"), "strip_https_rr", "strip_https_rr"
+  p.wrap require("dns_classify"), "classify", "dns_classify.classify"
+  p.wrap require("second_opinion"), "encode_verdict", "encode_verdict"
+  p.wrap_state require("second_opinion"), "new",
+    { "corr_key", "take_verdict", "store_verdict", "take_parked", "park", "is_validator" }
+  p.wrap require("response_inject"), "inject", "response_inject.inject"
+  p.wrap require("nft_queue"), "add_ip4", "nft.add_ip4"
+  p.wrap require("nft_queue"), "add_mac4", "nft.add_mac4"
+  p.wrap require("auth.sessions"), "user_for_mac", "user_for_mac"
+  p.wrap require("lib.packet_parsing"), "ip2s", "ip2s"
+  p.wrap require("dup_query"), "get_picker", "dup.get_picker"
+  p.wrap require("dup_query"), "build_udp", "dup.build_udp"
+  p.wrap require("filter"), "decide_meta", "filter.decide_meta"
+  p.wrap require("filter"), "run_on_response", "filter.run_on_response"
+  p.wrap require("log"), "log_allow", "log.log_allow"
+  p.wrap require("log"), "log_info", "log.log_info"
+  nil
+
 --- Charge la configuration du banc (AVANT tout require de worker).
 -- @treturn table module config.
 apply_config = ->
@@ -388,12 +428,19 @@ setup = (opts={}) ->
   filter = require "filter"
   filter.load!
 
+  -- Sondes par étape (--stages) : installées avant le require des workers,
+  -- qui capturent leurs dépendances au chargement.
+  probes = nil
+  if opts.stages
+    probes = stage_probe.new!
+    install_probes probes
+
   -- Tubes (mêmes rôles que main.moon).
   qpipe_r, qpipe_w = make_pipe!
   learn_r, learn_w = make_pipe!
   ev_r, ev_w       = make_pipe!
   nft_r, nft_w     = make_pipe NFT_PIPE_BYTES
-  resp_r, resp_w   = make_pipe!
+  sobus_r, sobus_w = make_pipe!
 
   -- Workers réels : `run` installe les callbacks, `nfq_loop.run_queue` stubbé
   -- les capture sans boucler.
@@ -402,12 +449,24 @@ setup = (opts={}) ->
 
   ipc = require "ipc"
   resp = require "worker_responses"
+  -- Le worker réponses lit le MÊME tube que celui où le worker questions écrit
+  -- (qpipe_r) : c'est ce que fait la production (main.moon passe le fd de
+  -- lecture du tube question→réponse). Les cas `response`/`so_*` injectent leur
+  -- transaction par `ipc.set_pending` et laissent donc le tube vide.
   resp.run(4, {
-    question_response_rfd: resp_r
+    question_response_rfd: qpipe_r
     events_wfd: ev_w
     nft_wfd: nft_w
     chain_strip_enabled: false
   }, filter.get_rules!.rules_metadata)
+
+  -- Bus de verdicts du second avis : la production multi-worker écrit un verdict
+  -- B encodé dans un tube par worker (`broadcast_verdict`). Sans bus, ce coût
+  -- (encodage + écriture) serait nul dans le banc, seul l'écrivain est donc armé
+  -- ici (réception câblée à nil : pas de rebouclage) et le tube est vidé par lot
+  -- comme celui de nft_queue. Mesure donc l'encodage + UNE écriture ; sur la
+  -- cible à deux workers réponses, il y en a une par worker.
+  resp._set_so_bus nil, { sobus_w }
 
   -- Le client est connu du worker réponses (dans la production, c'est le drain
   -- du tube qui l'apprend) : on le pré-remplit comme le fait `run()`.
@@ -423,6 +482,7 @@ setup = (opts={}) ->
   pkt_question_vpn = build_question_packet QNAME_VPN
   pkt_resp_a       = build_response_packet RESOLVER_IP, QNAME_TLS, ADDRS_TLS
   pkt_resp_b       = build_response_packet VALIDATOR_IP, QNAME_TLS, ADDRS_B
+  pkt_resp_b8      = build_response_packet VALIDATOR_IP, QNAME_TLS, ADDRS_VAL
   pkt_resp_vpn     = build_response_packet RESOLVER_IP, QNAME_VPN, ADDRS_VPN
 
   -- Sonde : une question réelle par domaine, pour récupérer la transaction IPC
@@ -458,12 +518,52 @@ setup = (opts={}) ->
 
   set_payload pkt_question
 
+  -- ── Préparation des micro-cas ──────────────────────────────────────
+  -- Paquets RÉELS parsés une fois (le micro-cas ne mesure que l'appel) et
+  -- objets dérivés. `micro_*` n'est jamais utilisé par les cas de cycle.
+  packet_utils = require "packet_utils"
+  micro_tcp = packet_utils.new_dns_tcp_stream!
+  micro_p = {}
+  for key, pkt in pairs { q: pkt_question, a: pkt_resp_a, b: pkt_resp_b8 }
+    ip, l4, msg, raw, ihl = packet_utils.parse_dns_packet pkt, micro_tcp
+    error "parse du paquet micro #{key} impossible" unless msg
+    micro_p[key] = { :ip, :l4, :msg, :raw, :ihl }
+  -- Verdict B du profil (pass) et sélecteur de validateur réels.
+  second_opinion = require "second_opinion"
+  dns_classify = require "dns_classify"
+  micro_so = second_opinion.new { resolvers: { VALIDATOR_IP }, budget_ms: 80 }
+  micro_vi = dns_classify.classify micro_p.b.msg, micro_p.b.raw
+  micro_override = { kind: "pass" }
+  -- Requête de décision du filtre (mêmes champs que worker_questions).
+  micro_req = {
+    domain: QNAME_TLS, src_ip: CLIENT_IP, mac: CLIENT_MAC
+    vlan: nil, ts: os.time!, user: CLIENT_USER
+  }
+  -- Champs d'une ligne events (mêmes clés que worker_questions.write_event).
+  micro_fields = {
+    qname: QNAME_TLS, mac_src: CLIENT_MAC, src_ip: CLIENT_IP, dst_ip: RESOLVER_IP
+    vlan: nil, user: CLIENT_USER, af: "ipv4", reason: "Allowed by rule: Utilisateurs"
+    rule: "r_utilisateurs"
+  }
+  -- Entrée pending dédiée (txid distinct : ne perturbe pas les cas réponse).
+  micro_msg = {}
+  micro_msg[k] = v for k, v in pairs msg_tls
+  micro_msg.txid = 0x7777
+  ipc.set_pending micro_msg, os.time
+  -- Tubes dédiés aux micro-cas (jamais lus par les workers).
+  micro_pipe_r, micro_pipe_w = make_pipe!
+
   {
     :config, :filter, :wq, :resp
     :qpipe_r, :qpipe_w, :learn_r, :ev_r, :ev_w, :nft_r, :nft_w
+    :sobus_r, :sobus_w
+    :micro_pipe_r, :micro_pipe_w
+    :micro_p, :micro_tcp, :micro_so, :micro_vi, :micro_override, :micro_req
+    :micro_fields, :micro_msg
     :set_payload
-    :pkt_question, :pkt_question_vpn, :pkt_resp_a, :pkt_resp_b, :pkt_resp_vpn
-    :msg_tls, :msg_vpn, :ipc_line
+    :pkt_question, :pkt_question_vpn, :pkt_resp_a, :pkt_resp_b
+    :pkt_resp_b8, :pkt_resp_vpn
+    :msg_tls, :msg_vpn, :ipc_line, :probes
     :gc_state
     on_idle_q: run_queue_calls[1].opts and run_queue_calls[1].opts.on_idle
     on_idle_r: run_queue_calls[2].opts and run_queue_calls[2].opts.on_idle
@@ -477,6 +577,125 @@ setup = (opts={}) ->
   }
 
 -- ── Cas de mesure ─────────────────────────────────────────────────────
+
+  --- Noms des cas « micro » (fonctions réelles mesurées isolément).
+-- Chaque micro-cas appelle UNE fonction du hot path avec des arguments réels
+-- (paquets et objets préparés par `setup`) et rend un nombre : la valeur de
+-- retour est consommée, ce qui empêche le JIT d'éliminer l'appel (§22.1).
+-- Les micro-cas sont hors des cas par défaut : `HP_EXTRA=--micro`, ou
+-- `--only micro_<nom>` pour un seul.
+MICRO_CASES = {
+  "micro_parse_q", "micro_parse_a", "micro_parse_b",
+  "micro_decide", "micro_write_msg", "micro_encode_msg",
+  "micro_build_udp", "micro_decode", "micro_makekey",
+  "micro_add_line", "micro_parse_answers", "micro_strip",
+  "micro_classify", "micro_encode_verdict", "micro_corr_key",
+  "micro_ip2s", "micro_write_event", "micro_learn", "micro_user",
+  "micro_get_pending", "micro_is_valid_timeout"
+}
+
+--- Construit les micro-cas : une fonction réelle, arguments préparés par setup.
+-- Le `finish` éventuel fait le vidage que la production fait en fin de lot
+-- (tampons events/learn, flush nft) ; il est chronométré par run_case.
+-- @tparam table s Environnement de setup.
+-- @treturn table Liste de cas.
+build_micro_cases = (s) ->
+  ipc = require "ipc"
+  packet_utils = require "packet_utils"
+  dns_ede = require "dns_ede"
+  disp = require "lib.dns_response"
+  nft_q = require "nft_queue"
+  second_opinion = require "second_opinion"
+  dns_classify = require "dns_classify"
+  dup = require "dup_query"
+  { :user_for_mac } = require "auth.sessions"
+  { :add_ip4 } = require "nft_queue"
+  { :write_msg } = require "ipc"
+  { :ip2s } = require "lib.packet_parsing"
+  ipc_hex = require "lib.ipc_hex"
+
+  drain_micro = ->
+    drain_fd s.micro_pipe_r
+    drain_fd s.nft_r
+    drain_fd s.learn_r
+    drain_fd s.ev_r
+    drain_fd s.sobus_r
+
+  -- Un cas = un appel mesuré ; la valeur rendue est un nombre (consommé).
+  micro = (name, desc, fn, opts=nil) ->
+    opts or= {}
+    {
+      name: name
+      desc: desc
+      pkts: 1
+      labels: { name }
+      steps: { (i) -> fn i }
+      finish: opts.finish
+      drain: opts.drain or drain_micro
+    }
+
+  q, a, b = s.micro_p.q, s.micro_p.a, s.micro_p.b
+  now_fn = require("log").now
+
+  add_line_step = (i) ->
+    (add_ip4 CLIENT_IP, "100.64.0.11", "r_utilisateurs", "660s",
+      "1234:10.35.1.2:5353:10.35.1.1") and 1 or 2
+  wevent_step = (i) -> (s.wq.write_event s.micro_fields, true) and 1 or 2
+  learn_step  = (i) -> (s.wq.write_learn_msg q.ip.src, CLIENT_MAC_RAW) and 1 or 2
+
+  {
+    micro "micro_parse_q", "parse_dns_packet (question client 78 o)", ->
+      ip, l4, msg = packet_utils.parse_dns_packet s.pkt_question, s.micro_tcp
+      (msg and 1) or 2
+    micro "micro_parse_a", "parse_dns_packet (réponse A, 8 RR)", ->
+      ip, l4, msg = packet_utils.parse_dns_packet s.pkt_resp_a, s.micro_tcp
+      (msg and 1) or 2
+    micro "micro_parse_b", "parse_dns_packet (réponse validateur B, 8 RR)", ->
+      ip, l4, msg = packet_utils.parse_dns_packet s.pkt_resp_b8, s.micro_tcp
+      (msg and 1) or 2
+    micro "micro_decide", "filter.decide_meta (règle à second avis)", ->
+      (s.filter.decide_meta s.micro_req) and 1 or 2
+    micro "micro_write_msg", "ipc.write_msg : encodage 14 champs + write", ->
+      (write_msg s.micro_pipe_w, s.msg_tls.txid, q.ip.src, s.msg_tls.src_port,
+        CLIENT_MAC_RAW, q.ip.dst, s.msg_tls.reason, nil, s.msg_tls.rule_id,
+        s.msg_tls.timeout, s.msg_tls.modifiers, s.msg_tls.response_rule_ids, nil) and 1 or 2
+    micro "micro_encode_msg", "ipc.encode_msg seul (aucune écriture)", ->
+      #(ipc.encode_msg s.msg_tls.txid, q.ip.src, s.msg_tls.src_port, CLIENT_MAC_RAW,
+        q.ip.dst, false, s.msg_tls.reason, nil, s.msg_tls.rule_id, s.msg_tls.timeout,
+        s.msg_tls.modifiers, s.msg_tls.response_rule_ids, nil)
+    micro "micro_build_udp", "dup_query.build_udp (duplication validateur)", ->
+      #(dup.build_udp q.ip, q.l4, q.raw, VALIDATOR_IP, s.pkt_question)
+    micro "micro_decode", "ipc.decode_msg (14 champs)", ->
+      (ipc.decode_msg s.ipc_line) and 1 or 2
+    micro "micro_makekey", "ipc.make_key (clé pending)", ->
+      #(ipc.make_key TXID, CLIENT_IP, CLIENT_PORT, RESOLVER_IP)
+    micro "micro_add_line", "nft_queue.add_ip4 : build_line + enqueue", add_line_step,
+      { finish: -> nft_q.get_last_seq! }
+    micro "micro_parse_answers", "lib.dns_response.parse_answers (8 RR)", ->
+      #(disp.parse_answers a.msg)
+    micro "micro_strip", "dns_ede.patch_modified_dns (strip HTTPS + EDE)", ->
+      new_dns, mod = dns_ede.patch_modified_dns a.raw, "Allowed by rule: Utilisateurs"
+      #new_dns + (mod and 1 or 0)
+    micro "micro_classify", "dns_classify.classify (réponse validateur)", ->
+      v = dns_classify.classify b.msg, b.raw
+      (v and v.verdict == "pass") and 1 or 2
+    micro "micro_encode_verdict", "second_opinion.encode_verdict (bus verdicts)", ->
+      #(second_opinion.encode_verdict CLIENT_IP, TXID, QNAME_TLS, s.micro_override)
+    micro "micro_corr_key", "second_opinion.corr_key (clé second avis)", ->
+      #(s.micro_so.corr_key CLIENT_IP, TXID, QNAME_TLS)
+    micro "micro_ip2s", "ip2s (4 octets → texte)", ->
+      #(ip2s q.ip.src)
+    micro "micro_write_event", "worker_questions.write_event (ligne TSV tamponnée)", wevent_step,
+      { finish: -> s.wq.flush_pipes! }
+    micro "micro_learn", "worker_questions.write_learn_msg (22 o tamponnés)", learn_step,
+      { finish: -> s.wq.flush_pipes! }
+    micro "micro_user", "auth.sessions.user_for_mac (session du client)", ->
+      (user_for_mac CLIENT_MAC, CLIENT_IP, s.config.auth.sessions_file) and 1 or 2
+    micro "micro_get_pending", "ipc.get_pending_entry (hit)", ->
+      (ipc.get_pending_entry 0x7777, CLIENT_IP, CLIENT_PORT, RESOLVER_IP, now_fn) and 1 or 2
+    micro "micro_is_valid_timeout", "ipc_hex.is_valid_timeout (1×/ligne nft)", ->
+      (ipc_hex.is_valid_timeout "660s") and 1 or 2
+  }
 
 --- Construit les cas de mesure (préparation + étapes par paquet, par lots).
 -- @tparam table s Environnement de setup.
@@ -493,6 +712,7 @@ build_cases = (s) ->
     drain_fd s.learn_r
     drain_fd s.ev_r
     drain_fd s.nft_r
+    drain_fd s.sobus_r
 
   drain_cb = (msg) ->
     s.resp.update_mac_clients msg, now_fn!
@@ -570,6 +790,49 @@ build_cases = (s) ->
       drain: drain_all
     }
     {
+      name: "mixed_o2"
+      desc: "cycle mixed complet AVEC second avis : question → A parquée → B validateur (classify, broadcast, déparquage, finalize 8 A)"
+      pkts: 1   -- une requête CLIENT (1 question + 2 réponses) : µs/paquet = µs/requête
+      labels: { "q_handler", "q_flush", "r_a_park", "r_b_verdict", "r_flush" }
+      pre: (i) ->
+        s.on_idle_q! if s.on_idle_q
+        s.set_payload s.pkt_question
+      steps: {
+        (i) -> s.handle_question nil, nil, i
+        (i) -> s.on_batch_end_q! if s.on_batch_end_q
+        (i) ->
+          s.set_payload s.pkt_resp_a
+          s.handle_response nil, nil, i
+        (i) ->
+          s.set_payload s.pkt_resp_b8
+          s.handle_response nil, nil, i
+        (i) ->
+          s.resp.flush_deferred!
+          nil
+      }
+      drain: drain_all
+    }
+    {
+      name: "mixed_plain"
+      desc: "cycle mixed SANS second avis : question + réponse A du résolveur (1 A, injection nft)"
+      pkts: 1   -- une requête client
+      labels: { "q_handler", "q_flush", "r_a_finalize", "r_flush" }
+      pre: (i) ->
+        s.on_idle_q! if s.on_idle_q
+        s.set_payload s.pkt_question_vpn
+      steps: {
+        (i) -> s.handle_question nil, nil, i
+        (i) -> s.on_batch_end_q! if s.on_batch_end_q
+        (i) ->
+          s.set_payload s.pkt_resp_vpn
+          s.handle_response nil, nil, i
+        (i) ->
+          s.resp.flush_deferred!
+          nil
+      }
+      drain: drain_all
+    }
+    {
       name: "setup_control"
       desc: "préparation seule des cas réponse (set_pending + consume) : incluse dans leurs mesures"
       pkts: 1
@@ -611,7 +874,7 @@ run_case = (c, iters, chunk) ->
       c.pre i if c.pre
       for step in *c.steps
         r = step i
-        rets[r] = (rets[r] or 0) + 1
+        rets[r] = (rets[r] or 0) + 1 if r != nil
     c.finish! if c.finish
     t1 = os.clock!
     dt = t1 - t0
@@ -644,6 +907,122 @@ measure_alloc = (c, iters) ->
   collectgarbage "restart"
   collectgarbage "collect"
   math.max(0, after - before) * 1024 / iters
+
+-- ── Mesure par étape ──────────────────────────────────────────────────
+
+--- Noms des étapes d'un cas (labels explicites ou « stepN »).
+-- @tparam table c Cas.
+-- @treturn table Liste de noms.
+step_names = (c) ->
+  out = {}
+  for i = 1, #c.steps
+    out[i] = (c.labels and c.labels[i]) or "step#{i}"
+  out
+
+--- Mesure le temps CPU de CHAQUE étape d'un cas (µs par itération).
+-- L'horloge est lue autour de chaque appel d'étape : son coût (~20 ns) est
+-- négligeable devant les étapes mesurées, et il est identique avant/après une
+-- optimisation. La préparation (`pre`), le `finish` et le `drain` ne sont pas
+-- chronométrés ici (le `finish` l'est par run_case). Comme run_case, on garde
+-- le MINIMUM de `reps` passages par étape : la machine est partagée.
+-- @tparam table  c     Cas.
+-- @tparam number iters Nombre d'itérations.
+-- @tparam number chunk Taille de lot.
+-- @tparam number reps  Nombre de passages (minimum retenu).
+-- @treturn table Liste { name, us } dans l'ordre des étapes.
+measure_steps = (c, iters, chunk, reps) ->
+  names = step_names c
+  best = {}
+  for rep = 1, math.max(1, reps)
+    acc = {}
+    for i = 1, #names
+      acc[i] = 0
+    blocks = math.ceil iters / chunk
+    for b = 1, blocks
+      n = math.min chunk, iters - (b - 1) * chunk
+      for i = 1, n
+        c.pre i if c.pre
+        for si, step in ipairs c.steps
+          t0 = os.clock!
+          step i
+          acc[si] += os.clock! - t0
+      c.finish! if c.finish
+      c.drain! if c.drain
+    for si = 1, #names
+      if best[si] == nil or acc[si] < best[si]
+        best[si] = acc[si]
+  out = {}
+  for si = 1, #names
+    out[#out + 1] = { name: names[si], us: best[si] * 1e6 / iters }
+  out
+
+--- Mesure l'allocation de CHAQUE étape d'un cas, GC arrêté (octets par itération).
+-- Le relevé de tas (`collectgarbage "count"`, en Kio) encadre chaque appel
+-- d'étape. GC arrêté : aucune collecte ne fausse le relevé (cf.
+-- docs/agents/perf.md §22.1).
+-- PIÈGE MESURÉ : LuaJIT interne les chaînes identiques, donc une étape qui
+-- reconstruit la MÊME chaîne à chaque itération n'alloue qu'une fois et
+-- apparaîtrait à ~0 o/itération. On échauffe donc UN lot (chaînes constantes
+-- internées) puis on mesure UN lot : c'est la steady-state. Corollaire : les
+-- chaînes constantes (ligne IPC d'un même txid, ligne events d'un même qname)
+-- sont sous-estimées, les valeurs uniques par itération (seq nft, txid variable
+-- en production) sont exactes.
+-- @tparam table  c     Cas.
+-- @tparam number iters Nombre d'itérations (garder petit : cf. ci-dessus).
+-- @tparam number chunk Taille de lot.
+-- @treturn table Liste { name, bytes } dans l'ordre des étapes.
+measure_steps_alloc = (c, iters, chunk) ->
+  names = step_names c
+  acc = {}
+  for i = 1, #names
+    acc[i] = 0
+  -- Échauffement (un lot : interning des constantes) hors mesure.
+  for i = 1, chunk
+    c.pre i if c.pre
+    for step in *c.steps
+      step i
+  c.finish! if c.finish
+  c.drain! if c.drain
+  collectgarbage "collect"
+  collectgarbage "stop"
+  blocks = math.ceil iters / chunk
+  for b = 1, blocks
+    n = math.min chunk, iters - (b - 1) * chunk
+    for i = 1, n
+      c.pre i if c.pre
+      for si, step in ipairs c.steps
+        c0 = collectgarbage "count"
+        step i
+        acc[si] += (collectgarbage "count") - c0
+    c.finish! if c.finish
+    c.drain! if c.drain
+  collectgarbage "restart"
+  collectgarbage "collect"
+  out = {}
+  for si = 1, #names
+    out[#out + 1] = { name: names[si], bytes: math.max(0, acc[si]) * 1024 / iters }
+  out
+
+--- Exécute un cas avec les sondes par étape actives et rend leurs résultats.
+-- Les sondes étant installées AVANT le chargement des workers, elles couvrent
+-- tout le processus : lancer un passage séparé (option --stages).
+-- @tparam table  c     Cas.
+-- @tparam number iters Nombre d'itérations.
+-- @tparam number chunk Taille de lot.
+-- @tparam table  p     Jeu de sondes.
+-- @treturn table Résultats triés (cf. bench.stage_probe.results).
+run_probed = (c, iters, chunk, p) ->
+  p.reset!
+  blocks = math.ceil iters / chunk
+  for b = 1, blocks
+    n = math.min chunk, iters - (b - 1) * chunk
+    for i = 1, n
+      c.pre i if c.pre
+      for step in *c.steps
+        step i
+    c.finish! if c.finish
+    c.drain! if c.drain
+  p.results iters
 
 -- ── Profilage jit.profile ─────────────────────────────────────────────
 
@@ -705,6 +1084,9 @@ parse_args = (argv) ->
     gc_stepmul: nil
     gc_idle_step: nil
     gc_max_heap_mb: nil
+    stages: false
+    no_steps: false
+    micro: false
   }
   i = 1
   next_val = ->
@@ -718,7 +1100,11 @@ parse_args = (argv) ->
       when "--duration" then o.duration = tonumber next_val!
       when "--repeat" then o.repeat = tonumber next_val!
       when "--profile" then o.profile = next_val!
-      when "--only" then o.only = { next_val! }
+      when "--only"
+        o.only or= {}
+        for n in (next_val!)\gmatch "[^,]+"
+          o.only[#o.only + 1] = n
+      when "--micro" then o.micro = true
       when "--list" then o.list = true
       when "--jit-v" then o.jit_v = next_val!
       when "--jit-dump" then o.jit_dump = next_val!
@@ -727,6 +1113,8 @@ parse_args = (argv) ->
       when "--gc-stepmul" then o.gc_stepmul = tonumber next_val!
       when "--gc-idle-step" then o.gc_idle_step = tonumber next_val!
       when "--gc-max-heap" then o.gc_max_heap_mb = tonumber next_val!
+      when "--stages" then o.stages = true
+      when "--no-steps" then o.no_steps = true
     i += 1
   o
 
@@ -808,6 +1196,65 @@ render_profile = (lines, name, mode, p) ->
     lines[#lines + 1] = string.format("| %s | %d | `%s` |", format_pct(e.count, total), e.count, e.key)
   nil
 
+--- Part du second avis dans le profil `mixed` mesuré (§23.5 : r_utilisateurs
+-- 16 205 / 23 792 réponses client = 68,1 %). Sert à pondérer les deux cas
+-- `mixed_o2` (avec second avis) et `mixed_plain` (sans).
+MIX_O2_SHARE = 0.68
+
+--- Ajoute le tableau des étapes (temps + allocation) au rapport.
+-- @tparam table lines Lignes accumulées.
+-- @tparam table steps { nom_du_cas → { time, alloc } } (cf. main).
+-- @treturn nil
+render_steps = (lines, steps, o) ->
+  return nil unless next steps
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "## Coût par étape (µs/requête, minimum de #{math.max 1, o.repeat} passages ; octets/requête GC arrêté)"
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Chaque ligne est une étape du cycle réel du cas ; le total est celui du cycle mesuré sans instrumentation (tableau des mesures ci-dessus)."
+  order = {}
+  for name in pairs steps
+    order[#order + 1] = name
+  table.sort order
+  for name in *order
+    st = steps[name]
+    total_us = 0
+    for e in *st.time
+      total_us += e.us
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "### `#{name}` — total étapes #{string.format "%.2f", total_us} µs/requête"
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "| étape | µs/requête | % | octets/requête |"
+    lines[#lines + 1] = "|---|---|---|---|"
+    for i, e in ipairs st.time
+      bytes = st.alloc[i] and st.alloc[i].bytes or 0
+      lines[#lines + 1] = string.format("| `%s` | %.2f | %s | %.0f |",
+        e.name, e.us, format_pct(e.us, total_us), bytes)
+  nil
+
+--- Ajoute le tableau des sondes par fonction au rapport (option --stages).
+-- Les temps sont INCLUSIFS : une sonde peut en contenir une autre (cf.
+-- src/bench/stage_probe.moon).
+-- @tparam table lines  Lignes accumulées.
+-- @tparam table stages { nom_du_cas → résultats de stage_probe.results }.
+-- @treturn nil
+render_stages = (lines, stages) ->
+  return nil unless stages
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "## Sondes par fonction (option --stages, temps INCLUSIFS, cycle instrumenté)"
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Le wrapper ajoute ~0,2-0,4 µs par appel : ces totaux sont gonflés, les parts relatives sont lisibles."
+  for name, res in pairs stages
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "### `#{name}`"
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "| sonde | µs/requête | µs/appel | appels/requête | octets/requête |"
+    lines[#lines + 1] = "|---|---|---|---|---|"
+    for e in *res
+      continue if e.calls == 0
+      lines[#lines + 1] = string.format("| `%s` | %.2f | %.3f | %.2f | %.0f |",
+        e.label, e.us, e.us_call, e.calls_req, e.bytes)
+  nil
+
 -- ── Point d'entrée ───────────────────────────────────────────────────
 
 --- Exécute le banc : mesure(s) puis profilage éventuel, écrit le rapport.
@@ -821,6 +1268,8 @@ main = (argv) ->
 
   s = setup o
   cases = build_cases s
+  for c in *build_micro_cases s
+    cases[#cases + 1] = c
   by_name = {}
   for c in *cases
     by_name[c.name] = c
@@ -830,7 +1279,7 @@ main = (argv) ->
   if o.jit_dump
     require("jit.dump").on o.jit_dump_mode, o.jit_dump
 
-  names = o.only or ALL_CASES
+  names = o.only or (o.micro and MICRO_CASES) or ALL_CASES
   results = {}
   for name in *names
     c = by_name[name]
@@ -862,6 +1311,26 @@ main = (argv) ->
     for name in *names
       profiles[name] = profile_case by_name[name], o.profile, o.duration, o.chunk
 
+  -- Mesure par étape (temps + allocation) des cas qui déclarent des labels.
+  steps = {}
+  unless o.no_steps
+    for name in *names
+      c = by_name[name]
+      continue unless c.labels and #c.labels == #c.steps
+      run_case c, o.warmup, o.chunk if o.warmup > 0
+      steps[name] = {
+        time:  measure_steps c, o.iters, o.chunk, math.max(1, o.repeat)
+        alloc: measure_steps_alloc c, o.chunk, o.chunk
+      }
+
+  -- Sondes par étape (--stages), même cycle instrumenté.
+  stages = nil
+  if s.probes
+    stages = {}
+    for name in *{"mixed_o2", "mixed_plain"}
+      c = by_name[name]
+      stages[name] = run_probed c, o.iters, o.chunk, s.probes if c
+
   if o.jit_v
     require("jit.v").off!
   if o.jit_dump
@@ -880,6 +1349,18 @@ main = (argv) ->
       failures[#failures + 1] = "so_cycle : #{r.verdicts} verdicts pour #{r.iters} cycles"
     if r.name == "response" and r.verdicts != r.iters
       failures[#failures + 1] = "response : #{r.verdicts} verdicts pour #{r.iters} paquets"
+    -- Cycle mixed : 1 question acceptée, 1 réponse A (verdict différé), et pour
+    -- le second avis 1 réponse B (NF_DROP) ; un seul verdict posé par requête.
+    if r.name == "mixed_o2"
+      unless (r.rets[NF_ACCEPT] or 0) == r.iters and (r.rets[-1] or 0) == r.iters and (r.rets[NF_DROP] or 0) == r.iters
+        failures[#failures + 1] = "mixed_o2 : retours #{render_rets r.rets} (attendu 1=#{r.iters} -1=#{r.iters} 0=#{r.iters})"
+      if r.verdicts != r.iters
+        failures[#failures + 1] = "mixed_o2 : #{r.verdicts} verdicts pour #{r.iters} requêtes"
+    if r.name == "mixed_plain"
+      unless (r.rets[NF_ACCEPT] or 0) == r.iters and (r.rets[-1] or 0) == r.iters
+        failures[#failures + 1] = "mixed_plain : retours #{render_rets r.rets} (attendu 1=#{r.iters} -1=#{r.iters})"
+      if r.verdicts != r.iters
+        failures[#failures + 1] = "mixed_plain : #{r.verdicts} verdicts pour #{r.iters} requêtes"
 
   lines = {}
   lines[#lines + 1] = "# Micro-banc hot path — #{os.date "%Y-%m-%dT%H:%M:%S"}"
@@ -893,6 +1374,19 @@ main = (argv) ->
   lines[#lines + 1] = "- paquet question : #{#s.pkt_question} o ; réponse A (8 A) : #{#s.pkt_resp_a} o ; réponse B : #{#s.pkt_resp_b} o"
   lines[#lines + 1] = "- duplication émise (stub raw_send) : #{dup_sent} ; verdicts posés (stub libnfq) : #{verdicts}"
   render_results lines, results, o
+  render_steps lines, steps, o
+  render_stages lines, stages
+  -- Total mixte pondéré (68 % avec second avis, 32 % sans, cf. §23.5).
+  o2 = nil
+  plain = nil
+  for r in *results
+    o2 = r.secs * 1e6 / r.iters if r.name == "mixed_o2"
+    plain = r.secs * 1e6 / r.iters if r.name == "mixed_plain"
+  if o2 and plain
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = string.format(
+      "**Total par requête `mixed` pondéré** (#{MIX_O2_SHARE} × `mixed_o2` + %s × `mixed_plain`) : **%.1f µs** (moyenne des passages ; minimum par lot : voir tableau).",
+      1 - MIX_O2_SHARE, MIX_O2_SHARE * o2 + (1 - MIX_O2_SHARE) * plain)
   if next profiles
     lines[#lines + 1] = ""
     lines[#lines + 1] = "## Profilage jit.profile"
@@ -916,4 +1410,6 @@ main = (argv) ->
 
 { :parse_args, :main, :encode_name, :build_query, :build_answer, :ipv4_udp,
   :build_question_packet, :build_response_packet, :top_n, :format_pct,
-  :BENCH_RULES, :ALL_CASES }
+  :BENCH_RULES, :ALL_CASES, :MICRO_CASES, :build_micro_cases, :step_names,
+  :measure_steps, :measure_steps_alloc, :run_probed, :install_probes,
+  :MIX_O2_SHARE }

@@ -97,12 +97,32 @@ local mac2s
 mac2s = require("ipparse.l2.ethernet").mac2s
 local ip2s
 ip2s = require("ipparse.l3.ip").ip2s
+local MAC_STR_MAX = 64
+local _mac_str_cache = { }
+local _mac_str_n = 0
 local mac_raw_to_str
 mac_raw_to_str = function(mac_raw)
   if not (mac_raw and #mac_raw == 6) then
     return "00:00:00:00:00:00"
   end
-  return mac2s(mac_raw)
+  local hit = _mac_str_cache[mac_raw]
+  if hit then
+    return hit
+  end
+  local s = mac2s(mac_raw)
+  if _mac_str_n >= MAC_STR_MAX then
+    _mac_str_cache = { }
+    _mac_str_n = 0
+  end
+  _mac_str_cache[mac_raw] = s
+  _mac_str_n = _mac_str_n + 1
+  return s
+end
+local _HEX2 = { }
+local _HEX1 = { }
+for i = 0, 255 do
+  _HEX2[i] = string.format("%02x", i)
+  _HEX1[i] = string.format("%x", i)
 end
 local ip_raw_to_str
 ip_raw_to_str = function(ip_raw)
@@ -308,7 +328,7 @@ encode_msg = function(txid, ip_raw, src_port, mac_raw, resolver_ip_raw, refused,
       response_ids_hex = to_hex(table.concat(response_ids, ","))
     end
   end
-  local line = IPC_VERSION .. "|" .. string.format("%02x", msg_type) .. "|" .. tostring(tonumber(txid) or 0) .. "|" .. client_ip .. "|" .. tostring(tonumber(src_port) or 0) .. "|" .. resolver_ip .. "|" .. mac_raw_to_str(mac_raw) .. "|" .. to_hex(reason) .. "|" .. to_hex(rule_id) .. "|" .. timeout .. "|" .. tostring(bench) .. "|" .. string.format("%x", mods_bits) .. "|" .. response_ids_hex .. "|" .. tostring(qproc) .. "\n"
+  local line = IPC_VERSION .. "|" .. (_HEX2[msg_type] or string.format("%02x", msg_type)) .. "|" .. tostring(tonumber(txid) or 0) .. "|" .. client_ip .. "|" .. tostring(tonumber(src_port) or 0) .. "|" .. resolver_ip .. "|" .. mac_raw_to_str(mac_raw) .. "|" .. to_hex(reason) .. "|" .. to_hex(rule_id) .. "|" .. timeout .. "|" .. (bench == 0 and "0" or tostring(bench)) .. "|" .. (_HEX1[mods_bits] or string.format("%x", mods_bits)) .. "|" .. response_ids_hex .. "|" .. (qproc == 0 and "0" or tostring(qproc)) .. "\n"
   if #line > IPC_MAX_LINE then
     return nil
   end
@@ -347,7 +367,12 @@ decode_msg = function(raw)
   if not (raw and #raw > 0) then
     return nil, "empty"
   end
-  local line = raw:gsub("\n+$", "")
+  local line
+  if raw:byte(#raw) == 10 then
+    line = (raw:gsub("\n+$", ""))
+  else
+    line = raw
+  end
   local parts = split_fields(line)
   if not (#parts >= 11) then
     return nil, "field_count"

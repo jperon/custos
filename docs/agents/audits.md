@@ -4518,3 +4518,19 @@ non mesurés (hors série) ; les 1,8 ms/requête non attribués ne sont pas
 identifiés ; valeur de délestage exacte inconnue à l'unité (rate-limiting,
 `shed_total` par worker) ; résolveurs non instrumentables ;
 `events`/`mac-lrn` sous-estimés aux paliers saturés.
+
+### CPU par requête des workers questions et réponses (branche `d-prof2`, 2026-11-13)
+
+Aucune régression d'audit : deux optimisations mesurées du chemin chaud, avec
+équivalence prouvée par test. (1) `dup_query.build_udp` construit le paquet
+dupliqué du second avis **par recopie** du paquet d'origine (réécriture de l'IP
+destination seule, checksums `lib.checksums`) au lieu de reconstruire puis
+sérialiser les objets ipparse : 3,38 → 0,23 µs/appel, sortie identique octet à
+octet (IPv4, IPv6, bourrage Ethernet, familles, TCP). (2) `lib.packet_parsing.
+ip2s` mémoïse les IPv4 (cache borné 512) et `ipc.encode_msg`/`lib.ipc_hex`
+remplacent `string.format` et les motifs Lua par des tables et des boucles
+d'octets (MAC mémoïsée, hex de msg_type/modificateurs, `is_valid_timeout` ×16
+par réponse) : lignes IPC et décodage identiques caractère pour caractère. A/B
+alterné : cycle `mixed` complet 60,6 → 49,2 µs/requête (−18,8 %). Banc, tableau
+des étapes et pistes hors périmètre : `docs/agents/perf.md` §26.
+

@@ -3480,3 +3480,179 @@ avant / max pendant / après) :
   pendant le drain, hors fenêtre CPU) — même limite qu'en §21.8.
 - Une seule source (`servus`), deux destinations IPv4, pas d'IPv6 temporaire,
   pas de client réel multiple.
+
+## 26. Réduction du CPU par requête des workers questions et réponses (2026-11-13, branche `d-prof2`)
+
+Demande : à 700 q/s `mixed`, la cible consomme 1,43 ms CPU/requête dans `dns-q*`
+et 1,55 dans `resp-q*` (§23.7), soit 2,98 ms pour les deux, et le CPU agrégé
+sature (§23.4) ; pour tenir 1000 q/s il faudrait ≈ 2,5 ms **au total** (nft
+compris). Cette section étend le banc hot path pour **mesurer le cycle `mixed`
+complet par requête, étape par étape**, classe les postes, puis optimise les
+plus gros postes **dans le périmètre autorisé** (worker questions/réponses,
+`src/lib/*`, `src/dns_*`, `src/dup_query*`, `src/ipc.moon`, `src/bench/*`).
+Les modules `src/lib/moontastik` (ipparse), `src/nft_queue.moon`,
+`src/filter/*` et `src/response_inject.moon` sont hors périmètre : leurs postes
+sont mesurés et listés, pas modifiés. Tout est fait en local (aucune connexion
+à `custos.lan`) ; rapport complet : **`tmp/prof2_report.md`**.
+
+### 26.1 Le banc : cycle `mixed` complet, étapes et micro-cas
+
+`make bench-hotpath` gagne trois instruments (code : `src/bench/hotpath.moon`
+et `src/bench/stage_probe.moon` ; usage : `src/bench/README.md`) :
+
+| Élément | Ce qu'il mesure |
+|---|---|
+| cas `mixed_o2` | **une requête du profil mixed avec second avis** : question client → réponse A du résolveur (parquée) → réponse B du validateur (`classify`, `broadcast_verdict` — bus armé en écriture, `take_parked`, `finalize_a` avec 8 A et 16 insertions nft). Le worker réponses lit le tube où le worker questions écrit, comme `main.moon`. |
+| cas `mixed_plain` | **une requête sans second avis** : question → réponse A seule (1 A, injection nft). |
+| tableau par étape | µs CPU et octets **par étape** des deux cas (`labels` des cas), mesurés par une passe dédiée (`--no-steps` pour la couper). |
+| 21 micro-cas (`--micro`) | **une fonction réelle par cas**, avec des paquets du profil préparés une fois : `parse_dns_packet` (question/A/B), `filter.decide_meta`, `ipc.write_msg`/`encode_msg`/`decode_msg`/`make_key`, `dup_query.build_udp`, `nft_queue.add_ip4`, `parse_answers`, `patch_modified_dns`, `classify`, `encode_verdict`, `corr_key`, `ip2s`, `write_event`, `write_learn_msg`, `user_for_mac`, `get_pending_entry`, `is_valid_timeout`. |
+| sondes `--stages` | temps **inclusif** par fonction des modules appelés (`src/bench/stage_probe.moon`), appels/requête et octets. Wrapper ~0,2-0,4 µs/appel qui désooptimise le chemin : classement relatif seulement. |
+
+Le poids du profil est **68 % / 32 %** (`mixed_o2` / `mixed_plain`), d'après la
+part `r_utilisateurs` de §23.5 (16 205 / 23 792 réponses client = 68,1 %). Le
+rapport publie le « total par requête `mixed` pondéré ».
+
+Protocole de mesure retenu après constat du bruit (machine partagée) :
+`HP_ITERS=100000 HP_REPEAT=5 HP_TASKSET=<cœur peu chargé>`, métrique = **minimum
+de lot** (64 paquets), A/B **alterné** (A,B,A,B) et médiane des passages ;
+témoins = les cas non visés. À 20 000 itérations la dispersion inter-runs atteint
+±10 % et masque un gain de 4-5 % ; à 100 000 elle tombe à ±2 % sur `mixed_o2`.
+
+Deux pièges de mesure rencontrés, en plus de ceux de §22.1 :
+
+- **l'allocation par étape est faussée par l'interning des chaînes** : une étape
+  qui reconstruit la même chaîne à chaque itération n'alloue qu'une fois. Le
+  banc échauffe donc un lot (interning des constantes) puis mesure **un** lot ;
+  corollaire : les lignes à contenu constant (même txid, même qname) sont
+  sous-estimées, les valeurs uniques par itération (seq nft) sont exactes ;
+- **les µs par étape incluent le GC des déchets de l'étape précédente** : le
+  premier poste de chaque itération (le handler question) porte une part du GC
+  du cycle précédent (mesuré : +4 à +6 µs entre `question` seul, 21,8 µs, et
+  `q_handler` dans `mixed_o2`, 26,9 µs avant correctifs).
+
+### 26.2 Classement des étapes (µs par requête `mixed_o2`, avant → après)
+
+µs/appel mesurées par les micro-cas (total os.clock, GC actif, `HP_REPEAT=3`,
+une fonction réelle par ligne), multipliées par le nombre d'appels par requête
+relevé par les sondes. « périmètre » = modifiable dans cette branche.
+
+| # | étape | appels/req | µs/req avant | µs/req après | périmètre |
+|---|---|---|---|---|---|
+| 1 | `nft_queue.add_ip4`/`add_mac4` (`build_line` + `enqueue`) | 16 | **11,2** | 11,2 | non (`nft_queue.moon`) |
+| 2 | `parse_dns_packet` réponse B du validateur (8 RR) | 1 | 5,0 | 5,0 | non (ipparse) |
+| 3 | `parse_dns_packet` réponse A (8 RR) | 1 | 5,0 | 5,0 | non (ipparse) |
+| 4 | `filter.decide_meta` (moteur de règles inclus) | 1 | 4,8 | 4,8 | non (`filter/`) |
+| 5 | `ipc.decode_msg` (tube question→réponse) | 1 | 2,8 | 2,7 | **oui** |
+| 6 | `dup_query.build_udp` (duplication validateur) | 1 | 2,6 | **0,3** | **oui** |
+| 7 | `parse_answers` (8 RR) | 1 | 2,4 | **1,0** | **oui** |
+| 8 | `parse_dns_packet` question client | 1 | 2,2 | 2,2 | non (ipparse) |
+| 9 | `ipc.write_msg` (encodage 14 champs + `write`) | 1 | 1,8 | **1,2** | **oui** |
+| 10 | `dns_ede.patch_modified_dns` (strip HTTPS + EDE) | 1 | 1,3 | 1,3 | **oui** |
+| 11 | `ipc.encode_msg` seul | 1 | 1,3 | **0,8** | **oui** |
+| 12 | `is_valid_timeout` (une fois par ligne nft) | 16 | 1,1 | **0,45** | **oui** |
+| 13 | `worker_questions.write_event` (ligne TSV) | 1 | 0,6 | 0,6 | **oui** |
+| 14 | `dns_classify.classify` | 1 | 0,5 | 0,5 | **oui** |
+| 15 | `second_opinion.encode_verdict` (bus) | 1 | 0,4 | 0,4 | oui (via `worker_responses`) |
+| 16 | `second_opinion.corr_key` | 2 | 0,4 | 0,4 | oui (via `worker_responses`) |
+| 17 | `lib.packet_parsing.ip2s` | ~11 | 3,3 | **0,4** | **oui** |
+| 18 | `write_learn_msg` (22 o tamponnés) | 1 | 0,3 | 0,3 | **oui** |
+| 19 | `auth.sessions.user_for_mac` | 3 | 0,6 | 0,6 | non (`auth/`) |
+| 20 | `ipc.get_pending_entry` + `consume` (clés) | 3 | 0,3 | 0,3 | **oui** |
+
+Les lignes 1-4 (26 µs, **34 %** de la requête) sont hors périmètre ; les
+postes 5-17 représentaient ≈ 14 µs, dont ≈ 7 µs ont été récupérées ci-dessous.
+Sur les 16 lignes nft, `to_hex` pèse 3,9 % des échantillons de `jit.profile` et
+`nft_queue.flush` (concaténation + `write`) 3,9 % : ce sont les deux plus gros
+postes du worker réponses après le parse.
+
+### 26.3 Correctifs appliqués (un commit par optimisation)
+
+| Correctif | Fichier | Gain sur l'étape (mesuré) | Gain cycle `mixed_o2` (A/B) | Commit |
+|---|---|---|---|---|
+| Duplication validateur par **recopie du paquet** (au lieu de reconstruire les objets ipparse puis sérialiser) + mémo `s2ip` du validateur, checksums via `lib.checksums` | `src/dup_query.moon:20-48,106-170`, `src/worker_questions.moon:138` | `build_udp` 3,38 → **0,23 µs/appel** (−93 %) ; 1 026 → 322 o/req ; `pcall s2ip` 0,40 µs → 0 | 83,2 → **75,5 µs** (−9,3 %), 3 paires, 20 000 iters | `4eb7322` |
+| Conversions d'adresses et d'encodage : `ip2s` IPv4 **mémoïsé** (cache borné 512), MAC mémoïsée, tables hex pour msg_type/modificateurs, validateurs IPC (`is_valid_timeout` 16×/réponse, `is_ipv4_str`, `is_valid_mac`) et retrait du `\n` final de `decode_msg` en boucle d'octets | `src/lib/packet_parsing.moon:14-49`, `src/ipc.moon:104-136,278-300,308-313`, `src/lib/ipc_hex.moon:126-205` | `parse_answers` 2,0 → **0,4 µs** (−80 %) ; `encode_msg` 1,4 → **0,8** (−43 %) ; `is_valid_timeout` 0,067 → **0,027** (−60 %) ; `ip2s` 0,30 → 0,03 ; `decode_msg` −5 % | 65,1 → **61,1 µs** (−6,1 %), 3 passages, 100 000 iters | `1922b0d` |
+
+Aucun changement de comportement observable : la ligne IPC produite est
+**identique caractère pour caractère** (test dédié), le paquet dupliqué est
+**identique octet à octet** au paquet reconstruit par ipparse (IPv4, IPv6,
+bourrage Ethernet, familles, TCP), et les validateurs réécrits sont comparés
+aux motifs historiques sur corpus. `make test` : **3 268 succès / 0 échec**
+(+10 cas).
+
+### 26.4 Bilan mesuré (A/B alterné, `HP_ITERS=100000`, min de lot, médiane de 2 paires)
+
+| cas | avant | après | Δ |
+|---|---|---|---|
+| `mixed_o2` (avec second avis) | 73,7 µs | **57,4 µs** | **−22,1 %** |
+| `mixed_plain` (sans second avis) | 32,9 µs | 31,9 µs | −3,0 % |
+| **total `mixed` pondéré (68/32)** | **60,6 µs** | **49,2 µs** | **−18,8 %** |
+| allocation `mixed_o2` (GC arrêté) | 30 791 o | 30 087 o | −2,3 % |
+
+Coût par étape du cycle (µs/requête, même protocole, `HP_REPEAT=3`) :
+
+| étape | `mixed_o2` avant | après | `mixed_plain` avant | après |
+|---|---|---|---|---|
+| `q_handler` (parse + filtre + IPC + events/learn + duplication) | 26,9 | **22,1** | 18,6 | **17,6** |
+| `q_flush` (tampons events/learn) | 1,6 | 1,6 | 1,5 | 1,5 |
+| réponse A (parquage ou finalisation) | 20,0 | 20,7 | 25,0 | **23,4** |
+| réponse B validateur (verdict + finalize 8 A) | 31,6 | 32,5 | — | — |
+| `r_flush` (verdicts différés + ACK nft) | 5,7 | 6,1 | 3,3 | 3,2 |
+| **total des étapes** | **85,7** | **83,0** | **48,5** | **45,7** |
+| **total hors instrumentation (min de lot)** | **73,7** | **57,4** | **32,9** | **31,9** |
+
+Les étapes `r_a_park`/`r_b_verdict`/`r_flush` restent au niveau du bruit
+(±5 %) : leur contenu est dominé par les postes hors périmètre (lignes nft,
+parse ipparse) et par le GC, dont la répartition entre étapes est arbitraire
+(§26.1) ; c'est le total hors instrumentation qui fait foi, et le gain est
+concentré sur `q_handler` (−18 %, cohérent avec `build_udp` et `encode_msg`
+qui y vivent).
+
+### 26.5 Estimation sur la cible et plafond restant
+
+Hypothèse : le micro-banc x86-64 et la cible A55 se rapportent par un facteur
+global constant (§18.2) — calé ici sur l'état **avant** (60,6 µs locaux ↔
+2,98 ms mesurées pour `dns`+`resp` à 700 `mixed`, §23.7, soit 49 µs locales par
+ms cible). Le total pondéré après correctifs (49,2 µs) donne **≈ 2,42 ms** pour
+`dns`+`resp`, soit **≈ 3,1 ms** avec les 0,67 ms de `nft` : la cible 1000 q/s
+(≈ 2,5 ms au total) n'est **pas** atteinte, mais l'écart passe de 3,77 à
+≈ 3,1 ms (−18 %).
+
+Le reste du coût local est hors périmètre et se répartit ainsi (µs/requête
+`mixed_o2`, après correctifs) : **lignes nft 11,2** (23 %), **parse ipparse
+12,4** (25 %), **filtre 4,8** (10 %), écriture du tube nft + ACK 4 (8 %),
+`patch_modified_dns` + `parse_answers` + `inject` 3,5 (7 %), GC 19 % des
+échantillons. Les leviers restants, chiffrés mais **non appliqués** :
+
+1. **`nft_queue`** (hors périmètre) : `build_line` fait 2 `to_hex` et 3
+   `tostring` par ligne, 16 lignes par réponse. Mémoïser `to_hex(rule_id)` et le
+   corrélateur par (règle, transaction) dans `nft_queue` supprimerait ~30
+   conversions par réponse (≈ 2-3 µs/requête) ; `flush` reconstruit une table de
+   tranches par lot (`table.concat` + un `write` de 2,5 Kio).
+2. **ipparse** (sous-module, hors périmètre) : `parse_rrs` + `parse_rr` = 8,4 %
+   des échantillons pour les deux réponses ; le parse de la réponse B ne sert
+   qu'à `classify` (rcode, A/AAAA, CNAME) — un parse paresseux limité aux
+   sections answer/question éviterait les RR inutiles.
+3. **`response_inject.inject`** (hors périmètre) : `rr_timeout` (1,1 %) appelle
+   `tonumber`+`floor`+`max` par adresse ; le résultat ne dépend que du TTL, qui
+   se répète (8 adresses au même TTL) : une mémo par TTL suffirait.
+4. **Dans le périmètre, sous le seuil de 3 %** (mesuré, non commité) :
+   `strip_rrtypes` qui reconstruit le payload même quand aucun RR n'est retiré
+   (0,9 → ~0,4 µs attendu) ; `txid_hex` (`string.format "0x%04x"`) et `qnames`
+   (`table.concat`) calculés par réponse alors qu'ils ne servent qu'aux logs
+   DEBUG (~0,5 µs) ; `second_opinion.corr_key` (2 `string.format`/requête) ;
+   `write_event` en concaténation directe (~0,2 µs).
+
+### 26.6 Vérifications et limites
+
+- `nix develop --command bash -c "make all && make check && make test"` :
+  **3 268 succès / 0 échec / 0 erreur / 0 pending** (`tmp/test.log`).
+  `.lua` compilés commités avec leurs `.moon` ; aucun autre `.lua` modifié.
+- Aucun accès réseau : le banc ne parle ni NFQUEUE ni au pont (stubs `libnfq`,
+  `raw_send`, `run_queue` ; table nft forcée inexistante, cf. §18.1).
+- **Limites** : µs absolues x86-64 (les parts seules sont transposables) ;
+  machine partagée (d'où le minimum de lot et l'A/B alterné) ; le gain `ip2s`
+  dépend de la réutilisation des adresses (majorant : le banc réutilise 8
+  adresses fixes) ; le bus de verdicts est armé avec **un** fd d'écriture
+  (production : un par worker réponses) ; l'estimation cible de §26.5 est un
+  produit scalaire, pas une mesure sur la cible (aucune connexion cette
+  session) ; le CPU du worker `nft` (0,67 ms/requête) n'est pas traité ici.

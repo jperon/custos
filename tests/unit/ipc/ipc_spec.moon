@@ -488,6 +488,32 @@ describe "ipc", ->
       assert.is_nil result
 
   -- ── 20. encode_msg avec benchmark_ms > 0 ─────────────────────────────
+  -- Encodage réécrit sans `string.format` pour les petits entiers et avec mémo
+  -- MAC (docs/agents/perf.md §26) : la ligne produite doit rester identique
+  -- caractère pour caractère, et le décodage ne doit plus dépendre d'un `\n`
+  -- final (drain_lines le retire déjà).
+  describe "encode_msg : format stable et décodage sans \n final", ->
+    it "produit exactement la ligne attendue (msg_type, mac, mods, bench, qproc)", ->
+      m_ipc = fresh_ipc!
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+        false, "Allowed", nil, "r_x", "2m", { validate: true }
+      -- msg_type 0x41 = MSG_IPV4 ; bits de modificateurs = 0 (aucun
+      -- register_modifier dans ce module frais) ; champs vides préservés.
+      expected = "v1|41|4660|192.168.1.42|54321|1.1.1.3|aa:bb:cc:dd:ee:ff|" ..
+        "416c6c6f776564|725f78|2m|0|0||0\n"
+      assert.same expected, msg
+
+    it "décode une ligne SANS \n final comme avec", ->
+      m_ipc = fresh_ipc!
+      msg = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW,
+        false, "Allowed", nil, "r_x", "2m", { validate: true }
+      stripped = msg\sub 1, #msg - 1
+      a, err_a = m_ipc.decode_msg stripped
+      b, err_b = m_ipc.decode_msg msg
+      assert.is_nil err_a
+      assert.is_nil err_b
+      assert.same a, b
+
   describe "encode_msg avec benchmark_ms", ->
     it "benchmark_ms encodé et décodé", ->
       m_ipc = fresh_ipc!

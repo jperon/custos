@@ -135,7 +135,7 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers, dns_id) ->
   validator = picker ip.version, dns_id, l4.spt
   return unless validator
   dns_raw = raw\sub l4.data_off, l4.off + l4.len - 1
-  pkt = dup_query.build_udp ip, l4, dns_raw, validator
+  pkt = dup_query.build_udp ip, l4, dns_raw, validator, raw
   return unless pkt
   raw_send.send fd, ip.version, pkt, validator
 
