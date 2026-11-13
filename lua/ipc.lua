@@ -367,12 +367,7 @@ decode_msg = function(raw)
   if not (raw and #raw > 0) then
     return nil, "empty"
   end
-  local line
-  if raw:byte(#raw) == 10 then
-    line = (raw:gsub("\n+$", ""))
-  else
-    line = raw
-  end
+  local line = raw:gsub("\n+$", "")
   local parts = split_fields(line)
   if not (#parts >= 11) then
     return nil, "field_count"

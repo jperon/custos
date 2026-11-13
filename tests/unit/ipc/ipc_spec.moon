@@ -107,6 +107,15 @@ describe "ipc", ->
       assert.is_true  decoded.ipv4
       assert.is_false decoded.refused
 
+    it "decode_msg tolère un ou plusieurs retours à la ligne finaux", ->
+      m_ipc   = fresh_ipc!
+      msg     = m_ipc.encode_msg TXID, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW
+      for suffix in *{ "", "\n", "\n\n" }
+        decoded = m_ipc.decode_msg msg .. suffix
+        assert.is_not_nil decoded
+        assert.equals TXID, decoded.txid
+        assert.equals "1.1.1.3", decoded.resolver_ip_str
+
   -- ── 2. encode/decode IPv4 sans MAC (nil) ─────────────────────────────
   describe "encode/decode IPv4 sans MAC", ->
     it "mac nil → 00:00:00:00:00:00", ->
