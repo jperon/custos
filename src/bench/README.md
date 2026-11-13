@@ -88,7 +88,8 @@ serait jamais mesuré.
 des arguments réels (paquets du profil préparés une fois) : `parse_dns_packet`
 (question / réponse A / réponse B), `filter.decide_meta`, `ipc.write_msg`,
 `ipc.encode_msg`, `ipc.decode_msg`, `ipc.make_key`, `dup_query.build_udp`,
-`nft_queue.add_ip4`, `parse_answers`, `patch_modified_dns`,
+`nft_queue.add_ip4`, `nft_queue.add_ip4_many` (8 adresses : une ligne par set,
+cf. `docs/agents/perf.md` §29a), `parse_answers`, `patch_modified_dns`,
 `dns_classify.classify`, `encode_verdict`, `corr_key`, `ip2s`,
 `write_event`, `write_learn_msg`, `user_for_mac`, `get_pending_entry`. C'est le
 classement « où passe le temps » : chaque étape rend un nombre (valeur

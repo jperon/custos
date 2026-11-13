@@ -27,9 +27,10 @@ for i = 0, 255
   HEX_BYTE[string.char(i)] = string.format "%02x", i
 
 -- ── Cache de conversion (borné) ──────────────────────────────────────
--- Les mêmes valeurs reviennent des dizaines de fois par paquet : chaque
--- réponse nft encode `rule_id` + corrélateur sur SES 16 lignes (32
--- conversions), et `rule_id`/raison sont identiques d'un paquet à l'autre.
+-- Les mêmes valeurs reviennent des dizaines de fois par paquet : chaque ligne
+-- nft encode `rule_id` + corrélateur (une ligne par set et par timeout depuis
+-- les insertions groupées, 16 lignes avant ; cf. docs/agents/perf.md §29a), et
+-- `rule_id`/raison sont identiques d'un paquet à l'autre.
 -- 8 entrées maximum, purge complète au débordement : mémoire bornée à
 -- 8 entrées × (256 + 512) o, aucune invalidation possible (les deux
 -- fonctions sont pures : même entrée → même sortie). Mesure chiffrée :

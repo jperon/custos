@@ -584,10 +584,10 @@ describe "nft_queue écriture IPC et variantes (branches d'erreur)", ->
     close_pipe p
 
   it "enqueue alloue < 300 o par ligne (build_line sans table intermédiaire)", ->
-    -- Le hot path enfile 16 lignes par réponse Tailscale (cf. docs/agents/perf.md
-    -- §19) : build_line allouait une table de 9 champs + une string concat par
-    -- ligne. Seuil calibré sur la mesure GC arrêté dans ce spec (avant correctif 373 o,
-    -- après 225 o) avec marge des deux côtés.
+    -- Le hot path enfilait 16 lignes par réponse Tailscale (cf.
+    -- docs/agents/perf.md §19) : build_line allouait une table de 9 champs +
+    -- une string concat par ligne. Seuil calibré sur la mesure GC arrêté dans
+    -- ce spec (avant correctif 373 o, après 225 o) avec marge des deux côtés.
     q = fresh_with_libc ((fd, data, len) ->
       writes += 1
       len

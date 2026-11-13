@@ -200,7 +200,8 @@ reset_ack_state = ->
 build_line = (kind, key, ip, rule_id, timeout, corr, item_seq, widx) ->
   -- Concaténation directe plutôt que table.concat + `.. "\n"` : la forme à
   -- table allouait un tableau de 9 champs + une string intermédiaire par
-  -- ligne (16 lignes par réponse Tailscale, cf. docs/agents/perf.md §22).
+  -- ligne (cf. docs/agents/perf.md §22 ; les réponses groupées n'en émettent
+  -- plus qu'une par set, cf. add_many).
   -- Le "\n" est le dernier opérande : une seule string allouée par ligne.
   LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. ip .. "|" ..
     to_hex(rule_id or "") .. "|" .. timeout .. "|" .. tostring(item_seq) ..
