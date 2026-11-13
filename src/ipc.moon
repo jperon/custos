@@ -307,9 +307,7 @@ write_refused_msg = (pipe_wfd, txid, ip_raw, src_port, mac_raw, resolver_ip_raw,
 
 decode_msg = (raw) ->
   return nil, "empty" unless raw and #raw > 0
-  -- Le \n final est déjà retiré par `drain_lines` (chemin chaud) : ne payer le
-  -- motif que si l'appelant passe une ligne brute terminée par un retour.
-  line = if raw\byte(#raw) == 10 then (raw\gsub "\n+$", "") else raw
+  line = raw\gsub "\n+$", ""
   parts = split_fields line
   return nil, "field_count" unless #parts >= 11
 

@@ -103,62 +103,38 @@ pick_resolver = (resolvers, version) ->
   pick version, 0, 0
 
 --- Construit le paquet IP dupliqué (UDP uniquement) vers `validator_ip`.
--- Deux chemins, MÊME sortie (égalité octet à octet vérifiée par
--- tests/unit/dup_query_spec.moon) :
---   * `raw` fourni (production) : recopie du paquet d'origine, réécriture de la
---     seule IP destination, recalcul des checksums IP (v4) et L4 — une copie et
---     deux sommes, au lieu de reconstruire les objets ipparse puis de les
---     sérialiser ;
---   * sans `raw` : reconstruction par ipparse (API historique, tests).
+-- Recopie le paquet d'origine, réécrit la seule IP destination, recalcule les
+-- checksums IP (v4) et L4 : une copie et deux sommes, au lieu de reconstruire
+-- les objets ipparse puis de les sérialiser. La longueur du datagramme vient
+-- de l'en-tête UDP (le paquet d'origine peut porter du bourrage Ethernet
+-- au-delà).
 -- @tparam table   ip       En-tête IP parsé de la question (ipparse l3).
 -- @tparam table   l4       En-tête UDP parsé (champ .proto == "udp", .spt, .dpt).
 -- @tparam string  dns_raw  Payload DNS brut (question) à transmettre tel quel.
 -- @tparam string  validator_ip IP destination du validateur (même famille que ip).
--- @tparam[opt] string raw  Paquet IP d'origine (active le chemin par recopie).
+-- @tparam string  raw      Paquet IP d'origine (obligatoire).
 -- @treturn string|nil Octets du paquet IP (sans Ethernet), ou nil si non applicable.
-build_udp = (ip, l4, dns_raw, validator_ip, raw=nil) ->
-  return nil unless ip and l4 and dns_raw and validator_ip
+build_udp = (ip, l4, dns_raw, validator_ip, raw) ->
+  return nil unless ip and l4 and dns_raw and validator_ip and raw
   return nil unless l4.proto == "udp"
+  return nil unless l4.off and l4.len
   dst_raw = dst_raw_of validator_ip
   return nil unless dst_raw
   -- La famille de l'IP validateur doit correspondre à celle du paquet.
   return nil if ip.version == 4 and #dst_raw != 4
   return nil if ip.version == 6 and #dst_raw != 16
 
-  -- Chemin rapide : la longueur du datagramme vient de l'en-tête UDP (le paquet
-  -- d'origine peut porter du bourrage Ethernet au-delà).
-  if raw and l4.off and l4.len
-    total = l4.off - 1 + l4.len
-    if total > 0 and total <= #raw and total <= SCRATCH_SIZE
-      _scratch or= ffi.new "uint8_t[?]", SCRATCH_SIZE
-      ffi.copy _scratch, raw, total
-      -- Offset 0-based de l'IP destination : 16 en IPv4, 24 en IPv6.
-      ffi.copy _scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw
-      -- IPv6 n'a pas de checksum d'en-tête (RFC 8200 §3).
-      if ip.version == 4
-        fix_ip4_cksum _scratch, ip.payload_off or 20
-      fix_l4_cksum _scratch, total, l4.off - 1, ip.version, PROTO_UDP
-      return ffi.string _scratch, total
-
-  udp = new_udp { spt: l4.spt, dpt: l4.dpt, checksum: 0, data: dns_raw }
-  ip_pkt = new_ip {
-    version:     ip.version
-    v_ihl:       ip.v_ihl
-    tos:         ip.tos
-    id:          ip.id
-    ff:          ip.ff
-    ttl:         ip.ttl
-    options:     ip.options or ""
-    traffic_class: ip.traffic_class
-    flow_label:  ip.flow_label
-    hop_limit:   ip.hop_limit
-    src:         ip.src
-    dst:         dst_raw
-    protocol:    PROTO_UDP
-    next_header: PROTO_UDP
-    data:        udp
-  }
-  "#{ip_pkt}"
+  total = l4.off - 1 + l4.len
+  return nil unless total > 0 and total <= #raw and total <= SCRATCH_SIZE
+  _scratch or= ffi.new "uint8_t[?]", SCRATCH_SIZE
+  ffi.copy _scratch, raw, total
+  -- Offset 0-based de l'IP destination : 16 en IPv4, 24 en IPv6.
+  ffi.copy _scratch + (ip.version == 4 and 16 or 24), dst_raw, #dst_raw
+  -- IPv6 n'a pas de checksum d'en-tête (RFC 8200 §3).
+  if ip.version == 4
+    fix_ip4_cksum _scratch, ip.payload_off or 20
+  fix_l4_cksum _scratch, total, l4.off - 1, ip.version, PROTO_UDP
+  ffi.string _scratch, total
 
 --- Construit le paquet de RE-REQUÊTE (client → résolveur) à partir des en-têtes
 -- de la RÉPONSE captée (src=résolveur, dst=client). Inverse src/dst et ports ;

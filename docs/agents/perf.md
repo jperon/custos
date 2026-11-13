@@ -3657,6 +3657,30 @@ Le reste du coût local est hors périmètre et se répartit ainsi (µs/requête
   produit scalaire, pas une mesure sur la cible (aucune connexion cette
   session) ; le CPU du worker `nft` (0,67 ms/requête) n'est pas traité ici.
 
+### 26.7 Retours au code simple (branche `d-simpl2`, 2026-11-13)
+
+Après l'audit coût/bénéfice `tmp/simpl_report.md`, trois optimisations de
+§26.3 ont été ramenées au code antérieur, sans gain conservé qui les justifie.
+Mesure sur le banc (`HP_ITERS=50000 HP_REPEAT=2 HP_ONLY=mixed_o2,mixed_plain`,
+`tmp/d-simpl2/bench-before.log`/`bench-after.log`) : lot-min `mixed_o2`
+**61,6 µs avant et après** (moyenne de passage 79,5 → 81,1 µs, bruit de la
+machine partagée) ; `mixed_plain` 33,4 → **33,5 µs** (moyenne 44,5 µs). Aucune
+régression au-delà du bruit.
+
+- **`dup_query.build_udp`** (`4eb7322`, `src/dup_query.moon:105-137`) : le
+  repli par reconstruction ipparse n'avait plus d'appelant en production
+  (`src/worker_questions.moon:138` passe toujours `raw`) ; `raw` devient
+  obligatoire, le test compare à un paquet attendu construit hors du module
+  (ipparse) au lieu de comparer deux chemins du module.
+- **`dns_ede.strip_rrtypes`** (`55bd240`, `src/dns_ede.moon:347,383`) : retour
+  aux tables locales du commit parent `549560f` ; l'invariant de non-réentrance
+  des tables scratch module-level n'était vérifié par rien à l'exécution, pour
+  un gain de −5,9 % de lot-min `response` seulement.
+- **`ipc.decode_msg`** (`1922b0d`, `src/ipc.moon:308-310`) : retour au
+  `gsub "\n+$"` inconditionnel ; la branche « dernier octet = 10 » ne valait
+  que 0,14 % du budget et supposait que tous les appelants avaient déjà retiré
+  le retour à la ligne.
+
 
 ## 27. Où passe le CPU non attribué (≈ 1,8 ms/requête mixed) (2026-11-13, branche `d-sys`)
 

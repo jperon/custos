@@ -302,7 +302,8 @@ describe "worker_responses.finalize_a", ->
     -- finalize_a créait 3 closures par paquet (client_addr, inject_answers,
     -- patch_and_accept) + la table inject_opts (11 clés) : cf.
     -- docs/agents/perf.md §22. Seuil calibré sur la mesure GC arrêté dans
-    -- ce harnais (3897 → 3277 ; le strip scratch de dns_ede porte à 2710).
+    -- ce harnais (3897 → 3277 ; les tables scratch de dns_ede ont été
+    -- retirées, d-simpl2).
     state.last_seq = nil
     config = require "config"
     config.runtime = { benchmark: false }
