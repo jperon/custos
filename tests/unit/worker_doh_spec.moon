@@ -19,15 +19,46 @@ package.loaded["config"] = package.loaded["config"] or {
   sni:     {}
 }
 log_errors = {}
+log_records = {}
+-- Les stubs de log évaluent les thunks (comme le vrai log quand le niveau est
+-- actif) : les corps des closures de journalisation sont ainsi exécutés et
+-- couvrables, et les tests peuvent affirmer sur les champs journalisés.
+eval_fields = (thunk) ->
+  fields = if type(thunk) == "function" then thunk! else thunk
+  log_records[#log_records + 1] = fields if type(fields) == "table"
+  fields
 package.loaded["log"] = {
-  log_debug: (->), log_info: (->), log_warn: (->)
+  log_debug: (thunk) -> eval_fields thunk
+  log_info:  (thunk) -> eval_fields thunk
+  log_warn:  (thunk) -> eval_fields thunk
   log_error: (thunk) ->
     fields = if type(thunk) == "function" then thunk! else nil
     log_errors[#log_errors + 1] = fields
+    log_records[#log_records + 1] = fields if type(fields) == "table"
   debug: (->), info: (->), warn: (->), error: (->)
   rate_limited: (-> (->))
   set_action_prefix: (->)
 }
+--- Réinitialise les deux journaux (erreurs + enregistrements).
+reset_logs = ->
+  log_errors = {}
+  log_records = {}
+--- Présence d'un enregistrement portant l'action donnée.
+has_record = (action) ->
+  for r in *log_records
+    return true if type(r) == "table" and r.action == action
+  false
+--- Premier enregistrement portant l'action donnée, ou nil.
+get_record = (action) ->
+  for r in *log_records
+    return r if type(r) == "table" and r.action == action
+  nil
+--- Actions journalisées, concaténées (diagnostic d'assertion).
+record_actions = ->
+  parts = {}
+  for r in *log_records
+    parts[#parts + 1] = type(r) == "table" and tostring(r.action) or tostring(r)
+  table.concat parts, ","
 -- Comportements injectables : les modules sont chargés une seule fois par
 -- worker_doh (destructuration au require), donc les tests doivent passer par
 -- ces tables d'indirection plutôt que réassigner package.loaded après coup.
@@ -43,8 +74,14 @@ package.loaded["doh.upstream"]    = {
   probe_ipv6: (ip, port)      -> false
 }
 query_stub = { process_query: (raw, ip, mac, up, vlan) -> nil, "stub" }
+-- Enregistrements des décisions nft transmises à doh.query par `run`.
+captive_sets = {}
+wildcard_meta = nil
 package.loaded["doh.query"]       = {
   process_query: (raw, ip, mac, up, vlan) -> query_stub.process_query raw, ip, mac, up, vlan
+  set_wildcard_rules: (meta) -> wildcard_meta = meta
+  set_captive: (domain, ip4, ip6) ->
+    captive_sets[#captive_sets + 1] = { :domain, :ip4, :ip6 }
 }
 package.loaded["auth.cert_cache"] = {
   create_cache: (n, ttl) -> { set: (->), get: (-> nil), stats: (-> {size:0}) }
@@ -62,8 +99,23 @@ package.loaded["auth.ffi_wolfssl"] = {
   wrap: (sock, ctx) -> ssl_stub.wrap sock, ctx
   ALPN_PROTOCOLS: "h2,http/1.1"
 }
-package.loaded["lib.socket"]  = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
-package.loaded["lib.process"] = { fork_child: (-> 1) }
+-- lib.socket : table nommée, car worker_doh la capture au require — les tests
+-- `run`/`make_server*` reconfigurent tcp/tcp6/select par indirection.
+socket_stub = { tcp: (-> nil), tcp6: (-> nil), select: (-> {}, {}) }
+package.loaded["lib.socket"]  = socket_stub
+-- reap_one DOIT exister au require (destructuration) : les tests `run` s'arrêtent
+-- sur l'entrée de boucle (reap_one → nil → break) sans jamais accepter ni forker.
+process_stub = { fork_child: (-> 1), reap_one: (-> nil) }
+package.loaded["lib.process"] = process_stub
+-- upstream_select : capté par worker_doh au require. Stubbé le temps du chargement
+-- puis restauré (les autres specs ont besoin du module réel) ; les tests `run`
+-- pilotent les résultats via upstream_select_result/err (déclarés AVANT le
+-- tableau pour être capturés comme locals et non comme globales).
+upstream_select_result = nil
+upstream_select_err = "stub"
+upstream_select_stub = {
+  select: (opts) -> upstream_select_result, upstream_select_err
+}
 http_calls = {}
 http_stub = {
   read_request:      (conn, opts) -> nil, "stub"
@@ -85,7 +137,11 @@ package.loaded["lib.http"]    = {
     true
 }
 
+saved_upstream_select = package.loaded["doh.upstream_select"]
+package.loaded["doh.upstream_select"] = upstream_select_stub
 doh = require "worker_doh"
+-- Restaure immédiatement : seul worker_doh garde la référence au stub.
+package.loaded["doh.upstream_select"] = saved_upstream_select
 
 -- ── b64url_decode ─────────────────────────────────────────────────────────────
 
@@ -175,7 +231,9 @@ describe "worker_doh.handshake_should_continue", ->
 -- ── handle_h2 : plafond cumulé des DATA ─────────────────────────────────────
 
 -- Connexion factice : préface "SM\r\n\r\n" puis flux de frames brutes.
-make_h2_conn = (raw) ->
+-- opts.fail_after : après N envois réussis, `send` échoue (nil, "send_timeout")
+-- pour exercer les branches d'erreur d'écriture de handle_h2.
+make_h2_conn = (raw, opts={}) ->
   pos = 1
   line_idx = 0
   lines = { "SM", "" }
@@ -191,6 +249,8 @@ make_h2_conn = (raw) ->
       pos += #chunk
       chunk
     send: (data) =>
+      if opts.fail_after and #sent >= opts.fail_after
+        return nil, "send_timeout"
       sent[#sent + 1] = data
       #data
     _sent: -> table.concat sent
@@ -609,11 +669,31 @@ make_tls_stub = (opts={}) ->
   closed = false
   handshake_result = if opts.handshake_result == nil then true else opts.handshake_result
   handshake_err = opts.handshake_err
+  -- handshake_fn : contrôle complet de dohandshake (lever, non-réussite…).
+  -- lines/raw : préface HTTP/2 et frames brutes pour les tests de la branche PRI.
+  raw = opts.raw or ""
+  lines = opts.lines or {}
+  pos = 1
+  line_idx = 0
   {
-    dohandshake: -> handshake_result, handshake_err
+    dohandshake: ->
+      return opts.handshake_fn! if opts.handshake_fn
+      handshake_result, handshake_err
     selected_alpn: -> opts.alpn
-    receive: (mode) -> nil, "unused"
-    send: (data) -> sent[#sent + 1] = data; #data
+    -- Méthodes (`=>`) : worker_doh appelle conn\receive/conn\send, le self
+    -- implicite ne doit pas se substituer au mode/au payload.
+    receive: (mode) =>
+      if mode == "*l"
+        line_idx += 1
+        return lines[line_idx]
+      n = tonumber mode
+      return nil, "eof" if pos > #raw
+      chunk = raw\sub pos, pos + n - 1
+      pos += #chunk
+      chunk
+    send: (data) =>
+      sent[#sent + 1] = data
+      #data
     close: -> closed = true
     _sent: -> table.concat sent
     _closed: -> closed
@@ -624,7 +704,7 @@ describe "worker_doh.handle_doh_client — routage HTTP/1.1", ->
   capture = {}
   before_each ->
     capture = { sent: {}, processed: {}, read_opts: nil, io_timeout: nil }
-    log_errors = {}
+    reset_logs!
     cert_stub.load_static = (k, c) -> { ctx: true }
     ssl_stub.wrap = (sock, ctx) -> make_tls_stub {}
     query_stub.process_query = (raw, ip, mac, up, vlan) ->
@@ -802,3 +882,664 @@ describe "worker_doh.handle_h2 — frame trop longue", ->
     sent = conn._sent!
     expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,6)
     assert.equals expected_goaway, sent\sub -17
+
+-- ── Règles de chemin DoH (exportées, pures) ─────────────────────────────────
+
+describe "worker_doh — règles de chemin DoH", ->
+
+  it "is_doh_path : chemin non-string → false, sinon exact ou query string", ->
+    assert.is_false doh.is_doh_path nil
+    assert.is_false doh.is_doh_path 42
+    assert.is_true doh.is_doh_path "/dns-query"
+    assert.is_true doh.is_doh_path "/dns-query?dns=AAAB"
+    assert.is_false doh.is_doh_path "/dns-queryx"
+    assert.is_false doh.is_doh_path "/autre?dns=AAAB"
+
+  it "is_dns_message_content_type : non-string → false", ->
+    assert.is_false doh.is_dns_message_content_type nil
+    assert.is_false doh.is_dns_message_content_type 42
+    assert.is_true doh.is_dns_message_content_type "application/dns-message"
+
+  it "dns_from_query : chemin non-string → nil", ->
+    assert.is_nil doh.dns_from_query nil
+    assert.is_nil doh.dns_from_query 42
+    assert.is_not_nil doh.dns_from_query "/dns-query?dns=AAAB"
+
+-- ── dns_response_json : listes à plusieurs éléments ─────────────────────────
+
+describe "worker_doh — dns_response_json, listes multiples", ->
+
+  it "sépare questions et réponses multiples d'une virgule", ->
+    header = sp_dns ">H H H H H H", 0x1234, 0x8180, 2, 2, 0, 0
+    q = qname_example_dns .. sp_dns ">H H", 1, QCLASS_IN
+    rr = (ip) -> "\192\012" .. sp_dns ">H H I4 s2", 1, QCLASS_IN, 60, ip
+    raw = header .. q .. q .. rr(string.char(1,2,3,4)) .. rr(string.char(5,6,7,8))
+    json = doh.dns_response_json raw
+    assert.truthy json\find "\"Question\":[{\"name\":\"example.com\",\"type\":1},{\"name\":\"example.com\",\"type\":1}]", 1, true
+    assert.truthy json\find "\"data\":\"1.2.3.4\"},{", 1, true
+    assert.truthy json\find "{\"name\":\"example.com\",\"type\":1,\"TTL\":60,\"data\":\"5.6.7.8\"}", 1, true
+
+-- ── read_header_block (exportée) : branches d'erreur du bloc d'en-têtes ─────
+
+describe "worker_doh.read_header_block", ->
+  H2_PADDED = 0x8
+  H2_PRIORITY = 0x20
+  H2_END_HEADERS = 0x4
+  H2_CONTINUATION = 0x9
+
+  it "PADDED sur un payload vide → h2_headers_invalid", ->
+    flags = bit.bor H2_PADDED, H2_END_HEADERS
+    block, end_stream, err = doh.read_header_block make_h2_conn(""), 1, flags, ""
+    assert.is_nil block
+    assert.is_false end_stream
+    assert.equals "h2_headers_invalid", err
+
+  it "PRIORITY tronqué (< 5 octets) → h2_headers_invalid", ->
+    flags = bit.bor H2_PRIORITY, H2_END_HEADERS
+    block, end_stream, err = doh.read_header_block make_h2_conn(""), 1, flags, "abcd"
+    assert.is_nil block
+    assert.is_false end_stream
+    assert.equals "h2_headers_invalid", err
+
+  it "plus de 64 CONTINUATION → h2_headers_invalid (garde-fou)", ->
+    frames = {}
+    for _ = 1, 65
+      frames[#frames + 1] = h2_frame_raw H2_CONTINUATION, 0x0, 1, "x"
+    conn = make_h2_conn table.concat frames
+    block, end_stream, err = doh.read_header_block conn, 1, 0x0, "frag"
+    assert.is_nil block
+    assert.equals "h2_headers_invalid", err
+
+  it "CONTINUATION annonçant plus de 16 Ko → frame_too_large", ->
+    header = string.char(0xFF, 0xFF, 0xFF, H2_CONTINUATION, 0x0, 0, 0, 0, 1)
+    conn = make_h2_conn header
+    block, end_stream, err = doh.read_header_block conn, 1, 0x0, "frag"
+    assert.is_nil block
+    assert.equals "frame_too_large", err
+
+  it "flux interrompu pendant une CONTINUATION → h2_headers_invalid", ->
+    conn = make_h2_conn ""
+    block, end_stream, err = doh.read_header_block conn, 1, 0x0, "frag"
+    assert.is_nil block
+    assert.equals "h2_headers_invalid", err
+
+-- ── make_server4 / make_server6 (exportés) : branches socket stubées ────────
+
+make_srv_stub = (opts={}) ->
+  rec = { opts: opts }
+  {
+    setoption: (self, name, value) ->
+      rec.options = rec.options or {}
+      rec.options[name] = value
+      true
+    bind: (self, addr, port) ->
+      rec.bind = { addr, port }
+      if opts.bind_raise
+        error opts.bind_err or "bind failed"
+      elseif opts.bind_fail
+        nil, opts.bind_err or "address in use"
+      else
+        true
+    listen: (self, backlog) ->
+      rec.listen = backlog
+      true
+    settimeout: (self, t) ->
+      rec.timeout = t
+      true
+    close: (self) ->
+      rec.closed = true
+    _rec: -> rec
+  }
+
+describe "worker_doh.make_server4/6", ->
+
+  before_each ->
+    socket_stub.tcp = (-> nil)
+    socket_stub.tcp6 = (-> nil)
+
+  it "make_server4 : succès → reuseaddr, listen(32), timeout 1", ->
+    srv = make_srv_stub!
+    socket_stub.tcp = (-> srv)
+    out = doh.make_server4 8443
+    assert.equals srv, out
+    rec = srv._rec!
+    assert.equals true, rec.options["reuseaddr"]
+    assert.equals "0.0.0.0", rec.bind[1]
+    assert.equals 8443, rec.bind[2]
+    assert.equals 32, rec.listen
+    assert.equals 1, rec.timeout
+
+  it "make_server4 : bind échoue → nil + erreur, socket fermée", ->
+    srv = make_srv_stub { bind_fail: true, bind_err: "address already in use" }
+    socket_stub.tcp = (-> srv)
+    out, err = doh.make_server4 8443
+    assert.is_nil out
+    assert.equals "address already in use", err
+    assert.is_true srv._rec!.closed
+
+  it "make_server6 : tcp6 indisponible (nil ou exception) → nil", ->
+    socket_stub.tcp6 = (-> nil)
+    assert.is_nil doh.make_server6 8443
+    socket_stub.tcp6 = (-> error "IPv6 non supporté")
+    assert.is_nil doh.make_server6 8443
+
+  it "make_server6 : succès → v6only, bind ::, listen(32)", ->
+    srv = make_srv_stub!
+    socket_stub.tcp6 = (-> srv)
+    out = doh.make_server6 8443
+    assert.equals srv, out
+    rec = srv._rec!
+    assert.equals true, rec.options["ipv6-v6only"]
+    assert.equals "::", rec.bind[1]
+    assert.equals 32, rec.listen
+    assert.equals 1, rec.timeout
+
+  it "make_server6 : bind qui lève → nil, socket fermée", ->
+    -- make_server6 pcall-e srv6.bind : seul un levé d'exception est capté
+    -- (un simple `nil, err` de retour serait considéré comme un succès).
+    srv = make_srv_stub { bind_raise: true, bind_err: "address already in use" }
+    socket_stub.tcp6 = (-> srv)
+    assert.is_nil doh.make_server6 8443
+    assert.is_true srv._rec!.closed
+
+-- ── handle_doh_client : branches d'erreur (certificats, TLS, handshake, PRI) ─
+
+describe "worker_doh.handle_doh_client — branches d'erreur", ->
+  capture = {}
+  tls = nil
+
+  build_args = (opts={}) ->
+    {
+      client: opts.client or make_client_stub!
+      peer_ip: "192.0.2.10"
+      state: {
+        static_cert_paths: if opts.sni then nil else { key: "k", cert: "c" }
+        cert_cache: {}
+        client_timeout: opts.client_timeout or 7
+        upstream: { marker: true }
+      }
+    }
+
+  pri_request = ->
+    { method: "PRI", path: "PRI * HTTP/2.0", headers: {}, body: "" }
+
+  before_each ->
+    reset_logs!
+    capture = { read_request_called: false }
+    cert_stub.load_static = (k, c) -> { ctx: true }
+    cert_stub.load_or_generate_sni = (ip, cache) -> { ctx: true }
+    tls = make_tls_stub {}
+    ssl_stub.wrap = (sock, ctx) -> tls
+    http_stub.read_request = (conn, opts) ->
+      capture.read_request_called = true
+      nil, "stub"
+    http_stub.send_response = (conn, status, headers, body) ->
+      capture.status = status
+      nil
+    http_stub.apply_io_timeouts = (conn, timeout) -> nil
+    query_stub.process_query = (raw, ip, mac, up, vlan) -> "RESP_BYTES", nil
+
+  it "certificat SNI dynamique : échec de lecture → request_read_failed, fermé", ->
+    args = build_args { sni: true }
+    doh.handle_doh_client args
+    assert.equals 0, #log_errors
+    assert.is_true has_record "request_read_failed"
+    assert.is_true capture.read_request_called
+    assert.is_true tls._closed!
+
+  it "load_or_generate_sni lève : cert_gen_failed + conn_failed, client fermé", ->
+    cert_stub.load_or_generate_sni = -> error "px5g absent"
+    args = build_args { sni: true }
+    doh.handle_doh_client args
+    assert.is_true has_record "cert_gen_failed"
+    assert.is_true has_record "conn_failed"
+    rec = get_record "cert_gen_failed"
+    assert.truthy tostring(rec.err)\find "px5g absent"
+    assert.is_true args.client._closed!
+    assert.is_false capture.read_request_called
+
+  it "certificat SNI nul : cert_null (type sni) + conn_failed", ->
+    cert_stub.load_or_generate_sni = (ip, cache) -> nil, "pas de px5g"
+    args = build_args { sni: true }
+    doh.handle_doh_client args
+    rec = get_record "cert_null"
+    assert.is_not_nil rec
+    assert.equals "sni", rec.cert_type
+    assert.is_true has_record "conn_failed"
+    assert.is_true args.client._closed!
+
+  it "certificat statique illisible : static_cert_child_failed + conn_failed", ->
+    cert_stub.load_static = (k, c) -> nil, "PEM corrompu"
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_true has_record "static_cert_child_failed"
+    assert.is_true has_record "conn_failed"
+    assert.is_true args.client._closed!
+    assert.is_false capture.read_request_called
+
+  it "ssl.wrap échoue : tls_wrap_failed, fermeture sans handshake", ->
+    ssl_stub.wrap = (sock, ctx) -> nil, "wolfSSL manquant"
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_true has_record "tls_wrap_failed"
+    assert.is_true args.client._closed!
+    assert.is_false capture.read_request_called
+
+  it "dohandshake lève : handshake_error + handshake_failed, sans requête lue", ->
+    tls = make_tls_stub { handshake_fn: -> error "dohandshake: fatal" }
+    ssl_stub.wrap = (sock, ctx) -> tls
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_true has_record "handshake_error"
+    rec = get_record "handshake_error"
+    assert.truthy tostring(rec.err)\find "dohandshake: fatal"
+    assert.is_true has_record "handshake_failed"
+    assert.is_true tls._closed!
+    assert.is_false capture.read_request_called
+
+  it "dohandshake ne réussit jamais : 50 tentatives puis max_attempts", ->
+    attempts_seen = 0
+    tls = make_tls_stub {
+      handshake_fn: ->
+        attempts_seen += 1
+        false, nil
+    }
+    ssl_stub.wrap = (sock, ctx) -> tls
+    args = build_args!
+    doh.handle_doh_client args
+    assert.equals 50, attempts_seen
+    rec = get_record "handshake_failed"
+    assert.is_not_nil rec
+    assert.equals "max_attempts", rec.err
+    assert.is_true tls._closed!
+    assert.is_false capture.read_request_called
+
+  it "sans méthode selected_alpn : journal tls_handshake_ok sans ALPN", ->
+    tls = make_tls_stub { alpn: "h2" }
+    tls.selected_alpn = nil
+    ssl_stub.wrap = (sock, ctx) -> tls
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_nil tls.selected_alpn
+    assert.is_true has_record "tls_handshake_ok"
+    assert.is_true has_record "request_read_failed"
+
+  it "préface PRI (H2) : flux vide → h2_incomplete → h2_failed, fermé", ->
+    tls = make_tls_stub { raw: "", lines: {} }
+    ssl_stub.wrap = (sock, ctx) -> tls
+    http_stub.read_request = (conn, opts) ->
+      capture.read_request_called = true
+      pri_request!
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_true capture.read_request_called
+    assert.is_true has_record "h2_failed"
+    assert.is_true has_record "h2_request"
+    assert.is_true tls._closed!
+
+  it "préface PRI (H2) : 404 → h2_rejected journalisé", ->
+    block = hpack.encode { { ":method", "GET" }, { ":path", "/autre" } }
+    tls = make_tls_stub { raw: h2_frame_raw(0x1, 0x5, 1, block), lines: {} }
+    ssl_stub.wrap = (sock, ctx) -> tls
+    http_stub.read_request = (conn, opts) -> pri_request!
+    args = build_args!
+    doh.handle_doh_client args
+    assert.is_true has_record("h2_rejected"), "actions: #{record_actions!}"
+    assert.is_false has_record "h2_failed"
+    assert.is_true tls._closed!
+
+  it "préface PRI (H2) : requête DNS valide → h2_ok", ->
+    b64 = "AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+    block = hpack.encode {
+      { ":method", "GET" }
+      { ":path", "/dns-query?dns=#{b64}" }
+    }
+    tls = make_tls_stub { raw: h2_frame_raw(0x1, 0x5, 1, block), lines: {} }
+    ssl_stub.wrap = (sock, ctx) -> tls
+    http_stub.read_request = (conn, opts) -> pri_request!
+    args = build_args!
+    doh.handle_doh_client args
+    rec = get_record "h2_ok"
+    assert.is_not_nil(rec), "actions: #{record_actions!}"
+    assert.equals #"RESP_BYTES", rec.resp_bytes
+    assert.is_true tls._closed!
+
+-- ── handle_h2 : branches d'erreur d'écriture et cas limites ─────────────────
+
+describe "worker_doh.handle_h2 — erreurs d'écriture et cas limites", ->
+  processed = 0
+
+  get_frames = ->
+    h2_frame_raw 0x1, 0x5, 1, hpack.encode {
+      { ":method", "GET" }
+      { ":scheme", "https" }
+      { ":path", "/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB" }
+    }
+
+  before_each ->
+    reset_logs!
+    processed = 0
+    query_stub.process_query = (raw, ip, mac, up, vlan) ->
+      processed += 1
+      "RESP_BYTES", nil
+
+  it "échec d'écriture du SETTINGS serveur → erreur immédiate", ->
+    conn = make_h2_conn "", { fail_after: 0 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "SETTINGS client sans ACK → SETTINGS ACK émis", ->
+    frames = table.concat {
+      h2_frame_raw 0x4, 0x0, 0, ""
+      get_frames!
+    }
+    conn = make_h2_conn frames
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil err
+    assert.equals "RESP_BYTES", resp
+    ack_seen = false
+    for f in *h2_parse_frames conn._sent!
+      ack_seen = true if f[1] == 0x4 and bit.band(f[2], 0x1) != 0
+    assert.is_true ack_seen
+
+  it "échec d'écriture du SETTINGS ACK → interruption", ->
+    frames = table.concat {
+      h2_frame_raw 0x4, 0x0, 0, ""
+      get_frames!
+    }
+    conn = make_h2_conn frames, { fail_after: 1 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "PING client sans ACK → PING ACK émis, requête servie", ->
+    frames = table.concat {
+      h2_frame_raw 0x6, 0x0, 0, "pingdata"
+      get_frames!
+    }
+    conn = make_h2_conn frames
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil err
+    assert.equals "RESP_BYTES", resp
+    ping_ack = false
+    for f in *h2_parse_frames conn._sent!
+      ping_ack = true if f[1] == 0x6 and bit.band(f[2], 0x1) != 0
+    assert.is_true ping_ack
+
+  it "échec d'écriture du PING ACK → interruption", ->
+    frames = h2_frame_raw 0x6, 0x0, 0, "pingdata"
+    conn = make_h2_conn frames, { fail_after: 1 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "HEADERS sans END_STREAM puis flux terminé → h2_incomplete + GOAWAY", ->
+    frame = h2_frame_raw 0x1, 0x4, 1, hpack.encode {
+      { ":method", "GET" }
+      { ":path", "/dns-query" }
+    }
+    conn = make_h2_conn frame
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_incomplete", err
+    assert.equals 0, processed
+    expected_goaway = string.char(0,0,8, 0x7, 0, 0,0,0,0, 0,0,0,0,0,0,0,1)
+    assert.equals expected_goaway, conn._sent!\sub -17
+
+  it "POST avec corps DATA vide → 400 sans requête DNS", ->
+    headers = h2_frame_raw 0x1, 0x4, 1, hpack.encode {
+      { ":method", "POST" }
+      { ":path", "/dns-query" }
+      { "content-type", "application/dns-message" }
+    }
+    data = h2_frame_raw 0x0, 0x1, 1, ""
+    conn = make_h2_conn headers .. data
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_status_400", err
+    assert.equals 0, processed
+
+  it "échec de process_query → GOAWAY 0x2 et h2_query_error", ->
+    query_stub.process_query = (raw, ip, mac, up, vlan) -> nil, "amont muet"
+    conn = make_h2_conn get_frames!
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_query_error", err
+    rec = get_record "h2_query_error"
+    assert.is_not_nil rec
+    assert.equals "amont muet", rec.err
+
+  it "échec d'écriture des en-têtes de réponse → erreur transmise", ->
+    conn = make_h2_conn get_frames!, { fail_after: 1 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "échec d'écriture du corps de réponse → erreur transmise", ->
+    conn = make_h2_conn get_frames!, { fail_after: 2 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "échec d'écriture d'une réponse de rejet (404) → erreur transmise", ->
+    frame = h2_frame_raw 0x1, 0x5, 1, hpack.encode {
+      { ":method", "POST" }
+      { ":path", "/autre" }
+    }
+    conn = make_h2_conn frame, { fail_after: 1 }
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "send_timeout", err
+
+  it "CONTINUATION annonçant 16 Mo → GOAWAY FRAME_SIZE_ERROR", ->
+    headers = h2_frame_raw 0x1, 0x0, 1, "frag"
+    oversize = string.char(0xFF, 0xFF, 0xFF, 0x9, 0x0, 0, 0, 0, 1)
+    conn = make_h2_conn headers .. oversize
+    resp, err = doh.handle_h2 conn, "1.2.3.4", nil, {}, nil
+    assert.is_nil resp
+    assert.equals "h2_frame_too_large", err
+    assert.equals string.char(6), conn._sent!\sub -1
+
+-- ── doh_child_fn (extrait de run) ───────────────────────────────────────────
+
+describe "worker_doh.doh_child_fn", ->
+
+  before_each ->
+    reset_logs!
+    cert_stub.load_static = (k, c) -> nil, "stub"
+    http_stub.read_request = (conn, opts) -> nil, "stub"
+    http_stub.send_response = (conn, status, headers, body) -> nil
+    http_stub.apply_io_timeouts = (conn, timeout) -> nil
+
+  it "amont injoignable : upstream_open_failed, client fermé, sans traitement", ->
+    closed = false
+    up_closed = false
+    args = {
+      client: { close: -> closed = true }
+      peer_ip: "192.0.2.77"
+      state: {
+        make_upstream: -> nil, "refus par l'amont"
+        close_upstream: (up) -> up_closed = true
+        cert_cache: {}
+        client_timeout: 1
+        static_cert_paths: { key: "k", cert: "c" }
+      }
+    }
+    doh.doh_child_fn args
+    assert.is_nil args.state.upstream
+    assert.is_true closed
+    assert.is_false up_closed
+    rec = get_record "upstream_open_failed"
+    assert.is_not_nil rec
+    assert.equals "192.0.2.77", rec.peer
+    assert.equals "refus par l'amont", rec.err
+
+  it "amont ouvert : state.upstream positionné, délégation, amont refermé", ->
+    up_closed = nil
+    client = make_client_stub!
+    args = {
+      client: client
+      peer_ip: "192.0.2.78"
+      state: {
+        make_upstream: -> { marker: "up" }
+        close_upstream: (up) -> up_closed = up
+        cert_cache: {}
+        client_timeout: 1
+        static_cert_paths: { key: "k", cert: "c" }
+      }
+    }
+    doh.doh_child_fn args
+    assert.same { marker: "up" }, args.state.upstream
+    assert.same { marker: "up" }, up_closed
+    -- handle_doh_client s'est bien exécuté (échec certicat géré et journalisé)
+    assert.is_true has_record "static_cert_child_failed"
+    assert.is_true has_record "conn_failed"
+
+-- ── run : configuration et décisions (sans boucle d'E/S) ────────────────────
+-- `run` ne retourne jamais : les tests passent par pcall et sortent à
+-- l'entrée de la boucle d'acceptation (reap_one → nil, puis socket.select qui
+-- lève). Aucune connexion acceptée ni enfant forké : cette boucle reste
+-- couverte par les tests e2e ; seules les décisions de configuration sont
+-- visées ici.
+describe "worker_doh.run", ->
+  saved_modules = {}
+  nft_calls = {}
+
+  stub_module = (name, mod) ->
+    saved_modules[#saved_modules + 1] = { name, package.loaded[name] }
+    package.loaded[name] = mod
+
+  restore_modules = ->
+    for i = #saved_modules, 1, -1
+      entry = saved_modules[i]
+      package.loaded[entry[1]] = entry[2]
+    saved_modules = {}
+
+  make_filter_stub = ->
+    {
+      get_auth_cfg: ->
+        { redirect_url: "http://10.0.0.1:33443/captive?to=x", bridge_ifname: nil }
+    }
+
+  make_captive_stub = (initial, ensured) ->
+    {
+      domain_from_url: (url) -> "portal.example"
+      new_detector: (auth) -> {
+        get: (=> initial[1], initial[2])
+        ensure: (=> ensured[1], ensured[2])
+      }
+    }
+
+  make_filter_data = ->
+    { rules: { rules_metadata: { marker: true } }, auth_cfg_cache: {}, decision_cfg: {} }
+
+  run_cfg = (overrides={}) ->
+    base = {
+      enabled: true
+      port: 8443
+      upstream_ip: "192.0.2.53"
+      upstream_port: 53
+      timeout_ms: 100
+      cert: "tmp/doh_spec/missing-cert.pem"
+      key: "tmp/doh_spec/missing-key.pem"
+      client_timeout: 5
+      nft_wfd: 7
+      ack_rfd: 8
+      worker_idx: 3
+    }
+    for k, v in pairs overrides
+      base[k] = v
+    base
+
+  before_each ->
+    reset_logs!
+    captive_sets = {}
+    wildcard_meta = nil
+    nft_calls = {}
+    saved_modules = {}
+    cert_stub.load_static = (k, c) -> nil, "stub"
+    upstream_select_result = nil
+    upstream_select_err = "stub"
+    socket_stub.tcp = (-> make_srv_stub!)
+    socket_stub.tcp6 = (-> make_srv_stub!)
+    socket_stub.select = (-> error "hors périmètre : boucle d'E/S laissée aux tests e2e")
+    stub_module "nft_queue", {
+      set_wfd: (fd) -> nft_calls[#nft_calls + 1] = { "wfd", fd }
+      set_ack_rfd: (fd, idx) -> nft_calls[#nft_calls + 1] = { "ack_rfd", fd, idx }
+    }
+    stub_module "auth.cert_cache", {
+      create_cache: (n, ttl, dir) -> { set: (->), get: (-> nil) }
+    }
+
+  after_each ->
+    restore_modules!
+
+  it "désactivé : canaux nft configurés puis retour immédiat", ->
+    ok, err = pcall doh.run, { enabled: false, port: 8443, nft_wfd: 7, ack_rfd: 8, worker_idx: 3 }, nil
+    assert.is_true ok, tostring(err)
+    assert.is_true has_record "worker_disabled"
+    assert.equals 2, #nft_calls
+    assert.same({ "wfd", 7 }, nft_calls[1])
+    assert.same({ "ack_rfd", 8, 3 }, nft_calls[2])
+
+  it "filter_data : règles transmises, portail captif, avertissements IP manquants", ->
+    stub_module "filter", make_filter_stub!
+    stub_module "captive_ips", make_captive_stub({ nil, nil }, { nil, nil })
+    fd = make_filter_data!
+    ok, err = pcall doh.run, { enabled: false, port: 8443 }, fd
+    assert.is_true ok, tostring(err)
+    filter_stub = package.loaded["filter"]
+    assert.same fd.rules, filter_stub.rules
+    assert.same fd.auth_cfg_cache, filter_stub.auth_cfg_cache
+    assert.same fd.decision_cfg, filter_stub.decision_cfg
+    assert.same fd.rules.rules_metadata, wildcard_meta
+    assert.equals 1, #captive_sets
+    assert.same({ domain: "portal.example" }, captive_sets[1])
+    assert.is_true has_record "captive_ip4_not_detected"
+    assert.is_true has_record "captive_ip6_not_detected"
+
+  it "installation : cert statique invalide, repli UDP, arrêt à l'entrée de boucle", ->
+    stub_module "filter", make_filter_stub!
+    stub_module "captive_ips", make_captive_stub({ "10.0.0.98", "fd00::98" }, { "10.0.0.99", "fd00::98" })
+    ok, err = pcall doh.run, run_cfg!, make_filter_data!
+    assert.is_false ok
+    assert.truthy tostring(err)\find "hors périmètre"
+    assert.is_true has_record "worker_start"
+    assert.is_true has_record "server_listening"
+    assert.is_true has_record "static_cert_load_failed"
+    assert.is_false has_record "static_cert_loaded"
+    assert.is_false has_record "upstream_doh_unavailable_udp"
+    -- détection captive paresseuse en tête de boucle : IP4 changée → mise à jour
+    assert.equals 2, #captive_sets
+    assert.same({ domain: "portal.example", ip4: "10.0.0.99", ip6: "fd00::98" }, captive_sets[2])
+
+  it "certificat statique valide : chargé, contrôle d'échéance, transport DoH retenu", ->
+    cert_stub.load_static = (k, c) -> { ctx: true }
+    upstream_select_result = {
+      transport: "curl"
+      verify_tls: true
+      make_client: (->)
+      close: (->)
+    }
+    upstream_select_err = nil
+    ok, err = pcall doh.run, run_cfg({ upstream_doh_url: "https://dns.example/dns-query" }), nil
+    assert.is_false ok
+    assert.truthy(tostring(err)\find("hors périmètre"), "err: #{tostring(err)}")
+    assert.is_true has_record "static_cert_loaded"
+    assert.is_false has_record "static_cert_load_failed"
+
+  it "transport DoH amont indisponible → repli UDP/53 journalisé", ->
+    upstream_select_result = nil
+    upstream_select_err = "curl load_failed"
+    ok, err = pcall doh.run, run_cfg({ upstream_doh_url: "https://dns.example/dns-query" }), nil
+    assert.is_false ok
+    assert.truthy(tostring(err)\find("hors périmètre"), "err: #{tostring(err)}")
+    assert.is_true has_record "upstream_doh_unavailable_udp"
+
+  it "port déjà pris : error au bind avant la boucle", ->
+    socket_stub.tcp = (-> make_srv_stub({ bind_fail: true, bind_err: "address already in use" }))
+    ok, err = pcall doh.run, run_cfg!, nil
+    assert.is_false ok
+    assert.truthy tostring(err)\find "DoH: cannot bind port 8443"
+    assert.truthy tostring(err)\find "address already in use"
