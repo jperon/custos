@@ -174,6 +174,11 @@ n'est pas détectable. Détails : [doc/CONFIG.md](../doc/CONFIG.md#6-section-ipc
 ## Format IPC `learn` (22 octets)
 
 Utilisé par `worker_questions`, `worker_arp_sniffer` et `worker_auth_queue` → `mac_learner`.
+Écriture groupée : `worker_questions` accumule ses messages et les vide en une
+écriture par tranche ≤ `PIPE_BUF` (4096 o) en fin de lot NFQUEUE
+(`lib.pipe_batch`, `on_batch_end`) — le format et l'atomicité par message sont
+inchangés. `mac_learner` draine le pipe par blocs de 128 messages (un fragment
+de message est conservé pour la lecture suivante).
 
 | Offset | Taille | Champ |
 |--------|--------|-------|
@@ -182,7 +187,7 @@ Utilisé par `worker_questions`, `worker_arp_sniffer` et `worker_auth_queue` →
 
 ## Pipes `events`, `nft`, `ack_<i>` et `so_verdict_<i>`
 
-- `events` : événements DNS sérialisés par `worker_questions`, consommés par `worker_events` (format interne au module, longueur variable).
+- `events` : événements DNS sérialisés par `worker_questions` (et, ponctuellement, `worker_tls` et `worker_responses`), consommés par `worker_events` (une ligne TSV par événement, longueur variable). `worker_questions` groupe ses lignes par tranche ≤ `PIPE_BUF` (4096 o) et les écrit en fin de lot NFQUEUE (`lib.pipe_batch`, `on_batch_end`) : un `read` du lecteur contient donc plusieurs lignes, ce que son découpage gère déjà (reliquat d'une ligne coupée conservé).
 - `nft` : commandes d'insertion nft sérialisées (set, famille, élément, timeout, index de worker pour l'ACK), de `worker_responses`/`worker_tls`/`worker_sip`/`worker_doh` vers `worker_nft`.
 - `ack_<i>` : un pipe par worker producteur. Après chaque flush de batch, `worker_nft` y écrit **un** ACK par worker présent dans le batch : un enregistrement de taille fixe (`ACK_SIZE` = 8 octets, `uint64` natif, écrit en un seul `write` donc atomique) portant le plus grand `seq` appliqué pour ce worker. `nft_queue.wait_ack` ne rend la main que si cet ACK porte un `seq` ≥ `pending_seq` (le seq de la dernière ligne enfilée par l'appel) ; un ACK antérieur — typiquement l'acquittement des 64 premiers éléments d'un inject coupé par `MAX_BATCH` — est ignoré et l'attente continue, sans dépasser le budget global `ACK_TIMEOUT_MS`. Le `worker_responses` n'appelle `wait_ack` qu'**une fois par lot NFQUEUE** (`flush_deferred` en fin de lecture netlink, verdicts différés) : `pending_seq` est alors le plus grand seq enfilé par le lot, ce qui couvre toutes ses insertions. Aucune purge d'ACK n'est faite en cours de lot (`drain_ack!` seulement hors lot) et `nft_queue` mémorise le plus grand seq déjà acquitté (`last_acked_seq`, remis à zéro par `reset_ack_state!` au démarrage du worker) : un ACK déjà lu — y compris purgé — ne fait plus expirer les 150 ms du budget, et un ACK résiduel d'un producteur précédent ne peut pas satisfaire une attente du nouveau (seq reparti de 1). Le bout du tube est drainé par `drain_ack` (enregistrements complets et fragments). Un échec de transaction nft est acquitté comme aujourd'hui (après les reprises ligne à ligne) : l'ACK signifie « batch traité », pas « insertion réussie » ; le producteur applique ensuite `nft.add_failure_policy`. Le compteur `seq` est monotone par processus et sans rebouclage (2^53 insertions) ; un redémarrage repart de zéro, les ACK résiduels étant purgés par `drain_ack` avant l'injection suivante. **Multi-worker :** le `worker_idx` voyage dans la ligne `nft` ; chaque worker réponses a son propre tube, donc un ACK ne peut pas être consommé par un autre worker.
 - `so_verdict_<i>` : bus du second avis (`nfqueue.responses` en plage). Ligne texte bornée (`second_opinion.encode_verdict`, < `PIPE_BUF` : écriture atomique) : version, kind (`b`/`s`/`r`/`p`), IP client, txid, TTL (`-1` = absent), qname et cible CNAME en hexadécimal, adresses A/AAAA en CSV hexadécimal. Chaque worker réponses n'écrit **qu'aux autres** (son propre verdict est déjà appliqué en ligne) ; il ne lit que son tube, et le `poll` de `nfq_loop` le surveille (`extra_rfds`) pour débloquer sans délai une réponse parquée. Un tube plein (worker bloqué) perd le verdict : la réponse concernée expire alors en fail-open, comme avant.

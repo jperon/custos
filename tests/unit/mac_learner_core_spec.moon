@@ -44,6 +44,7 @@ learn_msg = (ip16, mac_str) -> ip16 .. mac6 mac_str
 STUB_KEYS = { "mac_learner", "auth.sessions", "mac_prober", "ffi_defs" }
 saved = {}
 enrich_calls = 0
+enriched = {}
 mp_stub = nil
 w = nil
 
@@ -56,6 +57,7 @@ install_stubs = ->
   package.loaded["auth.sessions"] = {
     enrich_session_ip: (mac, ip, path) ->
       enrich_calls += 1
+      enriched[#enriched + 1] = { :mac, :ip }
       true
   }
   mp_stub = {
@@ -90,6 +92,7 @@ describe "mac_learner cœur", ->
 
   before_each ->
     enrich_calls = 0
+    enriched = {}
     now_ms = 0
     -- Vide l'état inter-tests sans réassigner les tables (capturées par le
     -- module) : apprendre une IP de test unique suffit pour mac_table, mais
@@ -301,6 +304,62 @@ describe "mac_learner cœur", ->
       assert.is_truthy tostring(err)\match "stop%-run"
       assert.equals 2, poll_calls
       assert.is_true reads >= 2
+
+    it "lit plusieurs messages par read, même coupés par une lecture courte", ->
+      poll_calls = 0
+      reads = 0
+      read_sizes = {}
+      m1 = learn_msg (ip4_16 10, 0, 0, 70), "02:00:00:00:00:70"
+      m2 = learn_msg (ip4_16 10, 0, 0, 71), "02:00:00:00:00:71"
+      fake = {
+        unlink: -> 0
+        socket: -> 77
+        bind: -> 0
+        listen: -> 0
+        accept: -> -1
+        read: (fd, buf, n) ->
+          reads += 1
+          read_sizes[#read_sizes + 1] = tonumber n
+          if reads == 1
+            part = m1\sub 1, 10
+            ffi.copy buf, part, #part
+            return #part
+          if reads == 2
+            part = m1\sub(11) .. m2
+            ffi.copy buf, part, #part
+            return #part
+          0
+        send: (fd, buf, n) -> n
+        close: -> 0
+        setsockopt: -> 0
+        poll: (pfds, nfds, ms) ->
+          poll_calls += 1
+          if poll_calls == 1
+            pfds[0].revents = POLLIN
+            1
+          else
+            error "stop-carry"
+      }
+      old_defs = package.loaded["ffi_defs"]
+      cfg = package.loaded["config"]
+      old_sock = cfg.MAC_LEARNER_QUERY_SOCK
+      os.execute "rm -rf tmp/mac_learner_run"
+      cfg.MAC_LEARNER_QUERY_SOCK = "tmp/mac_learner_run/query.sock"
+      package.loaded["ffi_defs"] = { :ffi, libc: fake, libnfq: {}, libnft: {} }
+      package.loaded["mac_learner"] = nil
+      w2 = require "mac_learner"
+      ok, err = pcall -> w2.run 10, "br-test"
+      package.loaded["ffi_defs"] = old_defs
+      cfg.MAC_LEARNER_QUERY_SOCK = old_sock
+      os.execute "rm -rf tmp/mac_learner_run"
+      assert.is_false ok
+      assert.is_truthy (tostring(err)\match "stop%-carry"), tostring err
+      -- Une lecture par bloc (capacité > un message), pas 22 octets à la fois.
+      assert.is_true read_sizes[1] > 22
+      -- Les deux messages, dont un coupé par une lecture courte, sont appris.
+      assert.equals 2, enrich_calls
+      assert.same { mac: "02:00:00:00:00:70", ip: "10.0.0.70" }, enriched[1]
+      assert.same { mac: "02:00:00:00:00:71", ip: "10.0.0.71" }, enriched[2]
 
     it "boucle poll : prober ARP/NS, pipes VLAN/strip et accept d'un client", ->
       poll_calls = 0

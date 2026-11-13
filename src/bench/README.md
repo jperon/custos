@@ -60,6 +60,13 @@ Cas disponibles : `question`, `ipc_drain`, `response`, `so_a`, `so_cycle`,
 pas celui attendu (mauvais code retour, verdict manquant) : une mesure ne doit
 jamais porter sur un autre chemin que celui décrit.
 
+Le cas `question` appelle le hook de fin de lot du worker questions
+(`on_batch_end`, exposé comme `on_batch_end_q`) après chaque lot de `HP_CHUNK`
+paquets : c'est là que la production vide les tampons d'écriture des pipes
+events/learn (cf. `docs/agents/perf.md` §19), sinon la mesure exclurait ces
+écritures. Sur une version sans tampon, le hook est absent et l'appel est un
+no-op — la comparaison avant/après reste valable.
+
 **Machine vivante** : le banc force `config.nft.table` à un nom inexistant —
 `filter.load` appelle `ip_whitelist.init`, qui FLUSH les sets
 `ip*_dest_whitelist` de la table, et avec la vraie table ce flush viderait le

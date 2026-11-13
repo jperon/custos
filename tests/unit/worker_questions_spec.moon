@@ -30,7 +30,7 @@ for decl in *{
 STUB_KEYS = {
   "ffi_defs", "worker_questions", "filter", "nfq/ethernet", "nfq_loop"
   "forge_dns", "captive_ips", "bridge_raw", "dup_query", "raw_send", "metrics"
-  "log", "lib.netstamp"
+  "log", "lib.netstamp", "lib.pipe_batch"
 }
 saved = {}
 
@@ -95,8 +95,13 @@ describe "worker_questions", ->
   wq = nil
   ev_r = nil
   ev_w = nil
+  learn_r = nil
+  learn_w = nil
   pipe_r = nil
   pipe_w = nil
+  -- Journal des write() effectués via le faux libc (fd + nombre d'octets) :
+  -- permet d'affirmer qu'un lot de messages ne coûte qu'UNE écriture.
+  write_calls = {}
   -- Captures du câblage run_queue → metrics (P2.3) : les options passées à
   -- run_queue et l'ordre des appels au module metrics.
   captured_opts = nil
@@ -132,11 +137,13 @@ describe "worker_questions", ->
     setsockopt_ok = nil
     log_infos = {}
     log_warns = {}
+    write_calls = {}
     fake_errno = ffi.new "int[1]", 0
     cfg.nfqueue = cfg.nfqueue or {}
     cfg.nfqueue.max_age_ms = 1500
 
     ev_r, ev_w     = make_pipe!
+    learn_r, learn_w = make_pipe!
     pipe_r, pipe_w = make_pipe!
 
     -- Stub de log : capture INFO/WARN (dont question_shed_timestamp et
@@ -154,6 +161,9 @@ describe "worker_questions", ->
     -- l'activation de SO_TIMESTAMP sans ouvrir de vrai fd.
     fake_libc = setmetatable {
       __errno_location: -> fake_errno
+      write: (fd, buf, n) ->
+        write_calls[#write_calls + 1] = { fd: fd, n: tonumber(n) }
+        ffi.C.write fd, buf, n
       socket: (domain, type, protocol) ->
         socket_calls[#socket_calls + 1] = { :domain, :type, :protocol }
         if fail_socket
@@ -240,16 +250,20 @@ describe "worker_questions", ->
     package.loaded["worker_questions"] = nil
     package.loaded["lib.netstamp"] = nil
     wq = require "worker_questions"
-    wq.run 0, pipe_w, nil, ev_w, nil
+    wq.run 0, pipe_w, learn_w, ev_w, nil
 
   after_each ->
-    for fd in *{ ev_r, ev_w, pipe_r, pipe_w }
+    for fd in *{ ev_r, ev_w, learn_r, learn_w, pipe_r, pipe_w }
       ffi.C.close fd if fd
     restore_all!
 
+  -- Un paquet puis vidage des tampons : les assertions de décision ne portent
+  -- que sur le contenu, la coalescence des écritures a ses propres tests.
   invoke = (raw) ->
     payload = raw
-    wq.handle_question nil, nil, 1
+    rc = wq.handle_question nil, nil, 1
+    wq.flush_pipes!
+    rc
 
   find_log = (entries, action) ->
     for entry in *entries
@@ -303,6 +317,7 @@ describe "worker_questions", ->
         src_ip: "192.0.2.10", dst_ip: "1.1.1.1", vlan: 8
         user: nil, af: "ipv4", reason: "Allowed by rule: x", rule: "r1"
       }, true
+      wq.flush_pipes!
       line = read_fd ev_r
       assert.is_true line\sub(-1) == "\n"
       fields = split_tabs line
@@ -321,9 +336,93 @@ describe "worker_questions", ->
 
     it "marque block quand la décision est refusée", ->
       wq.write_event { qname: "malware.example", af: "ipv4" }, false
+      wq.flush_pipes!
       fields = split_tabs read_fd ev_r
       assert.equals "block", fields[2]
       assert.equals "malware.example", fields[3]
+
+  -- ── Écritures groupées vers events et mac_learner ─────────────────────────
+  -- Chaque question écrivait une ligne TSV (events) et un message de 22 octets
+  -- (learn) : deux write() par paquet. Les messages sont désormais tamponnés et
+  -- vidés en fin de lot NFQUEUE (on_batch_end), une écriture par tranche
+  -- ≤ PIPE_BUF (cf. docs/agents/perf.md §19).
+  describe "écritures groupées (events + learn)", ->
+    event_fields = ->
+      {
+        qname: "example.com", mac_src: "aa:bb:cc:dd:ee:ff"
+        src_ip: "192.0.2.10", dst_ip: "1.1.1.1", vlan: 8
+        user: nil, af: "ipv4", reason: "ok", rule: "r1"
+      }
+
+    writes_on = (fd) ->
+      n = 0
+      n += 1 for c in *write_calls when c.fd == fd
+      n
+
+    it "write_event n'écrit rien avant le vidage, puis une seule écriture", ->
+      wq.write_event event_fields!, true
+      wq.write_event { qname: "second.example", af: "ipv4" }, false
+      assert.equals "", read_available ev_r
+      assert.equals 0, writes_on ev_w
+      wq.flush_pipes!
+      assert.equals 1, writes_on ev_w
+      data = read_fd ev_r
+      lines = [l for l in data\gmatch "[^\n]+"]
+      assert.equals 2, #lines
+      assert.equals "allow", split_tabs(lines[1])[2]
+      assert.equals "example.com", split_tabs(lines[1])[3]
+      assert.equals "block", split_tabs(lines[2])[2]
+      assert.equals "second.example", split_tabs(lines[2])[3]
+
+    it "write_learn_msg accumule des messages de 22 octets en une écriture", ->
+      assert.is_true wq.write_learn_msg "\192\168\000\010", "\170\187\204\221\238\255"
+      assert.is_true wq.write_learn_msg "\192\168\000\011", "\170\187\204\221\238\255"
+      assert.equals "", read_available learn_r
+      assert.equals 0, writes_on learn_w
+      wq.flush_pipes!
+      assert.equals 1, writes_on learn_w
+      data = read_fd learn_r
+      assert.equals 44, #data
+      -- ip16 (IPv4 : 4 octets + 12 zéros) puis mac6.
+      assert.equals "\192\168\000\010" .. string.rep("\0", 12) .. "\170\187\204\221\238\255",
+        data\sub 1, 22
+      assert.equals "\192\168\000\011" .. string.rep("\0", 12) .. "\170\187\204\221\238\255",
+        data\sub 23, 44
+
+    it "flush_pipes est idempotent et sans effet sur tampon vide", ->
+      wq.flush_pipes!
+      wq.flush_pipes!
+      assert.equals 0, writes_on ev_w
+      assert.equals 0, writes_on learn_w
+
+    it "handle_question tamponne événement et apprentissage jusqu'au on_batch_end", ->
+      decision = { verdict: true, reason: "ok", rule_id: "r_batch" }
+      invoke_without_flush = (raw) ->
+        payload = raw
+        wq.handle_question nil, nil, 1
+      assert.equals 1, invoke_without_flush ipv4_udp DNS_QUERY
+      assert.equals "", read_available ev_r
+      assert.equals "", read_available learn_r
+      assert.is_function captured_opts.on_batch_end
+      captured_opts.on_batch_end nil
+      ev = read_fd ev_r
+      assert.equals "allow", split_tabs(ev)[2]
+      learn = read_fd learn_r
+      assert.equals 22, #learn
+
+    it "run_queue reçoit on_batch_end même quand les métriques sont coupées", ->
+      cfg.metrics = cfg.metrics or {}
+      cfg.metrics.enabled = false
+      wq.run 0, pipe_w, learn_w, ev_w, nil
+      assert.is_function captured_opts.on_batch_end
+      assert.is_nil captured_opts.on_idle
+      decision = { verdict: true, reason: "ok", rule_id: "r1" }
+      payload = ipv4_udp DNS_QUERY
+      wq.handle_question nil, nil, 1
+      assert.equals "", read_available ev_r
+      captured_opts.on_batch_end nil
+      assert.equals "allow", split_tabs(read_fd ev_r)[2]
+      cfg.metrics.enabled = true
 
   -- ── Délestage précoce des questions périmées (nfqueue.max_age_ms) ─────────
   describe "délestage précoce (question_shed)", ->
@@ -347,7 +446,7 @@ describe "worker_questions", ->
 
     it "max_age_ms = 0 désactive le délestage", ->
       cfg.nfqueue.max_age_ms = 0
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       decision = { verdict: true, reason: "ok", rule_id: "r1" }
       stub_age = 999999
       rc = invoke ipv4_udp DNS_QUERY
@@ -396,7 +495,7 @@ describe "worker_questions", ->
       socket_calls = {}
       setsockopt_calls = {}
       cfg.nfqueue.max_age_ms = 0
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       assert.equals 0, #socket_calls
       assert.equals 0, #setsockopt_calls
 
@@ -405,7 +504,7 @@ describe "worker_questions", ->
       setsockopt_calls = {}
       closed_fds = {}
       setsockopt_ok = (level) -> level == 0xffff
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       assert.equals 1, #socket_calls
       last = setsockopt_calls[#setsockopt_calls]
       assert.equals 0xffff, last.level
@@ -416,7 +515,7 @@ describe "worker_questions", ->
       socket_calls = {}
       setsockopt_calls = {}
       fail_socket = true
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       assert.equals 1, #socket_calls
       assert.equals 0, #setsockopt_calls
       warn = find_log log_warns, "netstamp_enable_failed"
@@ -430,7 +529,7 @@ describe "worker_questions", ->
       setsockopt_calls = {}
       closed_fds = {}
       fail_setsockopt = true
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       assert.equals 1, #socket_calls
       assert.equals 4, #setsockopt_calls   -- 2 niveaux × 2 variantes
       assert.same { 77 }, closed_fds
@@ -465,7 +564,7 @@ describe "worker_questions", ->
 
     it "aucun log question_shed_timestamp quand le délestage est désactivé", ->
       cfg.nfqueue.max_age_ms = 0
-      wq.run 0, pipe_w, nil, ev_w, nil
+      wq.run 0, pipe_w, learn_w, ev_w, nil
       decision = { verdict: true, reason: "ok", rule_id: "r1" }
       invoke ipv4_udp DNS_QUERY
       assert.is_nil find_log log_infos, "question_shed_timestamp"

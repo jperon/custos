@@ -38,13 +38,17 @@ bridge_raw = require "bridge_raw"
 dup_query = require "dup_query"
 raw_send = require "raw_send"
 netstamp = require "lib.netstamp"
+{ :new_records, :new_lines } = require "lib.pipe_batch"
 so_cfg = config.second_opinion or {}
 
 -- fd d'écriture du pipe IPC question→response, injecté par main.moon avant fork()
 pipe_wfd = nil
 
--- fd d'écriture du pipe d'apprentissage question→mac_learner.
-mac_learn_wfd = nil
+-- Tampons d'écriture groupée (lib.pipe_batch), créés dans run() depuis les fds
+-- des pipes events et learn : lignes TSV pour events, messages de 22 octets
+-- pour learn. nil (ou fd absent) = flux désactivé.
+events_batch = nil
+learn_batch  = nil
 
 -- Benchmark : buffer timespec réutilisé pour éviter l'allocation hot-path
 _benchmark_ts = ffi.new "timespec_t[1]"
@@ -56,8 +60,6 @@ get_benchmark_ms = ->
   return nil unless runtime_cfg.benchmark
   libc.clock_gettime CLOCK_MONOTONIC, _benchmark_ts
   tonumber(_benchmark_ts[0].tv_sec) * 1000 + math.floor(tonumber(_benchmark_ts[0].tv_nsec) / 1000000)
-
-events_wfd = nil  -- fd d'écriture du pipe vers worker_events (nil si désactivé)
 
 -- ── Délestage précoce sous saturation ─────────────────────────────
 -- Seuil (ms) lu depuis nfqueue.max_age_ms dans run() ; nil = désactivé.
@@ -138,26 +140,25 @@ maybe_duplicate = (ip, l4, raw, rule_resolvers, dns_id) ->
   raw_send.send fd, ip.version, pkt, validator
 
 -- ── Apprentissage MAC ────────────────────────────────────────────
+-- Messages de learn accumulés puis écrits en un seul write() par tranche
+-- (≤ PIPE_BUF, atomique : le pipe est partagé avec worker_arp_sniffer et
+-- worker_auth_queue). Taille fixe : ip16 + mac6 = 22 octets.
+LEARN_MSG_SIZE = 22
 
 --- Écrit une association IP→MAC vers le mac_learner.
 -- Message binaire fixe : ip16 + mac6 = 22 octets.
 -- IPv4 : 4 octets significatifs suivis de 12 zéros.
+-- Le message est TAMPONNÉ : il part avec le prochain vidage (fin de lot
+-- NFQUEUE, cf. flush_pipes). Le retour indique donc « accepté dans le tampon ».
 -- @tparam string ip_raw Adresse IP brute, 4 octets IPv4 ou 16 octets IPv6
 -- @tparam string mac_raw Adresse MAC brute, 6 octets
--- @treturn boolean true si l'écriture complète a réussi
+-- @treturn boolean true si le message a été pris dans le tampon
 write_learn_msg = (ip_raw, mac_raw) ->
-  return false unless mac_learn_wfd and mac_learn_wfd >= 0
+  return false unless learn_batch
   return false unless mac_raw and #mac_raw == 6
   ip16 = encode_ip16 ip_raw
   return false unless ip16
-
-  msg = ffi.new "uint8_t[22]"
-  ffi.copy msg, ip16, 16
-  for i = 1, 6
-    msg[15 + i] = mac_raw\byte i
-
-  n = libc.write mac_learn_wfd, msg, 22
-  n == 22
+  learn_batch.add ip16 .. mac_raw
 
 -- Helper : retourne la valeur sous forme de string, ou "-" si nil/vide.
 -- @tparam any v  Valeur à formater
@@ -170,15 +171,17 @@ list_from_condition_reason = (condition_reason) ->
   condition_reason\match "^Domain matched in list '([^']+)'$"
 
 --- Envoie un événement de décision DNS vers worker_events (best-effort).
--- Écrit une ligne TSV sur le pipe events_wfd si disponible.
+-- Écrit une ligne TSV dans le tampon du pipe events.
 -- Format : ts<TAB>decision<TAB>qname<TAB>mac_src<TAB>src_ip<TAB>dst_ip<TAB>vlan
 --          <TAB>user<TAB>af<TAB>reason<TAB>rule<LF>
--- Pas de qtype. Écriture atomique unique (≤ PIPE_BUF), EAGAIN ignoré silencieusement.
+-- Pas de qtype. La ligne est tamponnée puis écrite avec les autres du lot en un
+-- seul write() par tranche ≤ PIPE_BUF (atomique : le pipe events est partagé
+-- avec worker_tls et worker_responses) ; EAGAIN est journalisé puis ignoré.
 -- @tparam table  fields  Champs de la décision (qname, mac_src, src_ip, dst_ip, etc.)
 -- @tparam        allowed Résultat de filter.decide : true, "dnsonly", ou false/nil
--- @treturn nil
+-- @treturn boolean true si la ligne a été prise dans le tampon
 write_event = (fields, allowed) ->
-  return unless events_wfd
+  return false unless events_batch
   decision = if allowed then "allow" else "block"
   line = table.concat({
     tostring os.time!
@@ -193,7 +196,16 @@ write_event = (fields, allowed) ->
     tsv_field fields.reason
     tsv_field fields.rule
   }, "\t") .. "\n"
-  libc.write events_wfd, line, #line
+  events_batch.add line
+
+--- Vide les tampons events et learn (fin de lot NFQUEUE et sortie du worker).
+-- Idempotent ; un échec d'écriture est journalisé par lib.pipe_batch et les
+-- messages de la tranche sont abandonnés (comportement historique d'EAGAIN).
+-- @treturn nil
+flush_pipes = ->
+  events_batch.flush! if events_batch
+  learn_batch.flush! if learn_batch
+  nil
 
 -- ── Parsing L3/L4/L7 ────────────────────────────────────────────
 -- Parsing partagé avec worker_responses (cf. packet_utils) : retourne ip, l4,
@@ -535,8 +547,11 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   -- faible débit.
   metrics.write_now! if metrics_on
   pipe_wfd      = wfd
-  mac_learn_wfd = learn_wfd
-  events_wfd    = ev_wfd
+  -- Tampons d'écriture groupée des pipes events/learn : un write() par lot au
+  -- lieu d'un par paquet (cf. docs/agents/perf.md §19). Créés après les fds :
+  -- un fd absent donne un tampon inerte (add/flush sans effet).
+  events_batch  = new_lines ev_wfd
+  learn_batch   = new_records learn_wfd, LEARN_MSG_SIZE
   -- Seuil de délestage précoce (nfqueue.max_age_ms). 0 = désactivé ; absent =
   -- défaut prudent 1500 ms (mi-distance des timeouts DNS usuels de 1-5 s).
   age_cfg = tonumber (config.nfqueue or {}).max_age_ms
@@ -607,9 +622,17 @@ run = (queue_num, wfd, learn_wfd, ev_wfd, filter_data) ->
   -- Point de passage périodique de run_queue (poll 1 s) : écrit un instantané
   -- même sans aucun paquet (flush_if_due ne lit l'horloge qu'une fois par
   -- passage, jamais par paquet).
-  queue_opts = if metrics_on
-    { idle_ms: 1000, on_idle: metrics.flush_if_due }
+  -- Fin de lot NFQUEUE : vide les tampons events/learn (une écriture par lot au
+  -- lieu d'une par paquet). Le hook est installé même sans métriques, sinon un
+  -- lot resterait tamponné jusqu'à la fin du suivant.
+  queue_opts = { on_batch_end: -> flush_pipes! }
+  if metrics_on
+    queue_opts.idle_ms = 1000
+    queue_opts.on_idle = metrics.flush_if_due
   run_queue tonumber(queue_num), handle_question, queue_opts
+  -- Dernier vidage avant sortie (EOF, signal, erreur de file) : les messages du
+  -- lot en cours ne doivent pas être perdus.
+  flush_pipes!
   -- Dernier instantané avant sortie (erreur de file, signal) : best-effort.
   metrics.write_now! if metrics_on
 
@@ -620,5 +643,5 @@ get_shed_total = -> shed_total
 { :run,
   :skip_ipv6_ext_hdrs, :new_dns_tcp_stream,
   :append_unique, :aggregate_decisions, :MAX_RESPONSE_RULE_IDS,
-  :handle_question, :write_event, :list_from_condition_reason,
-  :get_shed_total }
+  :handle_question, :write_event, :write_learn_msg, :flush_pipes,
+  :list_from_condition_reason, :get_shed_total }

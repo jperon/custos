@@ -42,6 +42,9 @@ PROBE_TIMEOUT_MS = 200
 NEGATIVE_TTL     = 30
 -- Intervalle (s) de purge des entrées expirées de mac_table, vlan_table et strip_table.
 PURGE_INTERVAL   = 60
+-- Nombre maximal de messages de learn traités par read() : le pipe est drainé
+-- par blocs (22 o × 128 = 2816 o) au lieu d'un read() par message.
+LEARN_READ_MSGS  = 128
 
 bit = require "bit"
 
@@ -434,7 +437,13 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
     nfds += 1
 
   msg_size = mac_cfg.learn_msg_size or 22
-  learn_buf  = ffi.new "uint8_t[?]", msg_size
+  -- Lecture par blocs : jusqu'à LEARN_READ_MSGS messages par read() (au lieu
+  -- d'un read() de msg_size par message). Le pipe pouvant rendre une lecture
+  -- courte, les octets incomplets sont conservés (learn_have) et complétés par
+  -- la lecture suivante : un message n'est jamais perdu ni scindé.
+  learn_cap  = msg_size * LEARN_READ_MSGS
+  learn_buf  = ffi.new "uint8_t[?]", learn_cap
+  learn_have = 0
   arp_buf    = ffi.new "uint8_t[512]"
   ipv6_buf   = ffi.new "uint8_t[2048]"
   vlan_buf   = ffi.new "uint8_t[18]"
@@ -458,14 +467,21 @@ run = (learn_rfd, ifname, vlan_learn_rfd, strip_learn_rfd) ->
       gc.idle! if idle
 
     -- [0] Pipe de learn : draine tous les messages disponibles (non-bloquant)
-    -- Garde anti-corruption : un message incomplet (< msg_size) est ignoré
-    -- mais ne doit PAS consommer le reste du message suivant.
+    -- en un minimum de read() (blocs de LEARN_READ_MSGS messages). Un message
+    -- incomplet (< msg_size) est conservé pour la lecture suivante — il ne
+    -- consomme jamais le message d'après.
     if bit.band(pfds[0].revents, POLLIN) ~= 0
       while true
-        n = libc.read learn_rfd, learn_buf, msg_size
+        n = libc.read learn_rfd, learn_buf + learn_have, learn_cap - learn_have
         break if n <= 0
-        break if n < msg_size
-        process_learn ffi.string(learn_buf, msg_size)
+        total = learn_have + tonumber n
+        off = 0
+        while off + msg_size <= total
+          process_learn ffi.string learn_buf + off, msg_size
+          off += msg_size
+        learn_have = total - off
+        -- Reliquat (lecture courte) : recopié en tête pour la lecture suivante.
+        ffi.copy learn_buf, learn_buf + off, learn_have if learn_have > 0
 
     -- [1] Socket de requêtes : une connexion par itération (accept non-bloquant)
     if bit.band(pfds[1].revents, POLLIN) ~= 0
