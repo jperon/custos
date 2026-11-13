@@ -157,7 +157,13 @@ Tests : `tests/unit/doh/hpack_spec.moon` (annexe C.2 à C.6 et cas d'erreur),
 `tests/unit/worker_doh_spec.moon` (GET binaire et JSON, POST
 `application/dns-message` (avec et sans paramètres) → traité, type non DNS et
 type absent → `415`, 404/405/400, PADDED, PRIORITY, CONTINUATION, padding
-invalide, stream 0, COMPRESSION_ERROR, plafonds DATA et frame existants),
+invalide, stream 0, COMPRESSION_ERROR, plafonds DATA et frame existants ;
+également : branches d'erreur de `handle_doh_client` (certificats statique/SNI,
+`ssl.wrap`, handshake qui lève ou n'avance jamais, préface PRI → h2_ok /
+h2_rejected / h2_failed), branches d'erreur d'écriture de `handle_h2`
+(SETTINGS/PING ACK, réponses de rejet, HEADERS et DATA de réponse,
+`h2_incomplete`, POST sans corps → 400, `h2_query_error`) et
+`read_header_block` testée directement — fonctions exportées pour l'occasion),
 `tests/unit/auth/wolfssl_spec.moon` (choix contexte/objet SSL, défaut AUTH
 http/1.1).
 
@@ -382,9 +388,16 @@ aux deux workers sans dépendre du VLAN.
 
 `worker_doh.run` attend les connexions dans une boucle
 `while true` → `reap_one` → `socket.select all_servers, nil, 0.1` →
-`srv\accept!` (`src/worker_doh.moon:740-774`). Cette boucle ne consomme rien au
+`srv\accept!` (`src/worker_doh.moon:770-801`). Cette boucle ne consomme rien au
 repos **à condition** que la couche de scrutation surveille réellement les bons
 descripteurs.
+
+Le corps de l'enfant par connexion est extrait en `worker_doh.doh_child_fn`
+(fonction pure d'`args` : ouvre l'amont via `state.make_upstream`, délègue à
+`handle_doh_client`, referme via `state.close_upstream`) : `run` le transmet à
+`fork_child` sans autre fermeture, comportement identique, mais il devient
+directement testable sans fork ni socket (`tests/unit/worker_doh_spec.moon`,
+describe « doh_child_fn »).
 
 Défaut (branche `d-dohspin`) : `lib.socket.socket_select` remplissait le masque
 `fd_set` avec la bibliothèque `bit` de LuaJIT, qui est en 32 bits, alors que
