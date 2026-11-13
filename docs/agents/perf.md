@@ -4623,3 +4623,181 @@ façon 1500 (1,8-1,9 % < 2 %).
   non décomposé** (pas de `perf` sur la cible).
 - Une seule source (`servus`), deux destinations IPv4, pas d'IPv6 temporaire,
   pas de client réel multiple ; aucun A/B de configuration.
+
+## 31. A/B du seuil de délestage `nfqueue.max_age_ms` (2026-11-13, branche `d-shedab`)
+
+Campagne demandée pour trancher le seuil de délestage précoce des questions
+(`nfqueue.max_age_ms`, §30.6 où l'A/B n'avait pas pu être fait faute
+d'autorisation). Objectif : mesurer, à l'état de §30, l'effet de **1500 / 3000 /
+4000 ms** sur la perte, les délestages, le débit servi et surtout la
+**distribution de latence** (p50/p75/p90/p99, parts > 1/2/3 s), puis appliquer
+le critère « une latence allongée pour une large part des clients est pire
+qu'une petite perte ». **Aucune modification de code** ; seule la clé
+`nfqueue.max_age_ms` a été changée puis restaurée. Rapport complet, tableaux
+par run et dépouillement : **`tmp/shedab_report.md`** ; harnais `tmp/shedab/`,
+résultats bruts `tmp/shedab/results/` (ignorés par git).
+
+### 31.1 Dispositif et protocole
+
+- **Build identique à §30** : `md5sum` des **296** fichiers `lua/**/*.lua` de
+  l'arbre et de `/usr/share/custos/`, triés puis comparés (`comm`) : **0
+  écart**. Custos avait été redémarré à 11:32 (correctif sans rapport) avant la
+  campagne ; noyau 6.12.74, nft 1.1.6, 4 × Cortex-A55.
+- **Configuration** : `md5` = **`d31244ecaf360611e17ce873b8299513`** (identique
+  à §30), ligne 2 `nfqueue: { responses: "14-15" }`, ligne 164
+  `benchmark: false` ; `questions` `"0-1"`, `rcvbuf` 4 Mio, `maxlen` 4096,
+  `pending_max` 20 000. **`max_age_ms` absent au départ = défaut 1500**
+  (`src/config.moon:234`, `doc/CONFIG.md:380`).
+- **Application de la clé** : `apply_age.sh` ne modifie **que la ligne 2**
+  (table `nfqueue` inline), refuse hors 1500/3000/4000, puis
+  `/etc/init.d/custos restart`. Chaque run suit donc un redémarrage complet
+  (JIT et caches à froid) : les trois seuils subissent le même démarrage.
+- **Harnais** : copie de `tmp/bench10/` (`dnsload5.py`, `runphase10.sh`,
+  `sampler.sh`, `counters.sh`, `analyse10.py`), seul ajout côté client : p75 et
+  parts > 1/2/3 s. Profil `mixed`, 30 s, drain 45 s, 128 ports source, deux
+  destinations `10.35.1.1`/`10.35.4.1`, repos vérifié avant chaque run
+  (profondeur ≤ 3, `user_dropped` figé), **sonde d'authentification avant
+  chaque run** (8 adresses), `logread -l 20000` ponctuel (jamais `-f`), aucune
+  capture AF_PACKET.
+- **Plan** : paliers **1500 puis 1700 q/s**, et pour chacun l'ordre
+  **1500 / 3000 / 4000 / 1500 / 3000 / 4000** (2 runs par seuil et par palier,
+  12 runs). Un premier `a1500_3` interrompu (tour précédent tué) a été supprimé
+  et refait.
+
+### 31.2 Résultats par run
+
+`perte` = `(émis − reçus)/émis` ; `débit servi` = reçus / 30 s (borne haute :
+le drain est compté) ; `>1/2/3 s` = part des **réponses servies** ; `shed` =
+lignes `question_shed` de la fenêtre + somme des `suppressed` (borne basse) ;
+`qdrop` = `queue_dropped` (col. 6) de la file réponses.
+
+| run | palier | seuil | perte | p50 | p75 | p90 | p99 | >1 s | >2 s | >3 s | débit servi | shed | qdrop |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| a1500_1 | 1500 | 1500 | 3,50 % | 2 960 | 3 665 | 4 800 | 5 160 | 87,3 % | 68,9 % | 49,1 % | 1 448 | 1 224 | 562 |
+| a1500_4 | 1500 | 1500 | 12,67 % | 1 526 | 1 602 | 1 659 | 1 724 | 76,7 % | 0,0 % | 0,0 % | 1 310 | 4 200 | 0 |
+| a1500_2 | 1500 | 3000 | 5,18 % | 2 435 | 4 028 | 5 331 | 6 693 | 80,0 % | 55,8 % | 42,3 % | 1 422 | 1 | 3 698 |
+| a1500_5 | 1500 | 3000 | 3,92 % | 2 332 | 3 350 | 5 504 | 6 440 | 72,4 % | 56,2 % | 35,8 % | 1 441 | 1 | 2 266 |
+| a1500_3 | 1500 | 4000 | 4,45 % | 1 853 | 3 446 | 4 280 | 4 820 | 76,9 % | 45,5 % | 29,4 % | 1 433 | 0 | 3 354 |
+| a1500_6 | 1500 | 4000 | 8,29 % | 3 143 | 4 023 | 4 093 | 4 182 | 87,1 % | 68,9 % | 52,2 % | 1 376 | 1 806 | 0 |
+| b1700_1 | 1700 | 1500 | 20,21 % | 1 736 | 3 679 | 4 800 | 5 367 | 76,7 % | 47,5 % | 36,8 % | 1 357 | 5 405 | 5 699 |
+| b1700_4 | 1700 | 1500 | 27,00 % | 1 532 | 1 599 | 1 650 | 1 716 | 90,9 % | 0,0 % | 0,0 % | 1 241 | 10 119 | 0 |
+| b1700_2 | 1700 | 3000 | 23,65 % | 3 021 | 3 044 | 3 105 | 3 174 | 89,8 % | 77,6 % | 67,5 % | 1 298 | 9 200 | 0 |
+| b1700_5 | 1700 | 3000 | 13,66 % | 3 254 | 5 118 | 6 094 | 6 746 | 88,8 % | 74,8 % | 61,3 % | 1 468 | 5 874 | 269 |
+| b1700_3 | 1700 | 4000 | 19,51 % | 4 021 | 4 090 | 4 157 | 4 312 | 91,7 % | 81,3 % | 69,5 % | 1 368 | 9 634 | 0 |
+| b1700_6 | 1700 | 4000 | 9,45 % | 2 908 | 4 951 | 5 316 | 6 098 | 84,6 % | 69,8 % | 47,1 % | 1 539 | 4 785 | 0 |
+
+Médianes par (palier, seuil) : perte, `p50/p75/p90/p99`, `>1/2/3 s`.
+
+| palier | seuil | perte | p50 | p75 | p90 | p99 | >1 s | >2 s | >3 s |
+|---|---|---|---|---|---|---|---|---|---|
+| 1500 | 1500 | 8,08 % | 2 243 | 2 634 | 3 230 | 3 442 | 82,0 % | 34,5 % | 24,6 % |
+| 1500 | 3000 | 4,55 % | 2 384 | 3 689 | 5 417 | 6 567 | 76,2 % | 56,0 % | 39,1 % |
+| 1500 | 4000 | 6,37 % | 2 498 | 3 734 | 4 187 | 4 501 | 82,0 % | 57,2 % | 40,8 % |
+| 1700 | 1500 | 23,60 % | 1 634 | 2 639 | 3 225 | 3 541 | 83,8 % | 23,8 % | 18,4 % |
+| 1700 | 3000 | 18,66 % | 3 137 | 4 081 | 4 600 | 4 960 | 89,3 % | 76,2 % | 64,4 % |
+| 1700 | 4000 | 14,48 % | 3 464 | 4 520 | 4 737 | 5 205 | 88,1 % | 75,6 % | 58,3 % |
+
+### 31.3 Parts de la charge émise (tableau de décision)
+
+Les parts ci-dessus portent sur les réponses **servies** et ignorent les
+requêtes perdues. Répartition des 45 000 / 51 000 requêtes **envoyées**
+(médianes des 2 runs ; détail par run dans `tmp/shedab_report.md` §3) :
+
+| palier | seuil | < 1 s | 1–2 s | 2–3 s | > 3 s | perdues |
+|---|---|---|---|---|---|---|
+| 1500 | 1500 | 16,3 % | 42,4 % | 9,5 % | 23,7 % | 8,1 % |
+| 1500 | 3000 | 22,7 % | 19,3 % | 16,2 % | 37,3 % | 4,6 % |
+| 1500 | 4000 | 17,0 % | 23,3 % | 15,3 % | 38,0 % | 6,4 % |
+| 1700 | 1500 | 12,6 % | 44,8 % | 4,3 % | 14,7 % | 23,6 % |
+| 1700 | 3000 | 8,7 % | 10,7 % | 9,7 % | 52,2 % | 18,7 % |
+| 1700 | 4000 | 10,3 % | 10,9 % | 15,0 % | 49,3 % | 14,5 % |
+
+### 31.4 Lecture et mécanisme
+
+1. **Le seuil agit exactement comme spécifié** : les `age_ms` des lignes
+   `question_shed` sont juste au-dessus du seuil — 1 502/1 505 ms (seuil 1500),
+   3 001 ms (3000), 4 002 ms (4000) — et l'horodatage noyau est disponible
+   (`questions_question_shed_timestamp available=true`) ; chemin
+   `src/worker_questions.moon:281`.
+2. **Aucun effet sur le débit servi** : médianes 1 299–1 454 q/s, sans
+   tendance. Le seuil ne fait que répartir la surcharge entre **attente** et
+   **perte**.
+3. **Le seuil déplace la perte entre les deux files** : à 1500 ms, le
+   délestage des questions domine et la file réponses reste souvent propre
+   (`qdrop` 0–562) ; à 3000/4000 ms à 1500 q/s, les questions ne sont plus
+   délestées et la file réponses sature (`qdrop` 2 266–3 698, profondeur
+   4 096 = `maxlen`) ; à 1700 q/s, même à 3000/4000 ms, les files questions
+   saturent (profondeur 2 238–3 788) et le délestage redevient majoritaire.
+4. **Le seuil est un plafond de latence pour les requêtes servies** : quand la
+   file questions est le goulot, p50/p75 se tassent sur le seuil — 1 532/1 599
+   ms à 1500 (b1700_4), 3 021/3 044 ms à 3000 (b1700_2), 4 021/4 090 ms à 4000
+   (b1700_3).
+5. **Il ne protège pas le chemin réponses** : une réponse n'est jamais jetée
+   sur l'âge (`doc/CONFIG.md:437`). Quand la file réponses déborde (q14, file
+   chaude du second avis, §16.3), les > 2 s subsistent même à 1500 ms
+   (a1500_1 : 68,9 % ; b1700_1 : 47,5 %).
+6. **Bistabilité / variance** : à seuil identique, un run peut tomber dans le
+   régime « questions saturées » (délestage, q14 propre) ou « réponses
+   saturées » (`qdrop`, questions moins profondes) — d'où a1500_1 (3,5 % de
+   perte, 47,4 % > 3 s) vs a1500_4 (12,7 %, 0 % > 3 s). La cause est la
+   répartition aléatoire des 128 ports source entre resp-q14/q15, combinée à la
+   concentration du second avis sur q14. **Avec n = 2, aucun écart de perte
+   entre seuils n'est significatif** ; seules les distributions de latence le
+   sont.
+7. **Coût CPU** (ms/requête servie) : resp 1,04–1,15, dns 0,99–1,29, nft
+   0,13–0,16, total workers 2,27–2,71, machine 2,56–3,02 ; `busy` 93,2–97,0 %,
+   `idle` 3,0–6,8 %. Les deux paliers sont au-delà de la capacité (§30.5 :
+   ≈ 1 430–1 440 q/s).
+
+### 31.5 Application du critère et recommandation
+
+- **À 1500 q/s**, passer de 1500 à 4000 ms ne gagne que **1,7 point de perte**
+  (8,1 → 6,4 %) mais fait monter les clients servis en **> 3 s de 23,7 à
+  38,0 %** et baisser ceux servis en ≤ 2 s de 58,7 à 40,3 %.
+- **À 1700 q/s**, passer de 1500 à 4000 ms gagne **9,1 points de perte**
+  (23,6 → 14,5 %) mais fait passer les > 3 s de **14,7 à 49,3 %** et les ≤ 2 s
+  de 57,4 à 21,2 % : chaque point de perte épargné coûte ~4 points de clients
+  supplémentaires à plus de 3 s.
+
+**Recommandation : conserver `nfqueue.max_age_ms: 1500` (défaut actuel), sans
+changement de configuration.** C'est le seul réglage qui garde la majorité des
+requêtes émises sous 2 s dans la zone de surcharge (57–59 % aux deux paliers),
+au prix de 2 à 9 points de perte selon le palier — écart qui, à 1500 q/s, reste
+dans la variance run-à-run du même seuil. Les seuils 3000/4000 ms n'augmentent
+pas le débit et transforment une partie de la perte en attente de 3–4 s, ce que
+le critère retenu exclut. Limite : la campagne est faite **en surcharge** ; en
+dessous de ~1300 q/s (§30), il n'y a aucun délestage et le seuil est sans effet
+— le levier reste la capacité (§10.1).
+
+### 31.6 Vérifications finales, non fait / douteux
+
+**Vérifications finales**
+
+- **Configuration restaurée** : `cp /etc/custos/config.moon.dshedab
+  /etc/custos/config.moon && rm …dshedab && /etc/init.d/custos restart` ;
+  `md5` = **`d31244ecaf360611e17ce873b8299513`** ; `grep -n max_age_ms` →
+  **absent** (défaut 1500) ; ligne 2 `nfqueue: { responses: "14-15" }`,
+  ligne 164 `benchmark: false` ; `.dshedab` **absent** ; `status` =
+  **`running`** ; `auth_sessions_replayed_to_nft count=1` au redémarrage.
+- **Sonde DNS finale** (servus → 10.35.1.1) : `controlplane.tailscale.com A` →
+  **8 adresses** ; sonde `probe-after-bench` → **rc=0**.
+- **servus** : aucune IPv6 temporaire ajoutée ; `ip -6 addr show dev wan` =
+  2 globales + 1 lien-local (3 `inet6`), état initial ; aucun générateur.
+- **Cible** : files à profondeur 0, `qdrop` = `udrop` = 0 au repos ; aucun
+  `logread -f`/`tmux` ; aucune capture AF_PACKET ; rien installé.
+- `make all && make check && make test` exécuté en fin de tâche (total exact
+  dans le rapport de tâche).
+
+**Non fait / douteux**
+
+- **n = 2 par cellule** et bistabilité forte : les écarts de perte entre seuils
+  ne sont pas significatifs ; seules les latences le sont.
+- **`shed` est une borne basse** (`shed_total` par worker, empreinte de
+  rate-limiting partagée, §30.2) : a1500_4 compte 4 200 délestages pour 5 700
+  requêtes perdues.
+- **`débit servi` est une borne haute** (réponses du drain comptées sur 30 s).
+- **Fenêtre CPU plafonnée à DUR + 1,5 s** quand le drain n'est pas vide
+  (`analyse10.py`).
+- **Aucun palier entre 1300 et 1500 q/s** : le point de bascule n'est pas cerné.
+- Une seule source (`servus`), deux destinations IPv4, pas d'IPv6 temporaire,
+  pas de client réel multiple ; résidu noyau non décomposé (pas de `perf`).
