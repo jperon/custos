@@ -7,7 +7,7 @@
 ffi = require "ffi"
 bit = require "bit"
 { :w16, :w32, :fix_ip4_cksum, :fix_l4_cksum, :PROTO_UDP, :PROTO_TCP } = require "lib.checksums"
-{ :ip2s, dns_types: QTYPE } = require "lib.packet_parsing"
+{ :ip2s } = require "lib.packet_parsing"
 
 -- Reconstruit un paquet IP avec un nouveau payload DNS.
 -- ip_ihl : offset 0-based (en octets) de l'en-tête L4 depuis le début du paquet.
@@ -69,17 +69,19 @@ fmt_rdata = (rr) ->
   else
     "(rdata #{#rr.rdata}B)"
 
+--- Extrait les réponses utiles au hot path (worker_responses.finalize_a).
+-- Seuls champs consommés dans le code : rtype, rdata_str, ttl (cf. l'appelant
+-- src/worker_responses.moon:801). Les 6 autres champs historiques (name,
+-- rclass, rdlength, rdata_raw, rtype_name, ttl_offset) n'avaient aucun
+-- consommateur : une table de 9 clés hash par RR coûtait ~465 o pour 8 RR
+-- (mesure GC arrêté, docs/agents/perf.md §22).
+-- @tparam table dns_msg Message DNS parsé (ipparse.l7.dns).
+-- @treturn table Liste de { rtype, rdata_str, ttl }.
 parse_answers = (dns_msg) ->
   [ {
-    name:       rr.name
     rtype:      rr.rtype
-    rclass:     rr.rclass
-    ttl:        rr.ttl
-    rdlength:   #rr.rdata
-    rdata_raw:  (rr.rtype == 1 or rr.rtype == 28) and rr.rdata or ""
     rdata_str:  fmt_rdata rr
-    rtype_name: QTYPE[rr.rtype] or "TYPE#{rr.rtype}"
-    ttl_offset: rr.off + #rr.rname + 3   -- 0-based depuis début du payload DNS (l7_off=1)
+    ttl:        rr.ttl
   } for rr in *dns_msg.answers ]
 
 -- Reconstruit une REQUÊTE DNS (QR=0) à partir d'une RÉPONSE : en-tête + section

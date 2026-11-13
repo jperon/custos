@@ -117,6 +117,32 @@ describe "ipc", ->
       assert.equals "1.1.1.1",           decoded.resolver_ip_str
       assert.equals "00:00:00:00:00:00", decoded.mac_str
 
+  -- ── 2bis. allocation d'encode_msg (hot path question) ────────────────
+  describe "encode_msg allocation (GC arrêté)", ->
+    it "alloue < 550 o par appel", ->
+      -- encode_msg construisait un tableau de 14 champs + table.concat +
+      -- `.. \"\\n\"` (2 strings) + un tableau response_ids même vide, et
+      -- write_with_retry allouait un timespec FFI par appel : cf.
+      -- docs/agents/perf.md §19. Seuil calibré sur la mesure dans ce spec
+      -- (avant correctif ~750 o, après ~450 o).
+      m_ipc = fresh_ipc!
+      modifiers = { validate: true }
+      rids = { "r_utilisateurs", "r_ouverture" }
+      for i = 1, 2000
+        m_ipc.encode_msg i % 65536, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false,
+          "Allowed by rule: Utilisateurs", nil, "r_utilisateurs", "660s", modifiers, rids, nil
+      collectgarbage "collect"
+      collectgarbage "stop"
+      before = collectgarbage "count"
+      for i = 1, 300
+        m_ipc.encode_msg i % 65536, IP4_RAW, PORT, MAC_RAW, RESOLVER4_RAW, false,
+          "Allowed by rule: Utilisateurs", nil, "r_utilisateurs", "660s", modifiers, rids, nil
+      after = collectgarbage "count"
+      collectgarbage "restart"
+      per_call = (after - before) * 1024 / 300
+      assert.is_true per_call < 550,
+        "encode_msg alloue #{math.floor per_call} o/appel (seuil 550)"
+
   -- ── 3. encode/decode IPv6 round-trip ─────────────────────────────────
   describe "encode/decode IPv6 round-trip", ->
     it "round-trip avec adresses IPv6", ->

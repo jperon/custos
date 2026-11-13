@@ -666,6 +666,55 @@ resolve_client_family = (ip_str, want) ->
 -- partagés response_inject / dns_ede (réexportés en fin de fichier pour les
 -- tests existants).
 
+-- Tables d'addition précalculées : créées une fois par processus au lieu
+-- d'une par paquet dans finalize_a (cf. docs/agents/perf.md §22).
+ADD_IP  = { ipv4: add_ip4, ipv6: add_ip6 }
+ADD_MAC = { ipv4: add_mac4, ipv6: add_mac6 }
+
+--- Résout l'adresse d'un client pour une famille (memoïsée dans ctx).
+-- Fonction de module : remplace la closure `client_addr` recréée à chaque
+-- paquet par finalize_a. Le memo tient dans le ctx (un par paquet).
+-- @tparam table ctx Contexte paquet (client_ip, ip, _client_v4/_client_v6)
+-- @tparam string fam "ipv4" ou "ipv6"
+-- @treturn string|nil Adresse dans la famille demandée, ou nil
+client_addr_of = (ctx, fam) ->
+  if fam == "ipv4"
+    ctx._client_v4 or= (ctx.ip.version == 4 and ctx.client_ip or resolve_client_family ctx.client_ip, "ipv4")
+    ctx._client_v4
+  else
+    ctx._client_v6 or= (ctx.ip.version == 6 and ctx.client_ip or resolve_client_family ctx.client_ip, "ipv6")
+    ctx._client_v6
+
+--- Injecte des réponses A/AAAA (corps de l'ancienne closure inject_answers).
+-- @tparam table ctx          Contexte paquet (defer)
+-- @tparam table inject_opts  Options response_inject.inject
+-- @tparam table answers      Liste { family, addr, ttl }
+-- @treturn table Résultat inject
+inject_answers = (ctx, inject_opts, answers) ->
+  -- En cours de lot, purger les ACK est inutile (le flush du lot les lit) et
+  -- peut jeter l'ACK de la dernière insertion du lot : cf. nft_queue.last_acked_seq.
+  drain_ack! unless ctx.defer
+  inject answers, inject_opts
+
+--- Helper override : strip HTTPS/SVCB, repatche le paquet et pose le verdict
+-- (NF_DROP si la construction ou le patch échoue). Le verdict peut être
+-- différé à la fin du lot NFQUEUE (cf. settle). Corps de l'ancienne closure
+-- patch_and_accept, en paramètres explicites.
+-- @tparam table  ctx         Contexte paquet (raw, ip, l4, ip_ihl, …)
+-- @tparam string new_dns     Payload de remplacement (ou nil)
+-- @tparam string action_label Action du log DEBUG
+-- @tparam string txid_hex    Txid formaté (déjà calculé par l'appelant)
+-- @treturn nil
+patch_and_accept = (ctx, new_dns, action_label, txid_hex) ->
+  if new_dns
+    new_dns = strip_https_rr(new_dns) or new_dns
+    patched = replace_dns_payload ctx.raw, ctx.ip, ctx.l4, ctx.ip_ihl, new_dns
+    if patched
+      if level_enabled "DEBUG"
+        log_debug -> { action: action_label, src_ip: ctx.src_ip, dst_ip: ctx.dst_ip, txid: txid_hex, client_mac: ctx.client_mac, user: ctx.user }
+      return settle ctx, NF_ACCEPT, patched, false
+  settle ctx, NF_DROP, nil, false
+
 --- Finalise une réponse d'origine A (pose le verdict NFQUEUE lui-même).
 -- Utilisée en ligne (verdict validateur déjà connu) et au déparquage (réponse
 -- validateur B arrivée, ou budget dépassé → override=nil = fail-open).
@@ -683,15 +732,9 @@ finalize_a = (ctx, override) ->
   reason = entry and entry.reason or ""
   txid_hex = string.format "0x%04x", txid
 
-  -- Résolveur d'adresse client par famille (mémoïsé), partagé override/normal.
-  client_v4, client_v6 = nil, nil
-  client_addr = (fam) ->
-    if fam == "ipv4"
-      client_v4 or= (ip.version == 4 and client_ip or resolve_client_family client_ip, "ipv4")
-      client_v4
-    else
-      client_v6 or= (ip.version == 6 and client_ip or resolve_client_family client_ip, "ipv6")
-      client_v6
+  -- Résolveur d'adresse client par famille (memoïsé dans ctx, cf.
+  -- client_addr_of) : une closure à 1 upvalue au lieu de 3 closures lourdes.
+  client_addr = (fam) -> client_addr_of ctx, fam
 
   -- Options inject partagées (réutilisées avec inject_nft ajusté plus bas).
   inject_opts = {
@@ -701,39 +744,20 @@ finalize_a = (ctx, override) ->
     :ack_corr
     inject_nft:   true
     :mac_valid
-    add_ip:  { ipv4: add_ip4, ipv6: add_ip6 }
-    add_mac: { ipv4: add_mac4, ipv6: add_mac6 }
+    add_ip:  ADD_IP
+    add_mac: ADD_MAC
   }
-
-  inject_answers = (answers) ->
-    -- En cours de lot, purger les ACK est inutile (le flush du lot les lit) et
-    -- peut jeter l'ACK de la dernière insertion du lot : cf. nft_queue.last_acked_seq.
-    drain_ack! unless ctx.defer
-    inject answers, inject_opts
-
-  -- Helper override : strip HTTPS/SVCB, repatche le paquet et pose le verdict
-  -- (NF_DROP si la construction ou le patch échoue). Le verdict peut être
-  -- différé à la fin du lot NFQUEUE (cf. settle).
-  patch_and_accept = (new_dns, action_label) ->
-    if new_dns
-      new_dns = strip_https_rr(new_dns) or new_dns
-      patched = replace_dns_payload raw, ip, l4, ip_ihl, new_dns
-      if patched
-        if level_enabled "DEBUG"
-          log_debug -> { action: action_label, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
-        return settle ctx, NF_ACCEPT, patched, false
-    settle ctx, NF_DROP, nil, false
 
   -- ── Override : blocage NXDOMAIN + EDE (Filtered) ──────────────
   if override and override.kind == "block"
     write_block_event ctx
-    return patch_and_accept build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block"
+    return patch_and_accept ctx, build_nxdomain_response(dns_msg, dns_raw, VALIDATOR_REASON), "response_validator_block", txid_hex
 
   -- ── Override : sinkhole (reproduction 0.0.0.0/:: + EDE Filtered) ─
   if override and override.kind == "sinkhole"
     write_block_event ctx
     sink = { a: override.a or {}, aaaa: override.aaaa or {}, ttl: override.ttl }
-    return patch_and_accept build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole"
+    return patch_and_accept ctx, build_sinkhole_response(dns_msg, dns_raw, VALIDATOR_REASON, sink), "response_validator_sinkhole", txid_hex
 
   -- ── Override : réorientation (CNAME) ──────────────────────────
   if override and override.kind == "redirect" and override.cname_target
@@ -752,7 +776,7 @@ finalize_a = (ctx, override) ->
           for r in *(override.aaaa or {})
             redirect_answers[#redirect_answers + 1] = { family: "ipv6", addr: ip2s(r), ttl: override.ttl }
           if #redirect_answers > 0
-            inject_answers redirect_answers
+            inject_answers ctx, inject_opts, redirect_answers
           if level_enabled "DEBUG"
             log_debug -> { action: "response_validator_redirect", target: override.cname_target, src_ip: src_ip, dst_ip: dst_ip, txid: txid_hex, client_mac: client_mac, user: user }
           return settle ctx, NF_ACCEPT, patched, (#redirect_answers > 0)

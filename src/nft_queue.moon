@@ -198,17 +198,13 @@ reset_ack_state = ->
   nil
 
 build_line = (kind, key, ip, rule_id, timeout, corr, item_seq, widx) ->
-  table.concat({
-    LINE_VERSION
-    kind
-    key
-    ip
-    to_hex rule_id or ""
-    timeout
-    tostring item_seq
-    tostring widx or -1
-    to_hex corr or ""
-  }, "|") .. "\n"
+  -- Concaténation directe plutôt que table.concat + `.. "\n"` : la forme à
+  -- table allouait un tableau de 9 champs + une string intermédiaire par
+  -- ligne (16 lignes par réponse Tailscale, cf. docs/agents/perf.md §22).
+  -- Le "\n" est le dernier opérande : une seule string allouée par ligne.
+  LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. ip .. "|" ..
+    to_hex(rule_id or "") .. "|" .. timeout .. "|" .. tostring(item_seq) ..
+    "|" .. tostring(widx or -1) .. "|" .. to_hex(corr or "") .. "\n"
 
 --- Enfile une ligne d'insertion nft dans le tampon du lot.
 -- La ligne n'est PAS écrite ici : elle rejoint le tampon, vidé en une écriture

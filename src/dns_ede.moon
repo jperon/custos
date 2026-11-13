@@ -18,6 +18,11 @@ A        = dns_mod.types.A
 AAAA     = dns_mod.types.AAAA
 HTTPS    = dns_mod.types.HTTPS
 SVCB     = dns_mod.types.SVCB
+-- Sets de types précalculés pour les aliases strip_* : la table était
+-- réallouée à chaque appel (cf. docs/agents/perf.md §22).
+A_SET       = { [A]: true }
+AAAA_SET    = { [AAAA]: true }
+HTTPS_SVCB_SET = { [HTTPS]: true, [SVCB]: true }
 ede_codes = dns_mod.ede_codes
 
 pack: sp = require "ipparse.lib.pack_compat"
@@ -283,88 +288,10 @@ add_ede_modified = (dns_payload, reason) ->
 
   tostring dns
 
-strip_rrtypes = (dns_payload, rrtypes) ->
-  return dns_payload unless dns_payload and #dns_payload >= 12
-
-  len = #dns_payload
-  u16 = (off) ->
-    return nil if off + 1 > len
-    dns_payload\byte(off) * 256 + dns_payload\byte(off + 1)
-
-  skip_name = (off) ->
-    cur = off
-    steps = 0
-    while cur <= len
-      steps += 1
-      return nil if steps > 128
-      b = dns_payload\byte cur
-      return nil unless b
-      if b == 0
-        return cur + 1
-      elseif b >= 0xC0
-        return nil if cur + 1 > len
-        return cur + 2
-      else
-        return nil if cur + b > len
-        cur += 1 + b
-
-    nil
-
-  id = u16 1
-  flags = u16 3
-  qdcount = u16 5
-  ancount = u16 7
-  nscount = u16 9
-  arcount = u16 11
-  return dns_payload unless id and flags and qdcount and ancount and nscount and arcount
-
-  off = 13
-  question_parts = {}
-  for i = 1, qdcount
-    q_end = skip_name off
-    return dns_payload unless q_end
-    return dns_payload if q_end + 3 > len
-    question_parts[#question_parts + 1] = dns_payload\sub off, q_end + 3
-    off = q_end + 4
-
-  copy_section = (count) ->
-    kept = 0
-    sec = {}
-    for i = 1, count
-      rr_start = off
-      name_end = skip_name off
-      return nil unless name_end
-      return nil if name_end + 9 > len
-
-      rrtype = u16(name_end)
-      rdlength = u16(name_end + 8)
-      rr_end = name_end + 10 + rdlength - 1
-      return nil if rr_end > len
-
-      if not rrtypes[rrtype]
-        sec[#sec + 1] = dns_payload\sub rr_start, rr_end
-        kept += 1
-
-      off = rr_end + 1
-
-    kept, table.concat sec
-
-  ancount_new, answers = copy_section ancount
-  return dns_payload unless answers
-  nscount_new, authorities = copy_section nscount
-  return dns_payload unless authorities
-  arcount_new, additionals = copy_section arcount
-  return dns_payload unless additionals
-
-  header = sp ">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new
-  header .. table.concat(question_parts) .. answers .. authorities .. additionals
-
---- Supprime les RR d'un ou plusieurs types DNS d'un payload brut.
--- @tparam  string         dns_payload Payload DNS brut.
--- @tparam  number|string|table rtype  Type DNS : entier (ex: 28), nom (ex: "AAAA"),
---                                     ou table de tels éléments (ex: {"HTTPS","SVCB"}).
--- @treturn string Payload modifié, ou original si rien à supprimer / erreur de parse.
-strip_dns_rr = (dns_payload, rtype) ->
+--- Construit le set de types à stripper (helper de strip_dns_rr).
+-- @tparam number|string|table rtype Type(s) : entier, nom, ou table de tels éléments.
+-- @treturn table Set { [rtype_number] = true }
+resolve_rrset = (rtype) ->
   resolve = (t) ->
     return t if type(t) == "number"
     v = dns_mod.types[t]
@@ -376,12 +303,126 @@ strip_dns_rr = (dns_payload, rtype) ->
       set[resolve(t)] = true
   else
     set[resolve(rtype)] = true
-  strip_rrtypes dns_payload, set
+  set
 
--- Aliases spécialisés — définis en termes de strip_dns_rr.
-strip_a_rr     = (p) -> strip_dns_rr p, A
-strip_aaaa_rr  = (p) -> strip_dns_rr p, AAAA
-strip_https_rr = (p) -> strip_dns_rr p, { HTTPS, SVCB }
+-- Tables scratch réutilisées entre appels : strip_rrtypes/copy_section ne
+-- sont pas réentrants (aucun appel imbriqué — clear_ad_bit/add_ede_modified
+-- qui suivent ne strip pas, cf. docs/agents/perf.md §22). Les strings
+-- résultat sont recopiées par table.concat/`..` avant le retour, jamais
+-- retenues. Déclarées AVANT copy_section (portée Lua).
+_scratch_qp = {}
+_scratch_sec = {}
+
+-- Lecture d'un uint16 big-endian : fonctions de module à paramètres
+-- explicites (payload, len, off) — les closures précédentes étaient
+-- réallouées à chaque appel de strip_rrtypes (cf. docs/agents/perf.md §22).
+u16_at = (p, len, off) ->
+  return nil if off + 1 > len
+  p\byte(off) * 256 + p\byte(off + 1)
+
+--- Saute un nom de RR (labels ou pointeur de compression).
+-- @tparam string p     Payload DNS
+-- @tparam number len   Longueur du payload
+-- @tparam number off   Offset 1-based du début du nom
+-- @treturn number|nil Offset suivant le nom, ou nil si invalide
+skip_name_at = (p, len, off) ->
+  cur = off
+  steps = 0
+  while cur <= len
+    steps += 1
+    return nil if steps > 128
+    b = p\byte cur
+    return nil unless b
+    if b == 0
+      return cur + 1
+    elseif b >= 0xC0
+      return nil if cur + 1 > len
+      return cur + 2
+    else
+      return nil if cur + b > len
+      cur += 1 + b
+  nil
+
+--- Recopie une section de `count` RR en excluant les types de `rrtypes`.
+-- @tparam string p      Payload DNS
+-- @tparam number len    Longueur du payload
+-- @tparam number off    Offset de début de section (1-based)
+-- @tparam table  rrtypes Set { [rtype] = true } des types à retirer
+-- @tparam number count  Nombre de RR de la section
+-- @treturn number|nil Nombre de RR conservés, ou nil si payload invalide
+-- @treturn string|nil  Section recopiée, ou nil
+-- @treturn number|nil  Offset de fin de section, ou nil
+copy_section = (p, len, off, rrtypes, count) ->
+  kept = 0
+  sec = _scratch_sec
+  for i = #sec, 1, -1
+    sec[i] = nil
+  cur = off
+  for _ = 1, count
+    rr_start = cur
+    name_end = skip_name_at p, len, cur
+    return nil unless name_end
+    return nil if name_end + 9 > len
+
+    rrtype = u16_at p, len, name_end
+    rdlength = u16_at p, len, name_end + 8
+    rr_end = name_end + 10 + rdlength - 1
+    return nil if rr_end > len
+
+    if not rrtypes[rrtype]
+      sec[#sec + 1] = p\sub rr_start, rr_end
+      kept += 1
+
+    cur = rr_end + 1
+
+  kept, table.concat(sec), cur
+
+strip_rrtypes = (dns_payload, rrtypes) ->
+  return dns_payload unless dns_payload and #dns_payload >= 12
+
+  len = #dns_payload
+  id = u16_at dns_payload, len, 1
+  flags = u16_at dns_payload, len, 3
+  qdcount = u16_at dns_payload, len, 5
+  ancount = u16_at dns_payload, len, 7
+  nscount = u16_at dns_payload, len, 9
+  arcount = u16_at dns_payload, len, 11
+  return dns_payload unless id and flags and qdcount and ancount and nscount and arcount
+
+  off = 13
+  question_parts = _scratch_qp
+  for i = #question_parts, 1, -1
+    question_parts[i] = nil
+  for _ = 1, qdcount
+    q_end = skip_name_at dns_payload, len, off
+    return dns_payload unless q_end
+    return dns_payload if q_end + 3 > len
+    question_parts[#question_parts + 1] = dns_payload\sub off, q_end + 3
+    off = q_end + 4
+
+  ancount_new, answers, off = copy_section dns_payload, len, off, rrtypes, ancount
+  return dns_payload unless answers
+  nscount_new, authorities, off = copy_section dns_payload, len, off, rrtypes, nscount
+  return dns_payload unless authorities
+  arcount_new, additionals = copy_section dns_payload, len, off, rrtypes, arcount
+  return dns_payload unless additionals
+
+  header = sp ">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new
+  header .. table.concat(question_parts) .. answers .. authorities .. additionals
+
+--- Supprime les RR d'un ou plusieurs types DNS d'un payload brut.
+-- @tparam  string         dns_payload Payload DNS brut.
+-- @tparam  number|string|table rtype  Type DNS : entier (ex: 28), nom (ex: "AAAA"),
+--                                     ou table de tels éléments (ex: {"HTTPS","SVCB"}).
+-- @treturn string Payload modifié, ou original si rien à supprimer / erreur de parse.
+strip_dns_rr = (dns_payload, rtype) ->
+  strip_rrtypes dns_payload, resolve_rrset rtype
+
+-- Aliases spécialisés — définis en termes de strip_rrtypes avec un set
+-- précalculé (aucune allocation par appel).
+strip_a_rr     = (p) -> strip_rrtypes p, A_SET
+strip_aaaa_rr  = (p) -> strip_rrtypes p, AAAA_SET
+strip_https_rr = (p) -> strip_rrtypes p, HTTPS_SVCB_SET
 
 --- Clear the AD (Authenticated Data) bit in a DNS response.
 -- This is used when HTTPS/SVCB records are stripped, as the signature

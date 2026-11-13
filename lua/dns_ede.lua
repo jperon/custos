@@ -10,6 +10,16 @@ local A = dns_mod.types.A
 local AAAA = dns_mod.types.AAAA
 local HTTPS = dns_mod.types.HTTPS
 local SVCB = dns_mod.types.SVCB
+local A_SET = {
+  [A] = true
+}
+local AAAA_SET = {
+  [AAAA] = true
+}
+local HTTPS_SVCB_SET = {
+  [HTTPS] = true,
+  [SVCB] = true
+}
 local ede_codes = dns_mod.ede_codes
 local sp
 sp = require("ipparse.lib.pack_compat").pack
@@ -270,114 +280,8 @@ add_ede_modified = function(dns_payload, reason)
   add_ede(dns, EDE_TTL_MODIFIED, ede_text)
   return tostring(dns)
 end
-local strip_rrtypes
-strip_rrtypes = function(dns_payload, rrtypes)
-  if not (dns_payload and #dns_payload >= 12) then
-    return dns_payload
-  end
-  local len = #dns_payload
-  local u16
-  u16 = function(off)
-    if off + 1 > len then
-      return nil
-    end
-    return dns_payload:byte(off) * 256 + dns_payload:byte(off + 1)
-  end
-  local skip_name
-  skip_name = function(off)
-    local cur = off
-    local steps = 0
-    while cur <= len do
-      steps = steps + 1
-      if steps > 128 then
-        return nil
-      end
-      local b = dns_payload:byte(cur)
-      if not (b) then
-        return nil
-      end
-      if b == 0 then
-        return cur + 1
-      elseif b >= 0xC0 then
-        if cur + 1 > len then
-          return nil
-        end
-        return cur + 2
-      else
-        if cur + b > len then
-          return nil
-        end
-        cur = cur + (1 + b)
-      end
-    end
-    return nil
-  end
-  local id = u16(1)
-  local flags = u16(3)
-  local qdcount = u16(5)
-  local ancount = u16(7)
-  local nscount = u16(9)
-  local arcount = u16(11)
-  if not (id and flags and qdcount and ancount and nscount and arcount) then
-    return dns_payload
-  end
-  local off = 13
-  local question_parts = { }
-  for i = 1, qdcount do
-    local q_end = skip_name(off)
-    if not (q_end) then
-      return dns_payload
-    end
-    if q_end + 3 > len then
-      return dns_payload
-    end
-    question_parts[#question_parts + 1] = dns_payload:sub(off, q_end + 3)
-    off = q_end + 4
-  end
-  local copy_section
-  copy_section = function(count)
-    local kept = 0
-    local sec = { }
-    for i = 1, count do
-      local rr_start = off
-      local name_end = skip_name(off)
-      if not (name_end) then
-        return nil
-      end
-      if name_end + 9 > len then
-        return nil
-      end
-      local rrtype = u16(name_end)
-      local rdlength = u16(name_end + 8)
-      local rr_end = name_end + 10 + rdlength - 1
-      if rr_end > len then
-        return nil
-      end
-      if not rrtypes[rrtype] then
-        sec[#sec + 1] = dns_payload:sub(rr_start, rr_end)
-        kept = kept + 1
-      end
-      off = rr_end + 1
-    end
-    return kept, table.concat(sec)
-  end
-  local ancount_new, answers = copy_section(ancount)
-  if not (answers) then
-    return dns_payload
-  end
-  local nscount_new, authorities = copy_section(nscount)
-  if not (authorities) then
-    return dns_payload
-  end
-  local arcount_new, additionals = copy_section(arcount)
-  if not (additionals) then
-    return dns_payload
-  end
-  local header = sp(">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new)
-  return header .. table.concat(question_parts) .. answers .. authorities .. additionals
-end
-local strip_dns_rr
-strip_dns_rr = function(dns_payload, rtype)
+local resolve_rrset
+resolve_rrset = function(rtype)
   local resolve
   resolve = function(t)
     if type(t) == "number" then
@@ -398,22 +302,140 @@ strip_dns_rr = function(dns_payload, rtype)
   else
     set[resolve(rtype)] = true
   end
-  return strip_rrtypes(dns_payload, set)
+  return set
+end
+local _scratch_qp = { }
+local _scratch_sec = { }
+local u16_at
+u16_at = function(p, len, off)
+  if off + 1 > len then
+    return nil
+  end
+  return p:byte(off) * 256 + p:byte(off + 1)
+end
+local skip_name_at
+skip_name_at = function(p, len, off)
+  local cur = off
+  local steps = 0
+  while cur <= len do
+    steps = steps + 1
+    if steps > 128 then
+      return nil
+    end
+    local b = p:byte(cur)
+    if not (b) then
+      return nil
+    end
+    if b == 0 then
+      return cur + 1
+    elseif b >= 0xC0 then
+      if cur + 1 > len then
+        return nil
+      end
+      return cur + 2
+    else
+      if cur + b > len then
+        return nil
+      end
+      cur = cur + (1 + b)
+    end
+  end
+  return nil
+end
+local copy_section
+copy_section = function(p, len, off, rrtypes, count)
+  local kept = 0
+  local sec = _scratch_sec
+  for i = #sec, 1, -1 do
+    sec[i] = nil
+  end
+  local cur = off
+  for _ = 1, count do
+    local rr_start = cur
+    local name_end = skip_name_at(p, len, cur)
+    if not (name_end) then
+      return nil
+    end
+    if name_end + 9 > len then
+      return nil
+    end
+    local rrtype = u16_at(p, len, name_end)
+    local rdlength = u16_at(p, len, name_end + 8)
+    local rr_end = name_end + 10 + rdlength - 1
+    if rr_end > len then
+      return nil
+    end
+    if not rrtypes[rrtype] then
+      sec[#sec + 1] = p:sub(rr_start, rr_end)
+      kept = kept + 1
+    end
+    cur = rr_end + 1
+  end
+  return kept, table.concat(sec), cur
+end
+local strip_rrtypes
+strip_rrtypes = function(dns_payload, rrtypes)
+  if not (dns_payload and #dns_payload >= 12) then
+    return dns_payload
+  end
+  local len = #dns_payload
+  local id = u16_at(dns_payload, len, 1)
+  local flags = u16_at(dns_payload, len, 3)
+  local qdcount = u16_at(dns_payload, len, 5)
+  local ancount = u16_at(dns_payload, len, 7)
+  local nscount = u16_at(dns_payload, len, 9)
+  local arcount = u16_at(dns_payload, len, 11)
+  if not (id and flags and qdcount and ancount and nscount and arcount) then
+    return dns_payload
+  end
+  local off = 13
+  local question_parts = _scratch_qp
+  for i = #question_parts, 1, -1 do
+    question_parts[i] = nil
+  end
+  for _ = 1, qdcount do
+    local q_end = skip_name_at(dns_payload, len, off)
+    if not (q_end) then
+      return dns_payload
+    end
+    if q_end + 3 > len then
+      return dns_payload
+    end
+    question_parts[#question_parts + 1] = dns_payload:sub(off, q_end + 3)
+    off = q_end + 4
+  end
+  local ancount_new, answers
+  ancount_new, answers, off = copy_section(dns_payload, len, off, rrtypes, ancount)
+  if not (answers) then
+    return dns_payload
+  end
+  local nscount_new, authorities
+  nscount_new, authorities, off = copy_section(dns_payload, len, off, rrtypes, nscount)
+  if not (authorities) then
+    return dns_payload
+  end
+  local arcount_new, additionals = copy_section(dns_payload, len, off, rrtypes, arcount)
+  if not (additionals) then
+    return dns_payload
+  end
+  local header = sp(">H H H H H H", id, flags, qdcount, ancount_new, nscount_new, arcount_new)
+  return header .. table.concat(question_parts) .. answers .. authorities .. additionals
+end
+local strip_dns_rr
+strip_dns_rr = function(dns_payload, rtype)
+  return strip_rrtypes(dns_payload, resolve_rrset(rtype))
 end
 local strip_a_rr
 strip_a_rr = function(p)
-  return strip_dns_rr(p, A)
+  return strip_rrtypes(p, A_SET)
 end
 local strip_aaaa_rr
 strip_aaaa_rr = function(p)
-  return strip_dns_rr(p, AAAA)
+  return strip_rrtypes(p, AAAA_SET)
 end
 local strip_https_rr
 strip_https_rr = function(p)
-  return strip_dns_rr(p, {
-    HTTPS,
-    SVCB
-  })
+  return strip_rrtypes(p, HTTPS_SVCB_SET)
 end
 local clear_ad_bit
 clear_ad_bit = function(dns_payload)

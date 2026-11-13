@@ -345,7 +345,7 @@ describe "worker_questions", ->
   -- Chaque question écrivait une ligne TSV (events) et un message de 22 octets
   -- (learn) : deux write() par paquet. Les messages sont désormais tamponnés et
   -- vidés en fin de lot NFQUEUE (on_batch_end), une écriture par tranche
-  -- ≤ PIPE_BUF (cf. docs/agents/perf.md §19).
+  -- ≤ PIPE_BUF (cf. docs/agents/perf.md §20).
   describe "écritures groupées (events + learn)", ->
     event_fields = ->
       {

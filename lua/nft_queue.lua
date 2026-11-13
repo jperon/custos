@@ -221,17 +221,7 @@ reset_ack_state = function()
 end
 local build_line
 build_line = function(kind, key, ip, rule_id, timeout, corr, item_seq, widx)
-  return table.concat({
-    LINE_VERSION,
-    kind,
-    key,
-    ip,
-    to_hex(rule_id or ""),
-    timeout,
-    tostring(item_seq),
-    tostring(widx or -1),
-    to_hex(corr or "")
-  }, "|") .. "\n"
+  return LINE_VERSION .. "|" .. kind .. "|" .. key .. "|" .. ip .. "|" .. to_hex(rule_id or "") .. "|" .. timeout .. "|" .. tostring(item_seq) .. "|" .. tostring(widx or -1) .. "|" .. to_hex(corr or "") .. "\n"
 end
 local enqueue
 enqueue = function(kind, key, ip, rule_id, timeout, corr)

@@ -297,3 +297,27 @@ describe "worker_responses.finalize_a", ->
     m_off.finalize_a ctx, nil
     assert.equals 1, state.wait_calls
     assert.equals 0, m_off.take_last_ack_wait_us!
+
+  it "finalize_a alloue < 3550 o par appel (GC arrêté)", ->
+    -- finalize_a créait 3 closures par paquet (client_addr, inject_answers,
+    -- patch_and_accept) + la table inject_opts (11 clés) : cf.
+    -- docs/agents/perf.md §22. Seuil calibré sur la mesure GC arrêté dans
+    -- ce harnais (3897 → 3277 ; le strip scratch de dns_ede porte à 2710).
+    state.last_seq = nil
+    config = require "config"
+    config.runtime = { benchmark: false }
+    package.loaded["worker_responses"] = nil
+    m = require "worker_responses"
+    for _ = 1, 500 do m.finalize_a ctx, nil   -- JIT + caches
+    verdicts = {}
+    collectgarbage "collect"
+    collectgarbage "stop"
+    before = collectgarbage "count"
+    for _ = 1, 200
+      verdicts = {}
+      m.finalize_a ctx, nil
+    after = collectgarbage "count"
+    collectgarbage "restart"
+    per_call = (after - before) * 1024 / 200
+    assert.is_true per_call < 3550,
+      "finalize_a alloue #{math.floor per_call} o/appel (seuil 3550)"
