@@ -3656,3 +3656,219 @@ Le reste du coût local est hors périmètre et se répartit ainsi (µs/requête
   (production : un par worker réponses) ; l'estimation cible de §26.5 est un
   produit scalaire, pas une mesure sur la cible (aucune connexion cette
   session) ; le CPU du worker `nft` (0,67 ms/requête) n'est pas traité ici.
+
+
+## 27. Où passe le CPU non attribué (≈ 1,8 ms/requête mixed) (2026-11-13, branche `d-sys`)
+
+Campagne demandée après §25.5 : au plateau `mixed` (~770 q/s servis), le coût
+machine était ≈ 5,2 ms CPU/requête, dont 3,3 ms attribués aux workers et
+**≈ 1,8 ms non attribués** (35 % du budget, `sys` ≈ 27 % des 4 cœurs).
+Objectif : ventiler ces 1,8 ms par échantillonnage `/proc`, inventorier ce que
+le noyau évalue par paquet, compter les appels système du code et classer les
+leviers. **Aucune modification de code** ; la configuration de la cible n'a
+**pas** été changée (`md5` `bddc79b5…` avant/après, §27.8). Harnais
+`tmp/sys/` (sampler 1 Hz + wrapper), générateur et compteurs de `tmp/tune8/`
+inchangés ; résultats bruts `tmp/sys/results/` (ignorés), rapport complet
+**`tmp/sys_report.md`**.
+
+### 27.1 Dispositif et protocole
+
+- **Build déployé identique à la branche** : `md5sum` égaux pour les **295**
+  fichiers `lua/**/*.lua` (`LC_ALL=C sort`, zéro écart). `nft` 1.1.6, noyau
+  6.12.74, 4 cœurs.
+- **Générateur** : `servus.lan` (10.35.1.2), `dnsload5.py` par stdin, **128
+  sockets**, deux destinations (`10.35.1.1`, `10.35.4.1`), `mixed`
+  (30 % NXDOMAIN), 30 s, drain 45 s. `servus` authentifié avant chaque palier
+  (`controlplane.tailscale.com` → 8 adresses à chaque fois).
+- **Paliers** : 700 ×2, 850 ×2. Repos vérifié (profondeur nulle sur
+  q0/q1/q14/q15), un seul générateur, compteurs nft et NFQUEUE dans le même
+  instantané, sonde DNS après chaque palier.
+- **Échantillonnage** (`tmp/sys/sampler_sys.sh`, lecture seule, 1 Hz) :
+  `/proc/stat` global + par CPU, `/proc/softirqs` (NET_RX/NET_TX/TASKLET/
+  SCHED), `/proc/interrupts` (IRQ 65/105/106, IPI0/1/5), `nfnetlink_queue`,
+  `/proc/net/dev`, `nf_conntrack_count`, et **toutes** les tâches
+  `/proc/<pid>/stat` (utime champ 14, stime champ 15, comm, RSS, `processor`
+  champ 39). HZ mesuré 97–100. Fenêtre = 30 s d'émission ; `busy` =
+  `user+nice+system+irq+softirq`.
+- **Config** : `nfqueue: { responses: "14-15" }` (ligne 2), `questions` `"0-1"`,
+  `rcvbuf` 4 Mio, `maxlen` 4096, `pending_max` 20 000, `max_age_ms` 1500,
+  `runtime.benchmark: true` (ligne 164). Aucune clé modifiée.
+
+### 27.2 Résultats
+
+| run | émis | reçus | perte | p50/p99 (ms) | busy ms/req émis | busy ms/req servi | workers | non attribué |
+|---|---|---|---|---|---|---|---|---|
+| 700 r1 | 20 999 | 20 999 | 0 % | 105,1 / 325,3 | 5,437 | 5,437 | 3,715 | **1,722** |
+| 700 r2 | 21 000 | 21 000 | 0 % | 70,3 / 255,7 | 5,260 | 5,260 | 3,564 | **1,697** |
+| 850 r1 | 25 502 | 23 082 | 9,5 % | 1 525,6 / 1 757,9 | 4,546 | 5,023 | 3,124 | **1,423** (1,572 servi) |
+| 850 r2 | 25 503 | 23 064 | 9,6 % | 1 525,7 / 1 747,3 | 4,538 | 5,017 | 3,119 | **1,418** (1,568 servi) |
+
+À 850, le débit servi est **768,8–769,4 q/s**, identique à §25 (758–776) ; la
+perte est du délestage de questions (`qdrop=udrop=0`, profondeurs < 4096).
+Répartition par CPU : **96,2–96,6 %** sur les quatre cœurs à 850 (91,7–92,4 %
+à 700) — aucun CPU isolé, c'est bien la somme qui sature.
+
+### 27.3 Ventilation : les 1,8 ms sont retrouvées
+
+850 r2, ms CPU par requête **émise** / **servie** (la somme ferme à 0,001 ms) :
+
+| poste | émis | servi | part du non attribué |
+|---|---:|---:|---:|
+| **busy total** | **4,538** | **5,017** | — |
+| workers (resp+dns+nft+events+mac) | 3,119 | 3,449 | — |
+| dont `dns` (2) | 1,397 | 1,545 | — |
+| dont `resp` (2) | 1,311 | 1,449 | — |
+| dont `nft` | 0,320 | 0,354 | — |
+| dont `events` / `mac-lrn` | 0,075 / 0,012 | 0,083 / 0,013 | — |
+| **non attribué** | **1,418** | **1,568** | 100 % |
+| `logread -f` (6 processus) | 0,448 | 0,495 | 31,6 % |
+| `tmux` | 0,188 | 0,208 | 13,3 % |
+| `logd` | 0,150 | 0,166 | 10,6 % |
+| `procd` | 0,113 | 0,125 | 8,0 % |
+| échantillonneur (`sh`/`cat`/`grep`) | 0,129 | 0,143 | 9,1 % |
+| `sshd` | 0,007 | 0,008 | 0,5 % |
+| `kworker` (51) / `ksoftirqd` (4) | 0,021 / 0,006 | 0,023 / 0,006 | 1,8 % |
+| **résidu `irq+softirq`** | **0,353** | **0,390** | **24,9 %** |
+
+À 700 r2 : non attribué **1,697** = logread 0,534 + tmux 0,222 + logd 0,179 +
+procd 0,132 + échantillonneur 0,155 + sshd 0,009 + kworkers 0,032 + résidu
+`irq+softirq` 0,429. Le run r1 donne 1,722 (mêmes postes à ±0,03).
+
+**Lecture** : ≈ 73 % du « non attribué » est du temps de **processus nommés**
+(journalisation, supervision, mesure), 25 % seulement est du **noyau**
+(`irq+softirq`), 2 % des kthreads. L'estimation de §25 (1,8 ms) est donc
+globalement juste, mais son interprétation (« temps système/softirq du pont et
+de NFQUEUE ») est fausse.
+
+### 27.4 Le volume de log benchmark explique le reste
+
+À 700 q/s, la fenêtre de 30 s contient **21 177 lignes
+`response_dns_benchmark` sur 21 179 lignes de log** (99,99 %), 536 octets par
+ligne (0,36 Mo/s). Les six `logread -f` (pids 2335, 15130, 18852, 18881, 25113,
+25483 ; ppid 1, une session `tmux` ou un bash de supervision, démarrés les
+11 et 13/11) coûtent **0,07–0,10 ms/requête chacun**, soit ≈ 90 µs par ligne
+et par lecteur ; `tmux` (pid 3002)
+0,19–0,23, `logd` 0,15–0,18, `procd` 0,11–0,14. Aucun n'est lancé par custos.
+Au repos (20 s, trafic de fond), les six `logread` tombent à ~0,8 s/20 s
+(0,04 cœur) contre 11,4 s/30 s en charge (0,38 cœur) : le coût suit le **débit
+de log**, pas le débit DNS. Le `write` du worker est mesuré par
+`log_write_us` : **104,5 µs/ligne** (194 078 lignes), soit 0,104 ms/requête,
+inclus dans les 1,311 ms de `resp`.
+
+### 27.5 Ce que le noyau évalue : 23–25 règles, pas 100
+
+La file NFQUEUE est **terminale** : `man nft` (QUEUE STATEMENT) — « In case of
+accept, processing resumes with the next base chain hook, not the rule
+following the queue verdict ». Les compteurs le confirment (850 r2, charge +
+drain) :
+
+| compteur | valeur |
+|---|---:|
+| `forward` règle 22 (questions) | 26 459 |
+| `forward` règle 24 (réponses) | 40 261 |
+| NFQUEUE `id_sequence` q0+q1 / q14+q15 | 26 403 / 40 208 |
+| entrées `cv_r_reseaux_locaux` (dispatch) | **435** |
+
+Les paquets DNS n'évaluent que les règles **0–22** (questions) ou **0–24**
+(réponses) de `forward` : broadcast, tcp 33443, DoH VLAN, `ct state` (règle 4),
+DHCP/ARP/ICMP/NDP/NTP/mDNS/syslog/UniFi, VLAN, puis la file
+(`src/nft_rules.moon:118-126,163-186`). La chaîne `cv_rules_dispatch`
+(52 règles + 26 chaînes `cv_r_*`) **n'est pas traversée** par le DNS : les
+435 entrées sont du trafic de fond non-DNS. Le fast-path conntrack (règle 4)
+ne s'applique pas au DNS — et ne **doit** pas s'appliquer : sur un flux UDP,
+chaque requête peut porter un qname et un verdict différents ; cacher le
+verdict par flux contournerait le filtre.
+
+Conséquence : réordonner les règles DNS, réduire `copy_range`, activer
+`NFQA_CFG_F_GSO` ou déplacer l'IRQ/RPS ne peut rendre que quelques µs/requête.
+Le résidu noyau de 0,33–0,43 ms/req (pour 2,40 paquets NFQUEUE/requête,
+5,64 événements NET_RX) est surtout le pont, conntrack, la copie NFQUEUE et
+netlink ; il n'est pas décomposable sans `perf` (absent, rien installé).
+
+### 27.6 Appels système et regroupements possibles
+
+Comptage sur le code (détail et lignes dans `tmp/sys_report.md` §6) : **1
+`read` netlink + 1 `nfq_set_verdict` par paquet** (`src/nfq_loop.moon:304`,
+`:220-222`), 1 `poll` par réveil/lot (`:265`, `:242-244`), 1 `write` IPC par
+question (`src/worker_questions.moon:509/511`, `src/ipc.moon:119-121`), 1
+`sendto` par question dupliquée (`src/worker_questions.moon:140`,
+`src/raw_send.moon:62`), 1 `write` de log par réponse (`src/log.moon:520`,
+`doc/CONFIG.md:126-135`), 1 `write` nft + 1 `poll`/`read` ACK par lot
+(`src/nft_queue.moon:129,297-299`), 1 ACK nft par lot
+(`src/worker_nft.moon:102`). Le `stime` des workers (0,569 ms/req) est dominé
+par le `write` de log (0,104), l'IPC et libnftables, pas par le `sendmsg` de
+verdict.
+
+Les regroupements proposés par la consigne rendent donc peu :
+
+- `nfq_set_verdict_batch` (exporté par `libnetfilter_queue.so.1.5.0` sur la
+  cible) : seulement des verdicts identiques **sans payload** (questions
+  acceptées/refusées, réponses de validateur jetées) ; la réinjection noyau
+  reste par paquet → **≤ 0,02 ms/req** ;
+- `recvmmsg` : un `read` par skb, il faudrait parser plusieurs messages hors
+  de `nfq_handle_packet` → ≤ 0,01 ms/req ;
+- `copy_range` réduit / GSO : paquets DNS de ~100–200 octets, gain nul et
+  risque de troncature ;
+- nft : un ACK par lot est déjà fait (`src/worker_responses.moon:450-466`) ;
+  le worker `nft` (0,32 ms/req) ne peut rendre que ~0,03–0,08 ms/req via la
+  fenêtre du cache d'upsert (`src/worker_nft.moon:24-29`), au risque de
+  l'expiration des sets.
+
+### 27.7 Leviers classés (gain en ms/requête servie)
+
+| # | levier | gain | preuve | risque | effort |
+|---|---|---|---:|---|---|
+| 1 | **Supprimer le volume de log benchmark** (`benchmark: false` ou échantillonner 1 ligne/N) | **≈ 1,05–1,10** | 99,99 % des lignes ; logread 0,45–0,53 + tmux 0,19–0,22 + logd 0,15–0,18 + procd 0,11–0,14 + write 0,10 (mesuré) | aucun en production (`benchmark` défaut `false`, `src/config.moon:208`) ; perd les temps par réponse | trivial (config) / petit (code) |
+| 2 | Retirer les 6 `logread -f` orphelins et le `tmux` de supervision | 0,45–0,55 (non additif avec 1) | 6 × 0,07–0,10 (mesuré) | aucun | trivial (non fait) |
+| 3 | Réduire le second avis (0,4–0,6 réponse dupliquée/req) | 0,40–0,55 | 1,43–1,72 réponses/req dont 1,0 client ; resp 1,31 ; calcul 0,43/1,43 × 1,31 | **élevé** (filtrage) | moyen |
+| 4 | Réduire le worker nft (cache/lots) | 0,03–0,08 | nft 0,320–0,355 | moyen (expiration) | moyen |
+| 5 | Verdicts NFQUEUE par lot + `recvmmsg` | ≤ 0,02 | stime 0,57, verdict ≈ µs | faible/moyen | moyen |
+| 6 | Réordonner nft / `copy_range` / GSO | ≤ 0,02 | 23–25 règles, file terminale | troncature | moyen |
+| 7 | Affinité IRQ/RPS | ≈ 0 | 4 CPU à 96 %, pas de CPU isolé | élevé | moyen |
+| 8 | Optimiser dns/resp (1,4–1,5 chacun) | 0,1–0,3 (hypothèse) | `question_proc_ms` 1,3 ; pas de profilage | moyen | élevé |
+
+**Budget propre après les leviers 1–2 et retrait de l'échantillonneur** :
+5,017 − (0,495+0,208+0,166+0,125+0,143+0,008+0,104) = **3,77 ms/requête
+servie** → **≈ 1 060 q/s** ; à 700 : 5,260 − 1,335 = **3,93 ms** → **≈ 1 019
+q/s**. Fourchette 975–1 060 selon le run. Le levier 1 seul (sans retirer
+l'échantillonneur, qui n'existe pas en production) rend 1,10 ms/req :
+5,017 − 1,10 = 3,92 ms → ≈ 1 020 q/s. C'est une **soustraction**, pas une
+mesure directe : `benchmark` n'est pas dans les clés modifiables autorisées.
+
+### 27.8 Vérifications finales
+
+- **Configuration inchangée** : `md5sum /etc/custos/config.moon` =
+  **`bddc79b591badfc94c17e9380759d8e0`** avant/après (identique à §21.8,
+  §23.7, §25.8) ; ligne 2 `nfqueue: { responses: "14-15" }`, ligne 164
+  `benchmark: true` ; aucun `.dsys` ; `status` = `running`.
+- **Sonde DNS finale** (`servus` → 10.35.1.1) : `controlplane.tailscale.com A`
+  → **8 adresses** ; `vpn.stemarie.dynv6.net A` → `NOERROR`, `ANSWER: 0`
+  (NODATA, comme §25.3) ; sonde post-palier `rc=0` sur les 4 phases.
+- **`servus`** : aucune IPv6 temporaire créée ; `ip -6 addr show dev wan` =
+  **2 adresses globales** (`2001:470:ca35:1:dad3:85ff:fe63:6b27/64`,
+  `2001:470:ca35:1::bede/64`) + 1 lien-local, rien à retirer ; aucun
+  générateur résiduel.
+- Aucune capture AF_PACKET, aucun fichier de code modifié, `perf` absent (rien
+  installé). `nix develop --command bash -c "make all && make check && make
+  test"` : **0 échec / 0 erreur** (total exact dans `tmp/test.log`).
+
+### 27.9 Non fait / douteux
+
+- **`benchmark: false` non mesuré directement** (clé hors périmètre autorisé) :
+  le gain de ≈ 1,05–1,10 ms/req est une soustraction des postes mesurés ; la
+  capacité ~1 000 q/s reste à confirmer par un palier dédié.
+- **Les six `logread -f` externes** n'ont été ni tués ni suspendus (hors
+  autorisation) ; leur coût est mesuré, l'effet de leur suppression ne l'est
+  pas.
+- **Un run 850 r1** a vu 28 425 entrées de dispatch (contre 435 au r2, 320 au
+  700 r2), sans effet sur le résidu (0,356 contre 0,353 ms/req) : trafic
+  externe ponctuel, non reproduit.
+- **Le résidu `irq+softirq` (0,33–0,43 ms/req) n'est pas décomposé** entre
+  pont, conntrack, nft, copie NFQUEUE et netlink (pas de `perf`).
+- **Le ruleset vivant n'a pas les `log level debug`** que
+  `src/nft_rules.moon:166` génère pour les règles DNS (ni `auth_input`, ni
+  SNI). Cause non déterminée (nft 1.1.6/noyau 6.12 ou ruleset appliqué par un
+  autre chemin) ; les mesures portent sur le ruleset réellement chargé, sans
+  log par paquet.
+- **L'échantillonneur coûte 0,13–0,16 ms/req** (mesuré) ; il est retiré du
+  budget propre. Pas de `make test-e2e` (consigne), pas de test IPv6.
