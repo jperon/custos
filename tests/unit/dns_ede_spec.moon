@@ -72,21 +72,25 @@ describe "dns_ede.strip_https_rr", ->
     raw = header .. question .. answer_a
     assert.equals raw, strip_https_rr(raw)
 
-  it "alloue < 800 o par appel sur payload à 4 RR (GC arrêté)", ->
+  it "alloue < 230 o par appel sur payload à 4 RR (GC arrêté)", ->
     -- strip_rrtypes créait u16/skip_name/copy_section + le set {HTTPS,SVCB}
-    -- à chaque appel (closures réallouées, cf. docs/agents/perf.md §19).
-    -- Mesuré : 1040 o/appel avant correctif, ~500 après.
+    -- à chaque appel (closures réallouées), puis les tables question_parts
+    -- et sec : cf. docs/agents/perf.md §19. Mesuré : 1040 → 304 (closures)
+    -- → 0 avec les tables scratch (la string résultat est internée par
+    -- LuaJIT pour des inputs constants). Seuil 230 : échec avant (305).
     raw = make_dns_payload!
-    for _ = 1, 5000 do strip_https_rr raw   -- JIT
+    sink = 0
+    for _ = 1, 5000 do sink = sink + #strip_https_rr(raw)   -- JIT
     collectgarbage "collect"
     collectgarbage "stop"
     before = collectgarbage "count"
-    for _ = 1, 500 do strip_https_rr raw
+    for _ = 1, 500 do sink = sink + #strip_https_rr(raw)
     after = collectgarbage "count"
     collectgarbage "restart"
+    assert.is_true sink > 0
     per_call = (after - before) * 1024 / 500
-    assert.is_true per_call < 800,
-      "strip_https_rr alloue #{math.floor per_call} o/appel (seuil 800)"
+    assert.is_true per_call < 230,
+      "strip_https_rr alloue #{math.floor per_call} o/appel (seuil 230)"
 
 describe "dns_ede.add_ede_modified", ->
   it "ajoute un OPT/EDE code 4 avec texte Custos vigilat", ->

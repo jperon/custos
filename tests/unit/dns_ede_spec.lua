@@ -75,21 +75,23 @@ describe("dns_ede.strip_https_rr", function()
     local raw = header .. question .. answer_a
     return assert.equals(raw, strip_https_rr(raw))
   end)
-  return it("alloue < 800 o par appel sur payload à 4 RR (GC arrêté)", function()
+  return it("alloue < 230 o par appel sur payload à 4 RR (GC arrêté)", function()
     local raw = make_dns_payload()
+    local sink = 0
     for _ = 1, 5000 do
-      strip_https_rr(raw)
+      sink = sink + #strip_https_rr(raw)
     end
     collectgarbage("collect")
     collectgarbage("stop")
     local before = collectgarbage("count")
     for _ = 1, 500 do
-      strip_https_rr(raw)
+      sink = sink + #strip_https_rr(raw)
     end
     local after = collectgarbage("count")
     collectgarbage("restart")
+    assert.is_true(sink > 0)
     local per_call = (after - before) * 1024 / 500
-    return assert.is_true(per_call < 800, "strip_https_rr alloue " .. tostring(math.floor(per_call)) .. " o/appel (seuil 800)")
+    return assert.is_true(per_call < 230, "strip_https_rr alloue " .. tostring(math.floor(per_call)) .. " o/appel (seuil 230)")
   end)
 end)
 describe("dns_ede.add_ede_modified", function()

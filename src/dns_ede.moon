@@ -305,6 +305,14 @@ resolve_rrset = (rtype) ->
     set[resolve(rtype)] = true
   set
 
+-- Tables scratch réutilisées entre appels : strip_rrtypes/copy_section ne
+-- sont pas réentrants (aucun appel imbriqué — clear_ad_bit/add_ede_modified
+-- qui suivent ne strip pas, cf. docs/agents/perf.md §19). Les strings
+-- résultat sont recopiées par table.concat/`..` avant le retour, jamais
+-- retenues. Déclarées AVANT copy_section (portée Lua).
+_scratch_qp = {}
+_scratch_sec = {}
+
 -- Lecture d'un uint16 big-endian : fonctions de module à paramètres
 -- explicites (payload, len, off) — les closures précédentes étaient
 -- réallouées à chaque appel de strip_rrtypes (cf. docs/agents/perf.md §19).
@@ -346,7 +354,9 @@ skip_name_at = (p, len, off) ->
 -- @treturn number|nil  Offset de fin de section, ou nil
 copy_section = (p, len, off, rrtypes, count) ->
   kept = 0
-  sec = {}
+  sec = _scratch_sec
+  for i = #sec, 1, -1
+    sec[i] = nil
   cur = off
   for _ = 1, count
     rr_start = cur
@@ -380,7 +390,9 @@ strip_rrtypes = (dns_payload, rrtypes) ->
   return dns_payload unless id and flags and qdcount and ancount and nscount and arcount
 
   off = 13
-  question_parts = {}
+  question_parts = _scratch_qp
+  for i = #question_parts, 1, -1
+    question_parts[i] = nil
   for _ = 1, qdcount
     q_end = skip_name_at dns_payload, len, off
     return dns_payload unless q_end

@@ -304,6 +304,8 @@ resolve_rrset = function(rtype)
   end
   return set
 end
+local _scratch_qp = { }
+local _scratch_sec = { }
 local u16_at
 u16_at = function(p, len, off)
   if off + 1 > len then
@@ -343,7 +345,10 @@ end
 local copy_section
 copy_section = function(p, len, off, rrtypes, count)
   local kept = 0
-  local sec = { }
+  local sec = _scratch_sec
+  for i = #sec, 1, -1 do
+    sec[i] = nil
+  end
   local cur = off
   for _ = 1, count do
     local rr_start = cur
@@ -384,7 +389,10 @@ strip_rrtypes = function(dns_payload, rrtypes)
     return dns_payload
   end
   local off = 13
-  local question_parts = { }
+  local question_parts = _scratch_qp
+  for i = #question_parts, 1, -1 do
+    question_parts[i] = nil
+  end
   for _ = 1, qdcount do
     local q_end = skip_name_at(dns_payload, len, off)
     if not (q_end) then
